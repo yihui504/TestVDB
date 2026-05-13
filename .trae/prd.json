@@ -1,0 +1,20 @@
+{
+  "project": "TestVDB",
+  "goal": "在 Qdrant 1.17.1 上维持可信的契约驱动缺陷发现、双重复现与正式报告闭环。",
+  "current_milestone": "P0-P2 收口完成",
+  "status": "completed",
+  "canonical_plan": ".trae/plan-spec/current-plan.md",
+  "canonical_spec": ".trae/plan-spec/current-spec.md",
+  "stories": [
+    {"id": "P1b", "title": "死代码清理 + 脚本去重", "priority": 3, "passes": true, "review": "PASS"},
+    {"id": "P2a", "title": "DB URL 环境变量注入", "priority": 4, "passes": true, "review": "PASS"},
+    {"id": "P2b", "title": "独立复核 Trait 抽象", "priority": 5, "passes": true, "review": "PASS"},
+    {"id": "P1a", "title": "端点清单扩展到 6+ + Upsert 独立复核", "priority": 2, "passes": true, "review": "PASS"},
+    {"id": "P0", "title": "FA 覆盖报告退出路径", "priority": 1, "passes": true, "review": "PASS"}
+  ],
+  "next_step": {
+    "id": "P3",
+    "title": "实战成熟化基线验证",
+    "goal": "重新运行 cargo check、cargo test 和一次全新 Qdrant E2E，冻结当前实现基线并记录预存问题。"
+  }
+}

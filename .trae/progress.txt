@@ -1,0 +1,42 @@
+# TestVDB 当前进度
+
+## 当前阶段
+- FA 架构重构三阶段全部完成并验证
+- AC3（巨型函数拆解）+ AC1（Target 插件化）+ AC2（自适应策略）✅
+- E2E 验证通过（Qdrant 1.18.0, SubmissionGrade）✅
+- 当前唯一计划: `.trae/plan-spec/current-plan.md`
+- 当前唯一规格: `.trae/plan-spec/current-spec.md`
+
+## 已完成内容
+
+### P0-P2 阶段
+- P0: FA 覆盖报告退出路径
+- P1a: 端点清单扩展到 6 个
+- P1b: 死代码与重复脚本清理
+- P2a: TESTVDB_DB_URL 环境变量注入
+- P2b: 独立复核抽象为 IndependentReviewer trait
+
+### FA 架构重构阶段
+- AC3: 巨型函数拆解为 FAOrchestrator + FAExecutor + TargetPlugin
+- AC1: TargetPlugin trait + QdrantPlugin + TargetRegistry
+- AC2: ExplorationState 自适应策略 + 消除硬编码 strategy_injections
+- E2E: Qdrant 1.18.0 上验证通过
+
+## 当前基线
+- `cargo check`：通过（1 既有 warning：`async_fn_in_trait`）
+- `cargo test`：**43 passed; 0 failed; 1 ignored**
+
+## E2E 第7轮结果（架构重构后，v1.18.0）
+- FA 在 Turn 8 提交 MRE（非缺陷覆盖报告）
+- 安全网 `hnsw_ef=0` 触发 IllegalSuccess
+- 双重复现通过 → 独立复核通过 → **SubmissionGrade**
+- 与重构前行为一致
+
+## 缺陷发现汇总
+- **跨版本缺陷**：`hnsw_ef=0` IllegalSuccess（v1.17.1 + v1.18.0）
+- GitHub Issue 文件：`qdrant_bug_report.md`
+
+## 下一步
+- 考虑扩展到新 target（Milvus/Weaviate）— 架构已支持
+- 考虑扩展契约覆盖更多端点
+- 考虑 FA 自身发现缺陷能力的进一步提升
