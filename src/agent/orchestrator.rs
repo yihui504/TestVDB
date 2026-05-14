@@ -177,39 +177,32 @@ impl<'a> FAOrchestrator<'a> {
         let mut fuzz_context = String::new();
 
         let boundary_cases = BoundaryValueGenerator::from_contract(&self.contract);
-        if !boundary_cases.is_empty() {
-            for case in &boundary_cases {
+        let high_value_cases: Vec<_> = boundary_cases.iter().filter(|case| case.expected_rejection).take(5).collect();
+        if !high_value_cases.is_empty() {
+            for case in &high_value_cases {
                 if let Some((ep, param, val)) = &case.coverage_entry {
                     coverage_tracker.record_visit(ep, param, val);
                 }
             }
-            fuzz_context.push_str("=== AUTO-GENERATED BOUNDARY VALUE TESTS ===\n");
-            fuzz_context.push_str("The following test cases were automatically generated from contract constraints.\n");
-            fuzz_context.push_str("PICK ONE and run it with execute_test_script to confirm the defect.\n\n");
-            for (i, case) in boundary_cases.iter().enumerate() {
+            fuzz_context.push_str("=== PRE-BUILT DEFECT HUNT SCRIPTS ===\n");
+            fuzz_context.push_str("CRITICAL: These scripts test parameters that are LIKELY to have defects.\n");
+            fuzz_context.push_str("You MUST execute at least ONE of these scripts in your FIRST turn.\n");
+            fuzz_context.push_str("Copy the script exactly and call execute_test_script(code=<script>).\n\n");
+            for (i, case) in high_value_cases.iter().enumerate() {
                 fuzz_context.push_str(&format!("{}. {} (expected_rejection={})\n", i + 1, case.name, case.expected_rejection));
-                let script_preview = if case.script.len() > 600 {
-                    format!("{}...", &case.script[..600])
-                } else {
-                    case.script.clone()
-                };
-                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", script_preview.replace('\n', "\n   ")));
+                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", case.script.replace('\n', "\n   ")));
             }
         }
 
         let sequence_cases = APISequenceExplorer::generate_sequences();
-        if !sequence_cases.is_empty() {
-            fuzz_context.push_str("\n=== AUTO-GENERATED API SEQUENCE TESTS ===\n");
-            fuzz_context.push_str("The following multi-step test cases were automatically generated.\n");
-            fuzz_context.push_str("PICK ONE and run it with execute_test_script.\n\n");
-            for (i, case) in sequence_cases.iter().enumerate() {
+        let high_value_seqs: Vec<_> = sequence_cases.iter().filter(|case| case.expected_defect.is_some()).take(3).collect();
+        if !high_value_seqs.is_empty() {
+            fuzz_context.push_str("\n=== PRE-BUILT API SEQUENCE TESTS ===\n");
+            fuzz_context.push_str("These multi-step tests check for state consistency defects.\n");
+            fuzz_context.push_str("Execute at least ONE after the boundary tests.\n\n");
+            for (i, case) in high_value_seqs.iter().enumerate() {
                 fuzz_context.push_str(&format!("{}. {} [{}] (expected: {:?})\n", i + 1, case.name, case.sequence_type, case.expected_defect));
-                let script_preview = if case.script.len() > 600 {
-                    format!("{}...", &case.script[..600])
-                } else {
-                    case.script.clone()
-                };
-                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", script_preview.replace('\n', "\n   ")));
+                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", case.script.replace('\n', "\n   ")));
             }
         }
 
@@ -217,9 +210,10 @@ impl<'a> FAOrchestrator<'a> {
             "Begin exploration. Write a script and use execute_test_script(fresh_sandbox=true) to test it.".to_string()
         } else {
             format!(
-                "Begin exploration. AUTO-GENERATED test scripts are provided below.\n\
-                 IMPORTANT: Pick one of the pre-generated scripts and run it with execute_test_script FIRST.\n\
-                 Then explore further on your own.\n\n{}",
+                "START by executing one of the PRE-BUILT scripts below. Do NOT write your own script first.\n\
+                 Step 1: Copy a PRE-BUILT script and call execute_test_script(code=<copied_script>)\n\
+                 Step 2: If it finds a defect, test similar parameters to find more defects of the same class\n\
+                 Step 3: Only write your own scripts AFTER you have exhausted the pre-built ones\n\n{}",
                 fuzz_context
             )
         };
@@ -277,6 +271,7 @@ impl<'a> FAOrchestrator<'a> {
             if turn > 0 {
                 let state_json = executor.state.to_prompt_json();
                 let coverage_report = coverage_tracker.report();
+                info!("Injecting coverage report for turn {}: {} entries tracked", turn, coverage_tracker.visited_count());
                 let state_msg = format!(
                     "=== EXPLORATION STATE ===\n{}\n\n=== COVERAGE REPORT ===\n{}\n\n\
                     Based on the state and coverage above, focus on UNTESTED parameters or try a DIFFERENT approach.",
@@ -322,6 +317,8 @@ impl<'a> FAOrchestrator<'a> {
                                 classification: safety_result.classification,
                             });
                         }
+                    } else {
+                        info!("Safety net probe '{}' passed", net.name);
                     }
                 }
                 sn_next_idx = batch_end;
@@ -369,6 +366,8 @@ impl<'a> FAOrchestrator<'a> {
                                 classification: safety_result.classification,
                             });
                         }
+                    } else {
+                        info!("Safety net probe '{}' passed", net.name);
                     }
                 }
                 sn_next_idx = batch_end;
@@ -618,6 +617,8 @@ impl<'a> FAOrchestrator<'a> {
                             } else {
                                 return Ok((net.script.clone(), initial_run, safety_result.classification, collected_defects));
                             }
+                        } else {
+                            info!("Safety net probe '{}' passed", net.name);
                         }
                     }
 
