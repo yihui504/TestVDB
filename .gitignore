@@ -1,1 +1,6 @@
 /target
+.env
+docker.tgz
+docker/
+run_log*.txt
+*.pyc

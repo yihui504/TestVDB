@@ -16,38 +16,40 @@ fn build_system_prompt(contract_content: &str) -> String {
         "You are a security researcher performing Agentic Fuzzing. Find REAL defects where the server violates contracts or silently accepts invalid input.\n\
         \n\
         === TOOLS ===\n\
-        `execute_test_script(code, fresh_sandbox?)` — Run Python scripts. Auto-reuses DB across calls. Set fresh_sandbox=true for clean start.\n\
+        `execute_test_script(code, fresh_sandbox?)` — Run Python scripts. Auto-reuses DB across calls. Set fresh_sandbox=true ONLY for clean start.\n\
         `fuzz_boundary_values(focus_params?)` — Auto-generate boundary value tests from contract constraints.\n\
         `fuzz_api_sequence(sequence_type?)` — Auto-generate multi-step API sequence tests.\n\
         `get_coverage_report()` — Show tested vs untested parameters.\n\
         \n\
-        === STRATEGY ===\n\
-        1. fuzz_boundary_values → get_coverage_report → confirm defects with execute_test_script\n\
-        2. Test STATE: upsert N → count=N; delete K → count=N-K\n\
-        3. Test DATA: write → read back → verify match\n\
-        4. Test ASYNC: wait=true vs wait=false for invalid input\n\
-        5. Test CROSS-STEP: create → delete → recreate = clean state\n\
+        === MANDATORY RULES ===\n\
+        1. DO NOT submit MRE before turn 5. You MUST explore at least 5 turns first.\n\
+        2. DO NOT repeat the same test pattern. Each turn MUST test a DIFFERENT parameter or endpoint.\n\
+        3. If AUTO-GENERATED scripts are provided in the context, you MUST execute at least ONE of them before writing your own.\n\
+        4. You MUST test at least 3 DIFFERENT parameters before submitting.\n\
+        5. After finding a defect, test 2 MORE parameters to see if the same class of defect exists elsewhere.\n\
+        \n\
+        === EXPLORATION STRATEGY ===\n\
+        Turn 1-2: Execute auto-generated boundary/sequence tests from the context above.\n\
+        Turn 3-4: Test STATE consistency (upsert N -> count=N, delete K -> count=N-K).\n\
+        Turn 5-6: Test DATA integrity (write -> read back -> verify match) and ASYNC behavior (wait=true vs wait=false).\n\
+        Turn 7+: Test CROSS-STEP lifecycle (create -> delete -> recreate) and explore untested parameters from coverage report.\n\
+        \n\
+        === DEFECT TYPES TO LOOK FOR ===\n\
+        - ILLEGAL_SUCCESS: Server accepts input that should be rejected (e.g., negative values, zero, out-of-range)\n\
+        - POOR_DIAGNOSTICS: Server returns 200 but silently discards data (test wait=true vs wait=false)\n\
+        - STATE_VIOLATION: Count mismatch, data inconsistency after operations\n\
+        - DATA_CORRUPTION: Write vector -> read back -> values don't match\n\
         \n\
         === SCRIPT RULES ===\n\
-        - Use {{TESTVDB_DB_URL}} as DB URL placeholder\n\
+        - Use {{{{TESTVDB_DB_URL}}}} as DB URL placeholder\n\
         - time.sleep(0.5) after create, 0.3 after upsert\n\
         - Print [DEFECT: ILLEGAL_SUCCESS|STATE_LOGIC_VIOLATION|DATA_CORRUPTION|POOR_DIAGNOSTICS] on defect\n\
         - sys.exit(1) on defect, sys.exit(0) on pass\n\
         - Unique collection name with uuid\n\
-        - Try DIFFERENT attack vectors each turn; don't repeat\n\
         - Submit with submit_mre when >= 3 surviving assertions found\n\
         \n\
         Contract:\n{}\n",
         contract_content
-    )
-}
-
-fn build_state_message(state_json: &str) -> String {
-    format!(
-        "=== EXPLORATION STATE ===\n{}\n=== END STATE ===\n\n\
-        Based on the exploration state above, decide your next action. \
-        Focus on untested parameters or try a different approach if recent tests found no defects.",
-        state_json
     )
 }
 
@@ -172,11 +174,59 @@ impl<'a> FAOrchestrator<'a> {
             info!("Coverage tracker: registered {} params for endpoint '{}'", coverage_tracker.endpoint_count(), self.contract.api_endpoint);
         }
 
+        let mut fuzz_context = String::new();
+
+        let boundary_cases = BoundaryValueGenerator::from_contract(&self.contract);
+        if !boundary_cases.is_empty() {
+            for case in &boundary_cases {
+                if let Some((ep, param, val)) = &case.coverage_entry {
+                    coverage_tracker.record_visit(ep, param, val);
+                }
+            }
+            fuzz_context.push_str("=== AUTO-GENERATED BOUNDARY VALUE TESTS ===\n");
+            fuzz_context.push_str("The following test cases were automatically generated from contract constraints.\n");
+            fuzz_context.push_str("PICK ONE and run it with execute_test_script to confirm the defect.\n\n");
+            for (i, case) in boundary_cases.iter().enumerate() {
+                fuzz_context.push_str(&format!("{}. {} (expected_rejection={})\n", i + 1, case.name, case.expected_rejection));
+                let script_preview = if case.script.len() > 600 {
+                    format!("{}...", &case.script[..600])
+                } else {
+                    case.script.clone()
+                };
+                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", script_preview.replace('\n', "\n   ")));
+            }
+        }
+
+        let sequence_cases = APISequenceExplorer::generate_sequences();
+        if !sequence_cases.is_empty() {
+            fuzz_context.push_str("\n=== AUTO-GENERATED API SEQUENCE TESTS ===\n");
+            fuzz_context.push_str("The following multi-step test cases were automatically generated.\n");
+            fuzz_context.push_str("PICK ONE and run it with execute_test_script.\n\n");
+            for (i, case) in sequence_cases.iter().enumerate() {
+                fuzz_context.push_str(&format!("{}. {} [{}] (expected: {:?})\n", i + 1, case.name, case.sequence_type, case.expected_defect));
+                let script_preview = if case.script.len() > 600 {
+                    format!("{}...", &case.script[..600])
+                } else {
+                    case.script.clone()
+                };
+                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", script_preview.replace('\n', "\n   ")));
+            }
+        }
+
+        let initial_msg = if fuzz_context.is_empty() {
+            "Begin exploration. Write a script and use execute_test_script(fresh_sandbox=true) to test it.".to_string()
+        } else {
+            format!(
+                "Begin exploration. AUTO-GENERATED test scripts are provided below.\n\
+                 IMPORTANT: Pick one of the pre-generated scripts and run it with execute_test_script FIRST.\n\
+                 Then explore further on your own.\n\n{}",
+                fuzz_context
+            )
+        };
+
         let mut messages = vec![
             Message::system(system_prompt),
-            Message::user(
-                "Begin exploration. Write a script and use execute_test_script(fresh_sandbox=true) to test it.",
-            ),
+            Message::user(initial_msg),
         ];
 
         let mut executor = FAExecutor::new();
@@ -190,6 +240,15 @@ impl<'a> FAOrchestrator<'a> {
         let mut oracle = Oracle::new(oracle_checks);
         let oracle_batch_size = 6;
         let mut collected_defects: Vec<CollectedDefect> = Vec::new();
+
+        let all_safety_nets: Vec<_> = self.plugin.safety_nets()
+            .into_iter()
+            .filter(|net| !net.redundant_with_mutation)
+            .collect();
+        let sn_total = all_safety_nets.len();
+        let sn_batch_size = (sn_total / 3).max(1);
+        let mut sn_next_idx = 0;
+        let mut sn_defect_names: Vec<String> = Vec::new();
 
         macro_rules! handle_defect {
             ($script:expr, $evidence:expr, $classif:expr, $tc_id:expr, $messages:expr) => {
@@ -217,7 +276,12 @@ impl<'a> FAOrchestrator<'a> {
 
             if turn > 0 {
                 let state_json = executor.state.to_prompt_json();
-                let state_msg = build_state_message(&state_json);
+                let coverage_report = coverage_tracker.report();
+                let state_msg = format!(
+                    "=== EXPLORATION STATE ===\n{}\n\n=== COVERAGE REPORT ===\n{}\n\n\
+                    Based on the state and coverage above, focus on UNTESTED parameters or try a DIFFERENT approach.",
+                    state_json, coverage_report
+                );
                 messages.push(Message::user(state_msg));
             }
 
@@ -228,6 +292,99 @@ impl<'a> FAOrchestrator<'a> {
                      For example: delete points and verify count, or search and verify scores."
                         .to_string(),
                 ));
+            }
+
+            if turn == 5 && sn_next_idx < sn_total {
+                let batch_end = (sn_next_idx + sn_batch_size).min(sn_total);
+                info!("Safety Net incremental batch 1: probes {}-{} of {}", sn_next_idx, batch_end - 1, sn_total);
+                let mut first_in_batch = !executor.has_active_sandbox();
+                for net in &all_safety_nets[sn_next_idx..batch_end] {
+                    let safety_result = executor
+                        .execute_test(&net.script, first_in_batch, &self.db_image, &self.pip_packages, self.db_port)
+                        .await?;
+                    if let Some(s) = safety_result.sandbox {
+                        executor.put_sandbox(s);
+                    }
+                    first_in_batch = false;
+                    if safety_result.found_defect {
+                        sn_defect_names.push(net.name.clone());
+                        if self.multi_defect {
+                            collected_defects.push(CollectedDefect {
+                                script: net.script.clone(),
+                                evidence: generator::RunEvidence {
+                                    phase: "safety_net_batch1".to_string(),
+                                    db_url: safety_result.db_url.clone(),
+                                    stdout: String::new(),
+                                    stderr: String::new(),
+                                    classifier_reason: safety_result.classification.reason.clone(),
+                                    classifier_evidence_excerpt: safety_result.classification.evidence_excerpt.clone(),
+                                },
+                                classification: safety_result.classification,
+                            });
+                        }
+                    }
+                }
+                sn_next_idx = batch_end;
+                if !sn_defect_names.is_empty() {
+                    let sn_msg = format!(
+                        "\n\n[SAFETY NET BATCH 1] Found {} defect(s): {}. These are confirmed defects. Continue exploring for more.",
+                        sn_defect_names.len(),
+                        sn_defect_names.join(", ")
+                    );
+                    if let Some(last) = messages.last_mut() {
+                        last.append_content(&sn_msg);
+                    } else {
+                        messages.push(Message::user(sn_msg));
+                    }
+                }
+            }
+
+            if turn == 9 && sn_next_idx < sn_total {
+                let batch_end = (sn_next_idx + sn_batch_size).min(sn_total);
+                info!("Safety Net incremental batch 2: probes {}-{} of {}", sn_next_idx, batch_end - 1, sn_total);
+                let mut first_in_batch = !executor.has_active_sandbox();
+                let mut batch2_defects = Vec::new();
+                for net in &all_safety_nets[sn_next_idx..batch_end] {
+                    let safety_result = executor
+                        .execute_test(&net.script, first_in_batch, &self.db_image, &self.pip_packages, self.db_port)
+                        .await?;
+                    if let Some(s) = safety_result.sandbox {
+                        executor.put_sandbox(s);
+                    }
+                    first_in_batch = false;
+                    if safety_result.found_defect {
+                        batch2_defects.push(net.name.clone());
+                        sn_defect_names.push(net.name.clone());
+                        if self.multi_defect {
+                            collected_defects.push(CollectedDefect {
+                                script: net.script.clone(),
+                                evidence: generator::RunEvidence {
+                                    phase: "safety_net_batch2".to_string(),
+                                    db_url: safety_result.db_url.clone(),
+                                    stdout: String::new(),
+                                    stderr: String::new(),
+                                    classifier_reason: safety_result.classification.reason.clone(),
+                                    classifier_evidence_excerpt: safety_result.classification.evidence_excerpt.clone(),
+                                },
+                                classification: safety_result.classification,
+                            });
+                        }
+                    }
+                }
+                sn_next_idx = batch_end;
+                if !batch2_defects.is_empty() {
+                    let sn_msg = format!(
+                        "\n\n[SAFETY NET BATCH 2] Found {} defect(s): {}. Total safety net defects: {}. Continue exploring.",
+                        batch2_defects.len(),
+                        batch2_defects.join(", "),
+                        sn_defect_names.len()
+                    );
+                    if let Some(last) = messages.last_mut() {
+                        last.append_content(&sn_msg);
+                    } else {
+                        messages.push(Message::user(sn_msg));
+                    }
+                }
             }
 
             if turn == 8 && executor.unique_assertions_count() < 2 {
@@ -366,6 +523,14 @@ impl<'a> FAOrchestrator<'a> {
                     }
                 }
                 "submit_mre" => {
+                    if turn < 4 {
+                        messages.push(Message::tool_response(
+                            &tc.id,
+                            format!("REJECTED: You must explore for at least 5 turns before submitting (currently turn {}). Continue testing different parameters.", turn + 1),
+                        ));
+                        continue;
+                    }
+
                     info!("Agent submitted MRE. Running all remaining Oracle checks before final validation...");
                     while oracle.has_pending() {
                         if let Some(sandbox) = executor.take_sandbox() {
@@ -420,18 +585,15 @@ impl<'a> FAOrchestrator<'a> {
                         );
                     }
 
-                    info!("Running safety net probes (always executed regardless of FA result)...");
-                    let mut first_probe = true;
-                    for net in self.plugin.safety_nets() {
-                        if net.redundant_with_mutation { continue; }
+                    info!("Running safety net probes (remaining batch 3: {}-{} of {})...", sn_next_idx, sn_total - 1, sn_total);
+                    let mut first_probe = !executor.has_active_sandbox();
+                    for net in &all_safety_nets[sn_next_idx..] {
                         info!("Safety net probe: {} (fresh={})", net.name, first_probe);
                         let safety_result = executor
                             .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port)
                             .await?;
-                        if first_probe {
-                            if let Some(s) = safety_result.sandbox {
-                                executor.put_sandbox(s);
-                            }
+                        if let Some(s) = safety_result.sandbox {
+                            executor.put_sandbox(s);
                         }
                         first_probe = false;
 
@@ -447,7 +609,15 @@ impl<'a> FAOrchestrator<'a> {
                                     .evidence_excerpt
                                     .clone(),
                             };
-                            handle_defect!(net.script, initial_run, safety_result.classification, &tc.id, &mut messages);
+                            if self.multi_defect {
+                                collected_defects.push(CollectedDefect {
+                                    script: net.script.clone(),
+                                    evidence: initial_run,
+                                    classification: safety_result.classification,
+                                });
+                            } else {
+                                return Ok((net.script.clone(), initial_run, safety_result.classification, collected_defects));
+                            }
                         }
                     }
 
@@ -600,17 +770,15 @@ impl<'a> FAOrchestrator<'a> {
             return Ok((code, initial_run, result.classification, collected_defects));
         }
 
-        warn!("No FA test scripts executed. Running safety net probes.");
-        let mut first_probe = true;
-        for net in self.plugin.safety_nets() {
+        warn!("No FA test scripts executed. Running remaining safety net probes ({}-{} of {}).", sn_next_idx, sn_total - 1, sn_total);
+        let mut first_probe = !executor.has_active_sandbox();
+        for net in &all_safety_nets[sn_next_idx..] {
             info!("Safety net probe (fallback): {} (fresh={})", net.name, first_probe);
             let safety_result = executor
                 .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port)
                 .await?;
-            if first_probe {
-                if let Some(s) = safety_result.sandbox {
-                    executor.put_sandbox(s);
-                }
+            if let Some(s) = safety_result.sandbox {
+                executor.put_sandbox(s);
             }
             first_probe = false;
 
@@ -623,7 +791,7 @@ impl<'a> FAOrchestrator<'a> {
                     classifier_reason: safety_result.classification.reason.clone(),
                     classifier_evidence_excerpt: safety_result.classification.evidence_excerpt.clone(),
                 };
-                return Ok((net.script, initial_run, safety_result.classification, collected_defects));
+                return Ok((net.script.clone(), initial_run, safety_result.classification, collected_defects));
             }
             warn!(
                 "Safety net '{}' did not trigger (properly rejected).",

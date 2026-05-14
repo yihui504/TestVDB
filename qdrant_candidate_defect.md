@@ -1,9 +1,16 @@
 # Candidate Defect: IllegalSuccess
 
 - **Target**: qdrant
-- **Version**: 1.18.0
+- **Version**: v1.18.0
 - **Status**: Rejected
-- **Downgrade Reason**: repro_1 failed verification: Execution completed without defect markers.
+- **Downgrade Reason**: Independent developer-side review could not complete cleanly: Independent Qdrant probe failed.
+STDOUT:
+
+STDERR:
+Traceback (most recent call last):
+  File "<string>", line 86, in <module>
+NameError: name 'time' is not defined
+
 
 ## Documentation Evidence
 - **Source URL**: https://qdrant.tech/documentation/concepts/
@@ -26,71 +33,59 @@
 - [CREATE] shard_number=0 must be rejected
 - [CREATE] missing required vectors config must be rejected
 - [CREATE] duplicate collection name must return a clear conflict error (not 200)
+- [BEHAVIOR:STATE] upsert N points → points_count must equal N
+- [BEHAVIOR:STATE] delete M of N points → points_count must equal N-M
+- [BEHAVIOR:STATE] upsert same point ID twice → points_count must NOT increase
+- [BEHAVIOR:SEMANTIC] search results must have scores in descending order
+- [BEHAVIOR:SEMANTIC] score_threshold must filter out results below threshold
+- [BEHAVIOR:SEMANTIC] limit=1 must return exactly 1 result
+- [BEHAVIOR:SEMANTIC] offset beyond total points must return empty results
+- [BEHAVIOR:SEMANTIC] scroll with limit must paginate through all points without duplicates
+- [BEHAVIOR:STATE] delete non-existent point IDs → points_count must NOT change
+- [BEHAVIOR:STATE] delete collection then recreate with same name → must succeed
+- [BEHAVIOR:SEMANTIC] exact=true search must return same results as approximate search
+- [BEHAVIOR:DIAGNOSTIC] when limit=0 is rejected, error message must mention 'limit'
 
 ## MRE
 ```
-import requests
-import json
 
-BASE_URL = "{{TESTVDB_DB_URL}}"
+import requests, sys, uuid, time
 
-# Create a test collection
-collection_name = "mre_test_collection"
-resp = requests.put(f"{BASE_URL}/collections/{collection_name}", json={
-    "vectors": {
-        "size": 4,
-        "distance": "Cosine"
-    }
+BASE = '{{TESTVDB_DB_URL}}'
+
+# Create collection
+c = 'defect_hnsw0_' + uuid.uuid4().hex[:8]
+r = requests.put(f'{BASE}/collections/{c}', json={'vectors': {'size': 4, 'distance': 'Cosine'}})
+time.sleep(0.5)
+
+# Insert a point
+r = requests.put(f'{BASE}/collections/{c}/points', json={'points': [{'id': 1, 'vector': [0.1, 0.2, 0.3, 0.4]}]})
+time.sleep(0.3)
+
+# Search with hnsw_ef=0 (INVALID: must be >= 1)
+r = requests.post(f'{BASE}/collections/{c}/points/search', json={
+    'vector': [0.1, 0.2, 0.3, 0.4],
+    'limit': 5,
+    'params': {'hnsw_ef': 0}
 })
-print(f"CREATE collection: {resp.status_code}")
 
-# DEFECT 1: hnsw_ef=0 is silently accepted (should be >= 1)
-print("\n--- DEFECT 1: hnsw_ef=0 ---")
-resp = requests.post(f"{BASE_URL}/collections/{collection_name}/points/search", json={
-    "vector": [0.1, 0.2, 0.3, 0.4],
-    "limit": 5,
-    "params": {
-        "hnsw_ef": 0
-    }
-})
-print(f"Status: {resp.status_code}")
-if resp.status_code == 200:
-    print("[DEFECT: RANGE_VIOLATION] hnsw_ef=0 accepted (should be >= 1)")
+if r.status_code == 200:
+    print(f'[DEFECT: ILLEGAL_SUCCESS] hnsw_ef=0 accepted with status 200')
+    print(f'Response: {r.json()}')
+    sys.exit(1)
 else:
-    print("Correctly rejected")
-
-# DEFECT 2: score_threshold values outside [0.0, 1.0] are silently accepted
-print("\n--- DEFECT 2: score_threshold=1.5 ---")
-resp = requests.post(f"{BASE_URL}/collections/{collection_name}/points/search", json={
-    "vector": [0.1, 0.2, 0.3, 0.4],
-    "limit": 5,
-    "score_threshold": 1.5
-})
-print(f"Status: {resp.status_code}")
-if resp.status_code == 200:
-    print("[DEFECT: RANGE_VIOLATION] score_threshold=1.5 accepted (should be 0.0-1.0)")
-else:
-    print("Correctly rejected")
-
-print("\n--- DEFECT 3: score_threshold=-0.5 ---")
-resp = requests.post(f"{BASE_URL}/collections/{collection_name}/points/search", json={
-    "vector": [0.1, 0.2, 0.3, 0.4],
-    "limit": 5,
-    "score_threshold": -0.5
-})
-print(f"Status: {resp.status_code}")
-if resp.status_code == 200:
-    print("[DEFECT: RANGE_VIOLATION] score_threshold=-0.5 accepted (should be 0.0-1.0)")
-else:
-    print("Correctly rejected")
+    print(f'Correctly rejected: status={r.status_code}')
+    sys.exit(0)
 
 ```
 
 ## Initial Run
-- **Reason**: Oracle detected: [DEFECT: ILLEGAL_SUCCESS] hnsw_ef=0 accepted
-- **DB URL**: http://testvdb-db-544e450bc65c4a2382de4a4b2d7cd65d:6333
+- **Reason**: Observed explicit illegal success marker.
+- **DB URL**: http://testvdb-db-797cb29fc6ba464aaf7d39255734d65e:6333
 
-- **Evidence Excerpt**: [DEFECT: ILLEGAL_SUCCESS] hnsw_ef=0 accepted
+- **Evidence Excerpt**: [defect: illegal_success] hnsw_ef=0 accepted with status 200
+response: {'result': [{'id': 1, 'version': 1, 'score': 1.0}], 'status': 'ok', 'time': 0.001299509}
+
 
 ### STDOUT
 ```
@@ -103,4 +98,5 @@ else:
 ```
 
 ## Reproduction Attempts
-- repro_1: Execution completed without defect markers.
+- repro_1: Observed explicit illegal success marker.
+- repro_2: Observed explicit illegal success marker.

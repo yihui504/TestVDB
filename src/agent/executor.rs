@@ -82,6 +82,62 @@ const ASSERTION_KEYWORDS: &[&str] = &[
     "recommend",
 ];
 
+fn parse_script_context(code: &str) -> (String, String) {
+    let endpoint = if code.contains("/points/search") {
+        "search"
+    } else if code.contains("/points") && (code.contains("upsert") || code.contains("PUT")) {
+        "upsert"
+    } else if code.contains("/points") && code.contains("DELETE") {
+        "delete"
+    } else if code.contains("/collections") && (code.contains("PUT") || code.contains("create")) && !code.contains("/points") {
+        "create_collection"
+    } else if code.contains("/points/scroll") {
+        "scroll"
+    } else if code.contains("/collections") && code.contains("DELETE") {
+        "delete_collection"
+    } else if code.contains("/recommend") {
+        "recommend"
+    } else {
+        "unknown"
+    };
+
+    let param = if code.contains("hnsw_ef") {
+        "hnsw_ef"
+    } else if code.contains("score_threshold") {
+        "score_threshold"
+    } else if code.contains("\"limit\"") || code.contains("'limit'") {
+        "limit"
+    } else if code.contains("\"offset\"") || code.contains("'offset'") {
+        "offset"
+    } else if code.contains("\"size\"") || code.contains("'size'") {
+        "size"
+    } else if code.contains("distance") {
+        "distance"
+    } else if code.contains("shard_number") {
+        "shard_number"
+    } else if code.contains("replication_factor") {
+        "replication_factor"
+    } else if code.contains("oversampling") {
+        "oversampling"
+    } else if code.contains("exact") {
+        "exact"
+    } else if code.contains("vector") && (code.contains("[]") || code.contains("NaN") || code.contains("Infinity")) {
+        "vector_extreme"
+    } else if code.contains("vector") {
+        "vector"
+    } else if code.contains("count") {
+        "count"
+    } else if code.contains("payload") {
+        "payload"
+    } else if code.contains("wait") {
+        "wait"
+    } else {
+        "general"
+    };
+
+    (endpoint.to_string(), param.to_string())
+}
+
 pub struct FAExecutor {
     pub state: ExplorationState,
     pub error_state: ErrorStateMachine,
@@ -138,7 +194,7 @@ impl FAExecutor {
             Ok((output, sandbox, db_url)) => {
                 self.active_sandbox = Some(sandbox);
                 self.active_db_url = Some(db_url.clone());
-                let mut result = self.process_result(output, db_url)?;
+                let mut result = self.process_result(code, output, db_url)?;
                 result.sandbox = self.active_sandbox.take();
                 info!("Sandbox placed in ExecutionResult, active_sandbox now={}", self.active_sandbox.is_some());
                 Ok(result)
@@ -171,7 +227,7 @@ impl FAExecutor {
         match execute_test_in_sandbox(code, sandbox, db_port).await {
             Ok((output, db_url)) => {
                 self.active_db_url = Some(db_url.clone());
-                let mut result = self.process_result(output, db_url);
+                let mut result = self.process_result(code, output, db_url);
                 if let Ok(ref mut r) = result {
                     r.sandbox = None;
                 }
@@ -198,6 +254,7 @@ impl FAExecutor {
 
     fn process_result(
         &mut self,
+        code: &str,
         output: String,
         db_url: String,
     ) -> anyhow::Result<ExecutionResult> {
@@ -226,10 +283,12 @@ impl FAExecutor {
 
         self.error_state.update(&output);
 
+        let (endpoint, param) = parse_script_context(code);
+
         if found_defect {
             self.state.record_test(
-                "last_test",
-                "unknown",
+                &param,
+                &endpoint,
                 TestResult::Defect,
                 classification.defect_type.clone(),
             );
@@ -239,8 +298,8 @@ impl FAExecutor {
             self.state.record_script_error();
         } else {
             self.state.record_test(
-                "last_test",
-                "unknown",
+                &param,
+                &endpoint,
                 TestResult::Rejected,
                 None,
             );

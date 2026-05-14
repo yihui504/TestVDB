@@ -101,6 +101,10 @@ impl Message {
             tool_call_id: Some(tool_call_id.into()),
         }
     }
+
+    pub fn append_content(&mut self, additional: &str) {
+        self.content = Some(format!("{}{}", self.content.take().unwrap_or_default(), additional));
+    }
 }
 
 #[derive(Debug, Serialize)]

@@ -73,7 +73,7 @@ time.sleep(0.3)
 body = {{"vector":[0.1,0.2,0.3,0.4],"limit":3}}
 body["{param}"] = {value}
 r = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json=body)
-if r.status_code == 200: print('[DEFECT: ILLEGAL_SUCCESS] {label} accepted'); sys.exit(1)
+if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] {{r.status_code}} accepted {label}'); sys.exit(1)
 else: print(f'properly rejected {label}: {{r.status_code}}'); sys.exit(0)"#,
         param = param,
         value = value,
@@ -94,11 +94,10 @@ if r.status_code not in (200, 201): print(f'upsert failed: {{r.status_code}}'); 
 time.sleep(0.3)
 body = {{"vector":[0.1,0.2,0.3,0.4],"limit":3,"params":{{"{param}":{value}}}}}
 r = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json=body)
-if r.status_code == 200: print('[DEFECT: ILLEGAL_SUCCESS] {label} accepted'); sys.exit(1)
-else: print(f'properly rejected {label}: {{r.status_code}}'); sys.exit(0)"#,
+if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] {{r.json()}} accepted'); sys.exit(1)
+else: print(f'properly rejected: {{r.status_code}}'); sys.exit(0)"#,
         param = param,
         value = value,
-        label = label,
     )
 }
 
@@ -134,11 +133,10 @@ import time; time.sleep(0.5)
 body = {{"points":[{{"id":1,"vector":[0.1,0.2,0.3,0.4]}}]}}
 body["{param}"] = {value}
 r = requests.put(f'{{BASE}}/collections/{{c}}/points', json=body)
-if r.status_code == 200: print('[DEFECT: ILLEGAL_SUCCESS] {label} accepted'); sys.exit(1)
-else: print(f'properly rejected {label}: {{r.status_code}}'); sys.exit(0)"#,
+if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] string value for {param} accepted'); sys.exit(1)
+else: print(f'properly rejected string value for {param}: {{r.status_code}}'); sys.exit(0)"#,
         param = param,
         value = value,
-        label = label,
     )
 }
 
@@ -156,11 +154,10 @@ time.sleep(0.3)
 body = {{"points":[1]}}
 body["{param}"] = {value}
 r = requests.post(f'{{BASE}}/collections/{{c}}/points/delete', json=body)
-if r.status_code == 200: print('[DEFECT: ILLEGAL_SUCCESS] {label} accepted'); sys.exit(1)
-else: print(f'properly rejected {label}: {{r.status_code}}'); sys.exit(0)"#,
+if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] string value for {param} accepted'); sys.exit(1)
+else: print(f'properly rejected string value for {param}: {{r.status_code}}'); sys.exit(0)"#,
         param = param,
         value = value,
-        label = label,
     )
 }
 

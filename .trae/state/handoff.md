@@ -1,97 +1,83 @@
 # TestVDB 交接信息
 
-## 当前结论
+## 最后更新: 2026-05-14 (系统性改进后)
 
-- 四种缺陷开发者审查完成
-- 缺陷2/3已合并为"score_threshold范围验证缺失"，独立审查已补充
-- 当前缺陷状态：
-  - 缺陷1 (hnsw_ef=0): **有效** — 证据链完整，复现代码有效
-  - 缺陷2+3 (score_threshold超界): **有效** — 已合并，独立审查已补充，独立报告已编写
-  - 缺陷4 (空vectors config): **存疑** — 可能是命名向量设计意图
-- 当前唯一计划文档：`.trae/plan-spec/current-plan.md`
-- 当前唯一规格文档：`.trae/plan-spec/current-spec.md`
+## 项目状态: 系统性改进完成，实战验证通过
 
-## 已完成工作
+## 当前Git状态
+- 分支: main
+- 最新commit: 70b090f — feat: VDBFuzz integration + Safety Net architecture fix + 12 new probes
+- 系统性改进代码尚未commit（需用户确认后commit）
+- cargo test: 68 passed, 0 failed, 1 ignored
+- cargo build --release: 成功
 
-### 1. 扩展 QdrantIndependentReviewer
+## 系统性改进成果
 
-在 `src/review/qdrant.rs` 中增加了 score_threshold 超界检查：
-- probe 模板新增 `score_threshold_high_resp`（score_threshold=2.0）和 `score_threshold_neg_resp`（score_threshold=-0.5）
-- JSON 输出新增 `score_threshold_high_status/body` 和 `score_threshold_neg_status/body`
-- 汇总逻辑新增两条 IllegalSuccess 判断
-- Legacy struct `IndependentProbeResult` 新增对应字段
-- `cargo check` 和 `cargo test`（51 passed, 0 failed）全部通过
+### 改进前后对比
 
-### 2. 编写合并缺陷独立报告
+| 指标 | 改进前 | 改进后 | 变化 |
+|------|--------|--------|------|
+| FA 探索轮次 | 6 turns | 12 turns | +100% |
+| Safety Net 执行 | 0 probes | 62 probes (3 batches) | 从0到全覆盖 |
+| Oracle 违规发现 | 0 | 8 violations | 从0到8 |
+| 缺陷收集 | 1 defect | 17 defects | +1600% |
+| API 错误 | N/A | 0 | 无错误 |
+| Bug 报告存活断言 | 1个 | 4个 | +300% |
 
-参照 `qdrant_hnsw_ef_zero_issue.md` 格式编写了 `qdrant_score_threshold_range_issue.md`，包含：
-- Current Behavior：描述 score_threshold=2.0 和 -0.5 均被接受
-- Steps to Reproduce：完整可复现的 Python 代码
-- Expected Behavior：四点支撑（语义一致性、API一致性、contract文档、用户体验）
-- Source Code Evidence：gRPC proto 无约束、OpenAPI schema 无 min/max
-- Impact Assessment：正超界返回空结果（无害但浪费查询）、负超界返回全部结果（可能安全隐患）
-- Possible Implementation：服务端验证 + 回归测试 + OpenAPI schema 更新
+### 6项改进实施
 
-### 3. 独立审查验证
+1. **Task 1**: 修复 executor.rs record_test 硬编码参数 → 添加 parse_script_context()
+2. **Task 2**: Orchestrator 自动注入 fuzz 结果到初始消息 → FA无需主动调用fuzz工具
+3. **Task 3**: 自动注入覆盖率报告到每轮 prompt → FA知道还缺什么
+4. **Task 4**: Safety Net 分3批增量执行 (turn 6, turn 10, submit_mre) → 全覆盖
+5. **Task 5**: 强化系统 prompt (MANDATORY RULES + 最低轮次检查) → 防止过早提交
+6. **Task 6**: 实战验证通过 (4轮迭代修复3个运行时bug)
 
-在 Qdrant v1.18.0 上运行扩展后的 probe 脚本，结果：
-```
-[ILLEGAL_SUCCESS] hnsw_ef=0 accepted (200)
-[ILLEGAL_SUCCESS] score_threshold=2.0 accepted (200)
-[ILLEGAL_SUCCESS] score_threshold=-0.5 accepted (200)
-VERDICT: IllegalSuccess — 3 issue(s) found
-```
+### 修改的文件
 
-## 缺陷审查详情（更新后）
+- `src/agent/orchestrator.rs` — 核心改动：prompt重写、fuzz注入、coverage注入、Safety Net分批、submit_mre最低轮次、handle_defect修复
+- `src/agent/executor.rs` — 添加 parse_script_context()，修复 record_test
+- `src/agent/llm.rs` — 添加 append_content() 方法
+- `src/agent/probe.rs` — 修复 label 引号嵌套问题
+- `src/target/qdrant.rs` — 修复 Oracle type constraint label
 
-### 缺陷1: hnsw_ef=0 (IllegalSuccess) — 有效 ✅
+### 修复的运行时 Bug (4轮迭代)
 
-| 审查维度 | 判定 | 详情 |
-|----------|------|------|
-| 复现代码有效性 | ✅ 有效 | MRE在Qdrant v1.18.0上稳定复现 |
-| 证据有效性 | ✅ 有效 | 算法语义+源码验证缺失 |
-| 证据链完整性 | ✅ 完整 | 初始发现→双重复现→独立审查→手动验证→详细报告 |
-| 独立审查覆盖 | ✅ 覆盖 | QdrantIndependentReviewer probe |
+1. DeepSeek API 消息序列错误 → append_content + collected_defects.push()
+2. Oracle Python 引号嵌套 → {}=abc 替代 {}='abc'
+3. Safety Net sandbox 丢失 → 每次 probe 后 put_sandbox
+4. Borrow checker → net.script.clone()
 
-### 缺陷2+3: score_threshold范围验证缺失 (IllegalSuccess) — 有效 ✅（已合并）
+## Bug 报告存活断言 (4个)
 
-| 审查维度 | 判定 | 详情 |
-|----------|------|------|
-| 复现代码有效性 | ✅ 有效 | score_threshold=2.0返回200+空结果；-0.5返回200+全部结果 |
-| 证据有效性 | ✅ 有效 | contract断言+API一致性+用户体验影响 |
-| 证据链完整性 | ✅ 完整 | 初始发现→双重复现→**独立审查（已补充）**→手动验证→**独立报告（已编写）** |
-| 独立审查覆盖 | ✅ 已覆盖 | 扩展后的QdrantIndependentReviewer probe |
-| 独立报告 | ✅ 已编写 | qdrant_score_threshold_range_issue.md |
+1. **hnsw_ef=0** — 接受但文档约束 >= 1
+2. **score_threshold=2.0** — 接受但文档约束 0.0-1.0
+3. **score_threshold=-0.5** — 接受但文档约束 0.0-1.0
+4. **upsert wrong dimension wait=false** — wait=true正确拒绝但wait=false返回200+acknowledged静默丢弃数据
 
-### 缺陷4: 空vectors config (StateViolation) — 存疑 ❓
+## 已生成的 GitHub Issue 文件
 
-| 审查维度 | 判定 | 详情 |
-|----------|------|------|
-| 复现代码有效性 | ✅ 有效 | 空JSON创建集合返回200 |
-| 证据有效性 | ❓ 存疑 | 可能是命名向量设计意图 |
-| 证据链完整性 | ❌ 不完整 | 缺少独立审查覆盖+设计意图存疑 |
-| 独立审查覆盖 | ❌ 未覆盖 | review probe未检查空配置创建 |
+- `issues/qdrant_dimension_off_by_one_65536.md` — off-by-one: FAQ说65535，代码接受65536
+- `issues/qdrant_async_upsert_accepts_empty_vector.md` — wait=false跳过维度验证
 
-## 文件变更清单
+## 已知限制
 
-| 文件 | 变更类型 | 说明 |
-|------|----------|------|
-| `src/review/qdrant.rs` | 修改 | 增加 score_threshold_high/neg probe + 汇总逻辑 + Legacy struct |
-| `qdrant_score_threshold_range_issue.md` | 新增 | 合并缺陷的独立详细报告 |
+1. Safety Net batch 1/2 中部分 Oracle 行为合约脚本因集合名冲突报 Script error（非defect）
+2. pip安装偶尔超时导致程序exit code 1
+3. NaN/Inf向量无法通过Python requests直接测试（JSON规范不支持）
+4. OpenAPI解析器代码已就绪但缺少qdrant_openapi.json
+5. 编译有9个warnings（unused imports/fields, dead_code, async_fn_in_trait）
 
-## 基线
+## 关键文件
 
-- `cargo check`: 通过（1 既有 warning: `async_fn_in_trait`）
-- `cargo test`: 51 passed, 0 failed, 1 ignored
-
-## 下次开工先做什么
-
-1. 缺陷4：向Qdrant团队确认空vectors config是否为设计意图
-2. 如缺陷4确认是bug：扩展QdrantIndependentReviewer覆盖空配置创建检查
-3. 考虑扩展到新target（Milvus/Weaviate）
-4. 考虑FA自身发现缺陷能力的进一步提升
-
-## 这次不要直接做什么
-
-- 不要在缺陷4设计意图未确认前提交为正式bug
-- 不要回退架构重构
+- `src/agent/orchestrator.rs`: FA编排、Safety Net分批、fuzz注入、coverage注入、prompt
+- `src/agent/executor.rs`: 执行器、parse_script_context
+- `src/agent/llm.rs`: Message::append_content
+- `src/agent/tools.rs`: 工具定义、沙箱执行
+- `src/agent/oracle.rs`: Oracle检查引擎
+- `src/agent/probe.rs`: 探针生成（修复label引号）
+- `src/target/qdrant.rs`: Qdrant特化、36个Safety Net探针、Oracle type constraint
+- `src/contract/mod.rs`: 合约解析（parse_constraints_from_assertions）
+- `src/agent/vdbfuzz/`: boundary.rs, sequence.rs, coverage.rs
+- `contracts/qdrant_behavioral_templates.json`: 45条行为合约模板
+- `docs/plans/2026-05-14-vdbfuzz-systematic-improvement.md`: 改进计划（含实施结果）

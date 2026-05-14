@@ -1166,7 +1166,7 @@ impl OracleCheckDeriver {
                     Some(InvariantCheck {
                         name: format!("oracle_type_{}_as_string", tc.param_name),
                         check_type: CheckType::ValueRange,
-                        script: search_string_probe(&tc.param_name, "abc", &format!("{}='abc'", tc.param_name)),
+                        script: search_string_probe(&tc.param_name, "abc", &format!("{}=abc", tc.param_name)),
                         source: InvariantSource::DerivedFromType,
                     })
                 } else {
