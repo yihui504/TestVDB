@@ -1,5 +1,5 @@
-use crate::agent::classifier::DefectType;
-use crate::contract::schema::{CheckType, StateInvariant};
+use crate::agent::classifier::{detect_defect_type, is_script_error, DefectType};
+use crate::contract::schema::{CheckType, MutationRule, StateInvariant};
 use crate::sandbox::manager::Sandbox;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,8 @@ pub enum InvariantSource {
     DerivedFromRange,
     DerivedFromState,
     DerivedFromType,
+    DerivedFromBehavior,
+    DerivedFromMutation,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +58,18 @@ impl Oracle {
             .collect()
     }
 
+    pub fn from_mutation_rules(rules: &[MutationRule]) -> Vec<InvariantCheck> {
+        rules
+            .iter()
+            .map(|rule| InvariantCheck {
+                name: format!("mutation_{}", rule.name),
+                check_type: CheckType::ValueRange,
+                script: rule.mutated_script.clone(),
+                source: InvariantSource::DerivedFromMutation,
+            })
+            .collect()
+    }
+
     pub fn pending_checks(&self) -> &[InvariantCheck] {
         &self.checks[self.checks_run..]
     }
@@ -83,12 +97,12 @@ impl Oracle {
                 .replace("{{TESTVDB_DB_URL}}", db_url);
             let script_b64 = base64::engine::general_purpose::STANDARD.encode(&script);
             let script_path = format!("/tmp/oracle_{}.py", check.name);
-            let decode_cmd = format!(
-                "import base64; open('{}','wb').write(base64.b64decode('{}'))",
+            let decode_script = format!(
+                "import base64\nopen('{}','wb').write(base64.b64decode('{}'))",
                 script_path, script_b64
             );
             let write_result = sandbox
-                .exec_command_with_env(&["python", "-c", &decode_cmd], &[])
+                .exec_script(&decode_script, &[])
                 .await;
 
             let result = match write_result {
@@ -157,20 +171,16 @@ impl Oracle {
         stdout: &str,
         stderr: &str,
     ) -> OracleFinding {
-        let combined = format!("{}\n{}", stdout, stderr).to_lowercase();
-
-        if combined.contains("[defect: illegal_success]")
-            || combined.contains("[defect: state_logic_violation]")
-            || combined.contains("assertionerror")
-        {
-            let defect_type = if combined.contains("[defect: illegal_success]") {
-                Some(DefectType::IllegalSuccess)
-            } else if combined.contains("[defect: state_logic_violation]") {
-                Some(DefectType::StateLogicViolation)
-            } else {
-                Some(DefectType::StateLogicViolation)
+        if is_script_error(stdout, stderr) || stderr.to_lowercase().contains("traceback") {
+            return OracleFinding {
+                invariant_name: check.name.clone(),
+                violated: false,
+                evidence: format!("Script error (not a defect): {}", &stderr[..stderr.len().min(200)]),
+                defect_type: None,
             };
+        }
 
+        if let Some(defect_type) = detect_defect_type(stdout, stderr) {
             let evidence = if !stdout.is_empty() {
                 stdout.chars().take(500).collect()
             } else {
@@ -181,22 +191,7 @@ impl Oracle {
                 invariant_name: check.name.clone(),
                 violated: true,
                 evidence,
-                defect_type,
-            };
-        }
-
-        if combined.contains("syntaxerror")
-            || combined.contains("importerror")
-            || combined.contains("modulenotfounderror")
-            || combined.contains("connectionerror")
-            || combined.contains("connectionrefusederror")
-            || combined.contains("traceback")
-        {
-            return OracleFinding {
-                invariant_name: check.name.clone(),
-                violated: false,
-                evidence: format!("Script error (not a defect): {}", &stderr[..stderr.len().min(200)]),
-                defect_type: None,
+                defect_type: Some(defect_type),
             };
         }
 
@@ -242,7 +237,7 @@ pub fn build_oracle_findings_message(findings: &[OracleFinding]) -> String {
                 "- {} [{:?}]: {}\n",
                 f.invariant_name,
                 f.defect_type.as_ref().unwrap_or(&DefectType::Pass),
-                f.evidence.chars().take(200).collect::<String>()
+                f.evidence.chars().take(500).collect::<String>()
             ));
         }
     }
@@ -255,7 +250,14 @@ pub fn build_oracle_findings_message(findings: &[OracleFinding]) -> String {
 
     if !violated.is_empty() {
         msg.push_str(
-            "\nThe Oracle detected potential defects! Focus your next test on these findings to refine and confirm them.",
+            "\nThe Oracle detected potential defects! Here is how to reproduce them:\n\
+             1. Create a collection with vectors (size=4, distance=Cosine)\n\
+             2. Insert test points into the collection\n\
+             3. Perform the operation that triggered the violation\n\
+             4. Check if the result matches the expected outcome\n\
+             Write a COMPLETE Python script that does ALL steps in one execute_test_script call.\n\
+             Use {{TESTVDB_DB_URL}} as the database URL placeholder.\n\
+             Print [DEFECT: STATE_LOGIC_VIOLATION] or [DEFECT: ILLEGAL_SUCCESS] if the defect is confirmed.",
         );
     }
 
@@ -349,7 +351,7 @@ mod tests {
         assert!(msg.contains("VIOLATIONS DETECTED: 1"));
         assert!(msg.contains("count_check"));
         assert!(msg.contains("PASSED: 1"));
-        assert!(msg.contains("Focus your next test"));
+        assert!(msg.contains("how to reproduce"));
     }
 
     #[test]

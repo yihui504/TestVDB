@@ -229,6 +229,12 @@ impl BugReport {
             DefectType::StateLogicViolation => {
                 "Observed state diverged from the documented contract after the operation completed, which suggests the server-side state transition or result assembly is inconsistent.".to_string()
             }
+            DefectType::DataCorruption => {
+                "Data written to the database differs from data read back, which suggests the server-side storage or serialization is corrupting data silently.".to_string()
+            }
+            DefectType::PerformanceRegression => {
+                "An operation took significantly longer than the expected baseline, which suggests a performance regression in the server-side processing path.".to_string()
+            }
             DefectType::ScriptError | DefectType::Pass => {
                 "This report should not have been promoted for the observed classification.".to_string()
             }
@@ -251,6 +257,12 @@ impl BugReport {
             }
             DefectType::StateLogicViolation => {
                 "Audit the state transition and response-building path for this scenario, then add a regression test that asserts the documented invariant.".to_string()
+            }
+            DefectType::DataCorruption => {
+                "Audit the write and read paths for data serialization and storage consistency, then add a regression test that writes data and verifies the read-back matches.".to_string()
+            }
+            DefectType::PerformanceRegression => {
+                "Profile the slow operation path to identify the bottleneck, then add a performance regression test with a timing assertion.".to_string()
             }
             DefectType::ScriptError | DefectType::Pass => {
                 "Do not promote this result to a formal defect report until the classification path is corrected.".to_string()

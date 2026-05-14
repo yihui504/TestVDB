@@ -44,5 +44,9 @@ pub enum Commands {
         /// Optional: Target Documentation URL for Knowledge Agent (required if contracts is not provided)
         #[arg(long)]
         docs_url: Option<String>,
+
+        /// Continue exploration after finding the first defect, collecting all defects
+        #[arg(long, default_value_t = false)]
+        multi_defect: bool,
     },
 }

@@ -65,17 +65,13 @@ pub fn normalize_observed_output(text: &str) -> String {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DefectType {
-    /// Type-1: Contract violated but database returned HTTP 200 / Success
     IllegalSuccess,
-    /// Type-2: Database failed but the error message is unhelpful or incorrect
     PoorDiagnostics,
-    /// Type-3: Database process crashed or returned HTTP 500
     RuntimeFailure,
-    /// Type-4: Business logic state violated (e.g., inserted 10 records, but count is 0)
     StateLogicViolation,
-    /// Not a database bug, just an error in the generated test script (needs retry)
+    DataCorruption,
+    PerformanceRegression,
     ScriptError,
-    /// The test executed perfectly and the database behaved exactly as contracted
     Pass,
 }
 
@@ -94,6 +90,50 @@ pub struct ClassificationResult {
     pub defect_type: Option<DefectType>,
     pub reason: String,
     pub evidence_excerpt: String,
+    pub sub_type: Option<String>,
+}
+
+pub fn detect_defect_type(stdout: &str, stderr: &str) -> Option<DefectType> {
+    let lower_stdout = stdout.to_lowercase();
+    let lower_stderr = stderr.to_lowercase();
+    let combined = format!("{}\n{}", lower_stdout, lower_stderr);
+
+    if combined.contains("[defect: illegal_success]") || lower_stderr.contains("assertionerror: illegal success") {
+        return Some(DefectType::IllegalSuccess);
+    }
+    if combined.contains("[defect: poor_diagnostics]") || lower_stderr.contains("assertionerror: poor diagnostics") {
+        return Some(DefectType::PoorDiagnostics);
+    }
+    if combined.contains("[defect: data_corruption]") {
+        return Some(DefectType::DataCorruption);
+    }
+    if combined.contains("[defect: performance_regression]") {
+        return Some(DefectType::PerformanceRegression);
+    }
+    if combined.contains("[defect: state_logic_violation]") || lower_stderr.contains("assertionerror: state violation") {
+        return Some(DefectType::StateLogicViolation);
+    }
+    if combined.contains("[defect: silent_failure]") {
+        return Some(DefectType::StateLogicViolation);
+    }
+    if combined.contains("[defect: async_inconsistency]") {
+        return Some(DefectType::PoorDiagnostics);
+    }
+    if lower_stderr.contains("assertionerror") {
+        return Some(DefectType::StateLogicViolation);
+    }
+    None
+}
+
+pub fn is_script_error(stdout: &str, stderr: &str) -> bool {
+    let lower_stderr = stderr.to_lowercase();
+    let lower_stdout = stdout.to_lowercase();
+    lower_stderr.contains("syntaxerror")
+        || lower_stderr.contains("importerror")
+        || lower_stderr.contains("modulenotfounderror")
+        || lower_stderr.contains("nameerror")
+        || lower_stderr.contains("typeerror")
+        || lower_stdout.contains("[test_infra]")
 }
 
 /// Analyzes the stdout and stderr from the sandbox to classify the execution result.
@@ -102,23 +142,16 @@ pub fn analyze_execution_result(stdout: &str, stderr: &str) -> ClassificationRes
     let lower_stdout = stdout.to_lowercase();
     let combined_output = format!("{}\n{}", lower_stdout, lower_stderr);
 
-    // 1. Check for Script Errors (LLM hallucinations or environment issues)
-    // These should trigger a zero-shot retry
-    if lower_stderr.contains("syntaxerror") 
-        || lower_stderr.contains("importerror") 
-        || lower_stderr.contains("modulenotfounderror")
-        || lower_stderr.contains("nameerror") 
-        || lower_stderr.contains("typeerror")
-        || lower_stdout.contains("[test_infra]") {
+    if is_script_error(stdout, stderr) {
         return ClassificationResult {
             disposition: ClassificationDisposition::RetryableScriptError,
             defect_type: Some(DefectType::ScriptError),
             reason: "Generated script failed due to Python/runtime authoring errors or test-infrastructure uncertainty.".to_string(),
             evidence_excerpt: combined_output.chars().take(300).collect(),
+            sub_type: None,
         };
     }
 
-    // Environment or addressing failures must not be upgraded into database defects.
     if combined_output.contains("idna")
         || combined_output.contains("label too long")
         || combined_output.contains("name or service not known")
@@ -131,12 +164,12 @@ pub fn analyze_execution_result(stdout: &str, stderr: &str) -> ClassificationRes
             defect_type: None,
             reason: "Execution failed before a valid database interaction due to addressing or environment issues.".to_string(),
             evidence_excerpt: combined_output.chars().take(300).collect(),
+            sub_type: None,
         };
     }
 
-    // 2. Check for Runtime Failures (Type-3)
-    if lower_stderr.contains("connection refused") 
-        || lower_stderr.contains("500 internal server error") 
+    if lower_stderr.contains("connection refused")
+        || lower_stderr.contains("500 internal server error")
         || lower_stderr.contains("segmentation fault")
         || lower_stdout.contains("panic") {
         return ClassificationResult {
@@ -144,45 +177,22 @@ pub fn analyze_execution_result(stdout: &str, stderr: &str) -> ClassificationRes
             defect_type: Some(DefectType::RuntimeFailure),
             reason: "Observed a runtime failure after reaching the execution target.".to_string(),
             evidence_excerpt: combined_output.chars().take(300).collect(),
+            sub_type: None,
         };
     }
 
-    // 3. Check for explicit Assertion Failures injected by the LLM test script
-    // We expect the script to print specific markers when a contract assertion fails
-    if lower_stdout.contains("[defect: illegal_success]") || lower_stderr.contains("assertionerror: illegal success") {
-        return ClassificationResult {
-            disposition: ClassificationDisposition::CandidateDefect,
-            defect_type: Some(DefectType::IllegalSuccess),
-            reason: "Observed explicit illegal success marker.".to_string(),
-            evidence_excerpt: combined_output.chars().take(300).collect(),
+    if let Some(defect_type) = detect_defect_type(stdout, stderr) {
+        let sub_type = if defect_type == DefectType::StateLogicViolation && lower_stdout.contains("cross_step") {
+            Some("cross_step".to_string())
+        } else {
+            None
         };
-    }
-
-    if lower_stdout.contains("[defect: poor_diagnostics]") || lower_stderr.contains("assertionerror: poor diagnostics") {
         return ClassificationResult {
             disposition: ClassificationDisposition::CandidateDefect,
-            defect_type: Some(DefectType::PoorDiagnostics),
-            reason: "Observed explicit poor diagnostics marker.".to_string(),
+            defect_type: Some(defect_type),
+            reason: "Observed explicit defect marker.".to_string(),
             evidence_excerpt: combined_output.chars().take(300).collect(),
-        };
-    }
-
-    if lower_stdout.contains("[defect: state_logic_violation]") || lower_stderr.contains("assertionerror: state violation") {
-        return ClassificationResult {
-            disposition: ClassificationDisposition::CandidateDefect,
-            defect_type: Some(DefectType::StateLogicViolation),
-            reason: "Observed explicit state or logic violation marker.".to_string(),
-            evidence_excerpt: combined_output.chars().take(300).collect(),
-        };
-    }
-
-    // 4. Generic Assertion Error without a specific marker falls back to StateLogicViolation
-    if lower_stderr.contains("assertionerror") {
-        return ClassificationResult {
-            disposition: ClassificationDisposition::CandidateDefect,
-            defect_type: Some(DefectType::StateLogicViolation),
-            reason: "Generic assertion failure treated as candidate state/logic violation.".to_string(),
-            evidence_excerpt: combined_output.chars().take(300).collect(),
+            sub_type,
         };
     }
 
@@ -196,16 +206,17 @@ pub fn analyze_execution_result(stdout: &str, stderr: &str) -> ClassificationRes
             defect_type: None,
             reason: format!("Coverage report detected:\n{}", evidence),
             evidence_excerpt: evidence.chars().take(300).collect(),
+            sub_type: None,
         };
     }
 
-    // If there is any unclassified error left in stderr, treat it as a script error
     if !stderr.trim().is_empty() {
         return ClassificationResult {
             disposition: ClassificationDisposition::RetryableScriptError,
             defect_type: Some(DefectType::ScriptError),
             reason: "Unclassified stderr output treated as retryable script error.".to_string(),
             evidence_excerpt: stderr.chars().take(300).collect(),
+            sub_type: None,
         };
     }
 
@@ -214,6 +225,7 @@ pub fn analyze_execution_result(stdout: &str, stderr: &str) -> ClassificationRes
         defect_type: Some(DefectType::Pass),
         reason: "Execution completed without defect markers.".to_string(),
         evidence_excerpt: stdout.chars().take(300).collect(),
+        sub_type: None,
     }
 }
 

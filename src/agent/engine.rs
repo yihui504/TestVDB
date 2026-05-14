@@ -31,8 +31,14 @@ pub async fn knowledge_exploration_loop(
         Target Repo: {}\n\
         Repo is at /workspace.\n\n\
         TASK: Extract constraints for endpoint '{}' ({}). Docs: {}\n\n\
-        Constraints use prefixes: [TYPE] for types, [RANGE] for ranges, [STATE] for state.\n\
-        Examples: '[TYPE] limit must be integer', '[RANGE] limit must be > 0', '[STATE:deterministic] collection must exist'\n\
+        Constraints use prefixes:\n\
+        - [TYPE] for types: '[TYPE] limit must be integer'\n\
+        - [RANGE] for ranges: '[RANGE] limit must be > 0'\n\
+        - [STATE] for state: '[STATE:deterministic] collection must exist'\n\
+        - [BEHAVIOR:STATE] for state consistency: '[BEHAVIOR:STATE] upsert N points -> count == N'\n\
+        - [BEHAVIOR:SEMANTIC] for semantic correctness: '[BEHAVIOR:SEMANTIC] search results sorted by score descending'\n\
+        - [BEHAVIOR:INTERFACE] for interface consistency: '[BEHAVIOR:INTERFACE] gRPC and REST return same results'\n\
+        - [BEHAVIOR:DIAGNOSTIC] for diagnostic quality: '[BEHAVIOR:DIAGNOSTIC] error message mentions parameter name'\n\n\
         Crawl docs + grep 1-2 times, then call submit_contract. Submit by turn 3.",
         target_name, target_repo_url,
         endpoint_name, endpoint_api_path, endpoint_docs_url
@@ -92,6 +98,7 @@ pub async fn knowledge_exploration_loop(
                     range_constraints: vec![],
                     state_constraints: vec![],
                     state_invariants: vec![],
+                    behavioral_contracts: vec![],
                 });
             } else {
                 warn!("B1: Could not parse tagged assertions from LLM summary for '{}'. Falling back.", endpoint_name);
@@ -103,6 +110,7 @@ pub async fn knowledge_exploration_loop(
                     range_constraints: vec![],
                     state_constraints: vec![],
                     state_invariants: vec![],
+                    behavioral_contracts: vec![],
                 });
             }
         }
@@ -298,6 +306,7 @@ pub async fn knowledge_exploration_loop(
                         range_constraints: vec![],
                         state_constraints: vec![],
                         state_invariants: vec![],
+                        behavioral_contracts: vec![],
                     };
                     
                     return Ok(contract);
@@ -328,5 +337,6 @@ pub async fn knowledge_exploration_loop(
         range_constraints: vec![],
         state_constraints: vec![],
         state_invariants: vec![],
+        behavioral_contracts: vec![],
     })
 }

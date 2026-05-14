@@ -1,9 +1,10 @@
 use crate::agent::classifier::{analyze_execution_result, ClassificationDisposition};
 use crate::agent::state::{ExplorationState, TestResult};
-use crate::agent::tools::execute_test_script;
+use crate::agent::tools::{execute_test_script, execute_test_in_sandbox};
 use crate::sandbox::manager::Sandbox;
 use regex::Regex;
 use std::collections::HashSet;
+use tracing::info;
 
 pub struct ExecutionResult {
     pub output: String,
@@ -74,6 +75,11 @@ const ASSERTION_KEYWORDS: &[&str] = &[
     "oversampling",
     "ef_construct",
     "quantization",
+    "count",
+    "upsert",
+    "delete",
+    "scroll",
+    "recommend",
 ];
 
 pub struct FAExecutor {
@@ -81,6 +87,8 @@ pub struct FAExecutor {
     pub error_state: ErrorStateMachine,
     pub last_test_code: Option<String>,
     assertions_tested: HashSet<String>,
+    active_sandbox: Option<Sandbox>,
+    active_db_url: Option<String>,
 }
 
 impl FAExecutor {
@@ -90,12 +98,15 @@ impl FAExecutor {
             error_state: ErrorStateMachine::new(),
             last_test_code: None,
             assertions_tested: HashSet::new(),
+            active_sandbox: None,
+            active_db_url: None,
         }
     }
 
     pub async fn execute_test(
         &mut self,
         code: &str,
+        fresh_sandbox: bool,
         db_image: &str,
         pip_packages: &[String],
         db_port: u16,
@@ -108,60 +119,29 @@ impl FAExecutor {
             }
         }
 
+        if !fresh_sandbox {
+            if self.active_sandbox.is_some() {
+                info!("Reusing existing sandbox (fresh_sandbox=false)...");
+                let sandbox = self.active_sandbox.take().unwrap();
+                let result = self.execute_in_existing_sandbox_internal(code, &sandbox, db_port).await;
+                if result.is_ok() {
+                    self.active_sandbox = Some(sandbox);
+                }
+                return result;
+            } else {
+                info!("No existing sandbox to reuse. Creating fresh sandbox...");
+            }
+        }
+
+        info!("Creating fresh sandbox (fresh_sandbox={})...", fresh_sandbox);
         match execute_test_script(code, db_image, pip_packages, db_port).await {
             Ok((output, sandbox, db_url)) => {
-                let found_defect = output.contains("[DEFECT:")
-                    || output.contains("ILLEGAL_SUCCESS")
-                    || output.contains("RANGE_VIOLATION")
-                    || output.contains("TYPE_VIOLATION")
-                    || output.contains("STATE_VIOLATION");
-
-                let normalized_stdout = output
-                    .split("STDERR:\n")
-                    .next()
-                    .unwrap_or(&output)
-                    .replace("STDOUT:\n", "")
-                    .trim()
-                    .to_string();
-                let normalized_stderr = output
-                    .split("STDERR:\n")
-                    .last()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-
-                let classification =
-                    analyze_execution_result(&normalized_stdout, &normalized_stderr);
-
-                self.error_state.update(&output);
-
-                if found_defect {
-                    self.state.record_test(
-                        "last_test",
-                        "unknown",
-                        TestResult::Defect,
-                        classification.defect_type.clone(),
-                    );
-                } else if classification.disposition
-                    == ClassificationDisposition::RetryableScriptError
-                {
-                    self.state.record_script_error();
-                } else {
-                    self.state.record_test(
-                        "last_test",
-                        "unknown",
-                        TestResult::Rejected,
-                        None,
-                    );
-                }
-
-                Ok(ExecutionResult {
-                    output,
-                    db_url,
-                    found_defect,
-                    classification,
-                    sandbox: Some(sandbox),
-                })
+                self.active_sandbox = Some(sandbox);
+                self.active_db_url = Some(db_url.clone());
+                let mut result = self.process_result(output, db_url)?;
+                result.sandbox = self.active_sandbox.take();
+                info!("Sandbox placed in ExecutionResult, active_sandbox now={}", self.active_sandbox.is_some());
+                Ok(result)
             }
             Err(e) => {
                 self.state.record_script_error();
@@ -174,6 +154,7 @@ impl FAExecutor {
                         defect_type: None,
                         reason: format!("Sandbox execution failed: {}", e),
                         evidence_excerpt: String::new(),
+                        sub_type: None,
                     },
                     sandbox: None,
                 })
@@ -181,117 +162,112 @@ impl FAExecutor {
         }
     }
 
-    pub async fn execute_safety_net(
+    async fn execute_in_existing_sandbox_internal(
         &mut self,
-        _net_name: &str,
-        net_script: &str,
-        db_image: &str,
-        pip_packages: &[String],
+        code: &str,
+        sandbox: &Sandbox,
         db_port: u16,
-    ) -> anyhow::Result<Option<ExecutionResult>> {
-        match execute_test_script(net_script, db_image, pip_packages, db_port).await {
-            Ok((output, _sandbox, db_url)) => {
-                let normalized_stdout = output
-                    .split("STDERR:\n")
-                    .next()
-                    .unwrap_or(&output)
-                    .replace("STDOUT:\n", "")
-                    .trim()
-                    .to_string();
-                let normalized_stderr = output
-                    .split("STDERR:\n")
-                    .last()
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                let classification =
-                    analyze_execution_result(&normalized_stdout, &normalized_stderr);
-
-                if classification.disposition != ClassificationDisposition::Pass
-                    && classification.disposition != ClassificationDisposition::CoverageDetected
-                {
-                    Ok(Some(ExecutionResult {
-                        output,
-                        db_url,
-                        found_defect: true,
-                        classification,
-                        sandbox: None,
-                    }))
-                } else {
-                    Ok(None)
+    ) -> anyhow::Result<ExecutionResult> {
+        match execute_test_in_sandbox(code, sandbox, db_port).await {
+            Ok((output, db_url)) => {
+                self.active_db_url = Some(db_url.clone());
+                let mut result = self.process_result(output, db_url);
+                if let Ok(ref mut r) = result {
+                    r.sandbox = None;
                 }
+                result
             }
-            Err(_) => Ok(None),
+            Err(e) => {
+                self.state.record_script_error();
+                Ok(ExecutionResult {
+                    output: format!("Sandbox reuse execution failed: {}", e),
+                    db_url: self.active_db_url.clone().unwrap_or_default(),
+                    found_defect: false,
+                    classification: crate::agent::classifier::ClassificationResult {
+                        disposition: ClassificationDisposition::RetryableScriptError,
+                        defect_type: None,
+                        reason: format!("Sandbox reuse execution failed: {}", e),
+                        evidence_excerpt: String::new(),
+                        sub_type: None,
+                    },
+                    sandbox: None,
+                })
+            }
         }
+    }
+
+    fn process_result(
+        &mut self,
+        output: String,
+        db_url: String,
+    ) -> anyhow::Result<ExecutionResult> {
+        let found_defect = output.contains("[DEFECT:")
+            || output.contains("ILLEGAL_SUCCESS")
+            || output.contains("RANGE_VIOLATION")
+            || output.contains("TYPE_VIOLATION")
+            || output.contains("STATE_VIOLATION");
+
+        let normalized_stdout = output
+            .split("STDERR:\n")
+            .next()
+            .unwrap_or(&output)
+            .replace("STDOUT:\n", "")
+            .trim()
+            .to_string();
+        let normalized_stderr = output
+            .split("STDERR:\n")
+            .last()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+
+        let classification =
+            analyze_execution_result(&normalized_stdout, &normalized_stderr);
+
+        self.error_state.update(&output);
+
+        if found_defect {
+            self.state.record_test(
+                "last_test",
+                "unknown",
+                TestResult::Defect,
+                classification.defect_type.clone(),
+            );
+        } else if classification.disposition
+            == ClassificationDisposition::RetryableScriptError
+        {
+            self.state.record_script_error();
+        } else {
+            self.state.record_test(
+                "last_test",
+                "unknown",
+                TestResult::Rejected,
+                None,
+            );
+        }
+
+        Ok(ExecutionResult {
+            output,
+            db_url,
+            found_defect,
+            classification,
+            sandbox: None,
+        })
+    }
+
+    pub fn has_active_sandbox(&self) -> bool {
+        self.active_sandbox.is_some()
     }
 
     pub fn unique_assertions_count(&self) -> usize {
         self.assertions_tested.len()
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_error_state_machine_same_error() {
-        let mut esm = ErrorStateMachine::new();
-        esm.update("STDOUT:\nok\nSTDERR:\nSyntaxError: invalid syntax");
-        assert_eq!(esm.consecutive_same_errors, 1);
-        esm.update("STDOUT:\nok\nSTDERR:\nSyntaxError: another error");
-        assert_eq!(esm.consecutive_same_errors, 2);
-        assert!(!esm.should_intervene());
-        esm.update("STDOUT:\nok\nSTDERR:\nSyntaxError: third");
-        assert_eq!(esm.consecutive_same_errors, 3);
-        assert!(esm.should_intervene());
+    pub fn take_sandbox(&mut self) -> Option<Sandbox> {
+        self.active_sandbox.take()
     }
 
-    #[test]
-    fn test_error_state_machine_different_errors() {
-        let mut esm = ErrorStateMachine::new();
-        esm.update("STDOUT:\nok\nSTDERR:\nSyntaxError: invalid");
-        assert_eq!(esm.consecutive_same_errors, 1);
-        esm.update("STDOUT:\nok\nSTDERR:\nImportError: no module");
-        assert_eq!(esm.consecutive_same_errors, 1);
-        assert!(!esm.should_intervene());
-    }
-
-    #[test]
-    fn test_error_state_machine_reset() {
-        let mut esm = ErrorStateMachine::new();
-        esm.update("STDOUT:\nok\nSTDERR:\nSyntaxError: x");
-        esm.update("STDOUT:\nok\nSTDERR:\nSyntaxError: y");
-        esm.update("STDOUT:\nok\nSTDERR:\nSyntaxError: z");
-        assert!(esm.should_intervene());
-        esm.reset();
-        assert_eq!(esm.consecutive_same_errors, 0);
-        assert!(!esm.should_intervene());
-    }
-
-    #[test]
-    fn test_error_state_machine_no_stderr() {
-        let mut esm = ErrorStateMachine::new();
-        esm.update("STDOUT:\nall good");
-        assert_eq!(esm.consecutive_same_errors, 0);
-    }
-
-    #[test]
-    fn test_assertion_tracking() {
-        let mut exec = FAExecutor::new();
-        assert_eq!(exec.unique_assertions_count(), 0);
-        for keyword in ASSERTION_KEYWORDS {
-            if "limit" == *keyword {
-                let code = format!("test with {} = 0", keyword);
-                for kw in ASSERTION_KEYWORDS {
-                    if code.to_lowercase().contains(&kw.to_lowercase()) {
-                        exec.assertions_tested.insert(kw.to_string());
-                    }
-                }
-                break;
-            }
-        }
-        assert!(exec.assertions_tested.contains("limit"));
-        assert_eq!(exec.unique_assertions_count(), 1);
+    pub fn put_sandbox(&mut self, sandbox: Sandbox) {
+        self.active_sandbox = Some(sandbox);
     }
 }

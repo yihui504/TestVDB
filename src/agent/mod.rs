@@ -4,5 +4,8 @@ pub mod executor;
 pub mod llm;
 pub mod oracle;
 pub mod orchestrator;
+pub mod probe;
+pub mod sandbox_runner;
 pub mod state;
 pub mod tools;
+pub mod vdbfuzz;

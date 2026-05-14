@@ -2,7 +2,10 @@ use crate::agent::classifier::ClassificationDisposition;
 use crate::agent::executor::FAExecutor;
 use crate::agent::llm::{DeepSeekClient, Message};
 use crate::agent::oracle::{build_oracle_findings_message, Oracle};
-use crate::agent::tools::{get_execute_test_script_tool, get_submit_mre_tool};
+use crate::agent::tools::{get_execute_test_script_tool, get_submit_mre_tool, get_fuzz_boundary_values_tool, get_coverage_report_tool, get_fuzz_api_sequence_tool};
+use crate::agent::vdbfuzz::boundary::BoundaryValueGenerator;
+use crate::agent::vdbfuzz::coverage::{CoverageTracker, ApiEndpoint};
+use crate::agent::vdbfuzz::sequence::APISequenceExplorer;
 use crate::contract::schema::StructuredContract;
 use crate::report::generator;
 use crate::target::TargetPlugin;
@@ -10,49 +13,29 @@ use tracing::{info, warn};
 
 fn build_system_prompt(contract_content: &str) -> String {
     format!(
-        "You are an expert security researcher performing Agentic Fuzzing.\n\
-        Your goal is to find REAL vulnerabilities where the server silently accepts invalid input.\n\
-        You must use the `execute_test_script` tool to test your code in an isolated sandbox.\n\
+        "You are a security researcher performing Agentic Fuzzing. Find REAL defects where the server violates contracts or silently accepts invalid input.\n\
         \n\
-        TEST TEMPLATES (choose based on the constraint type):\n\
+        === TOOLS ===\n\
+        `execute_test_script(code, fresh_sandbox?)` — Run Python scripts. Auto-reuses DB across calls. Set fresh_sandbox=true for clean start.\n\
+        `fuzz_boundary_values(focus_params?)` — Auto-generate boundary value tests from contract constraints.\n\
+        `fuzz_api_sequence(sequence_type?)` — Auto-generate multi-step API sequence tests.\n\
+        `get_coverage_report()` — Show tested vs untested parameters.\n\
         \n\
-        TYPE VIOLATION: Send wrong JSON type for a parameter.\n\
-        Example: limit expects integer → send string 'abc' or float 3.14.\n\
-        Print [DEFECT: TYPE_VIOLATION] if the server accepts the wrong type.\n\
+        === STRATEGY ===\n\
+        1. fuzz_boundary_values → get_coverage_report → confirm defects with execute_test_script\n\
+        2. Test STATE: upsert N → count=N; delete K → count=N-K\n\
+        3. Test DATA: write → read back → verify match\n\
+        4. Test ASYNC: wait=true vs wait=false for invalid input\n\
+        5. Test CROSS-STEP: create → delete → recreate = clean state\n\
         \n\
-        RANGE VIOLATION: Send correct type but out-of-range value.\n\
-        Example: limit=0 (should be >0), offset=-1, hnsw_ef=0 (should be >=1).\n\
-        Test boundary values: min-1, min, max, max+1.\n\
-        Print [DEFECT: RANGE_VIOLATION] or [DEFECT: ILLEGAL_SUCCESS] if the server silently accepts.\n\
-        \n\
-        STATE VIOLATION: Violate preconditions before calling the endpoint.\n\
-        Example: search on non-existent collection, upsert without creating collection first.\n\
-        Print [DEFECT: STATE_VIOLATION] if the server returns 200 or unclear error.\n\
-        \n\
-        COMBINATION VIOLATION: Combine multiple boundary values in one request.\n\
-        Some servers validate each field independently but miss interactions.\n\
-        Print [DEFECT: ILLEGAL_SUCCESS] if the server accepts the combination.\n\
-        \n\
-        ZERO-VALUE PROBE: Test parameters with value 0 where positive is expected.\n\
-        Many APIs forget to validate that certain uint fields must be >= 1.\n\
-        Print [DEFECT: ILLEGAL_SUCCESS] if the server accepts 0 for a must-be-positive field.\n\
-        \n\
-        CRITICAL RULES:\n\
-        1. You MUST test at least 3 DIFFERENT assertions from the contract before calling submit_mre.\n\
-        2. Each test script should target ONE assertion and print the appropriate [DEFECT: ...] marker.\n\
-        3. When you find a potential defect, FOCUS on it: refine until it cleanly demonstrates the violation.\n\
-        4. The script you submit MUST print a [DEFECT: ...] marker — otherwise worthless.\n\
-        5. If the server correctly REJECTS (400/422), that is normal — move on to a different parameter or approach.\n\
-        6. After testing 3+ assertions with at least one confirmed defect, call submit_mre.\n\
-        7. TEST RESULT REPORTING: If you test 3+ assertions and ALL are correctly rejected (no defects), print coverage markers and call submit_mre:\n\
-           [COVERAGE:TYPE] N type assertions tested\n\
-           [COVERAGE:RANGE] M range assertions tested\n\
-           [COVERAGE:STATE] K state assertions tested\n\
-           Then call submit_mre with that coverage script. This is a legitimate result — not a failure.\n\
-        8. ADAPTIVE STRATEGY: You will receive an exploration state summary each turn. Use it to:\n\
-           - Identify which parameters have NOT been tested yet\n\
-           - Notice patterns: if many parameters are correctly rejected, try a different attack approach\n\
-           - If consecutive tests find no defect, consider switching to a completely different strategy\n\
+        === SCRIPT RULES ===\n\
+        - Use {{TESTVDB_DB_URL}} as DB URL placeholder\n\
+        - time.sleep(0.5) after create, 0.3 after upsert\n\
+        - Print [DEFECT: ILLEGAL_SUCCESS|STATE_LOGIC_VIOLATION|DATA_CORRUPTION|POOR_DIAGNOSTICS] on defect\n\
+        - sys.exit(1) on defect, sys.exit(0) on pass\n\
+        - Unique collection name with uuid\n\
+        - Try DIFFERENT attack vectors each turn; don't repeat\n\
+        - Submit with submit_mre when >= 3 surviving assertions found\n\
         \n\
         Contract:\n{}\n",
         contract_content
@@ -77,6 +60,13 @@ pub struct FAOrchestrator<'a> {
     pip_packages: Vec<String>,
     db_port: u16,
     max_turns: usize,
+    multi_defect: bool,
+}
+
+pub struct CollectedDefect {
+    pub script: String,
+    pub evidence: generator::RunEvidence,
+    pub classification: crate::agent::classifier::ClassificationResult,
 }
 
 impl<'a> FAOrchestrator<'a> {
@@ -86,6 +76,7 @@ impl<'a> FAOrchestrator<'a> {
         contract_content: String,
         version: &str,
         max_turns: usize,
+        multi_defect: bool,
     ) -> Self {
         let db_image = plugin.target_image(version);
         let pip_packages = plugin.pip_packages();
@@ -99,6 +90,7 @@ impl<'a> FAOrchestrator<'a> {
                 range_constraints: Vec::new(),
                 state_constraints: Vec::new(),
                 state_invariants: Vec::new(),
+                behavioral_contracts: Vec::new(),
             });
         FAOrchestrator {
             llm_client,
@@ -109,7 +101,46 @@ impl<'a> FAOrchestrator<'a> {
             pip_packages,
             db_port,
             max_turns,
+            multi_defect,
         }
+    }
+
+    fn build_behavioral_section(&self) -> String {
+        if self.contract.behavioral_contracts.is_empty() {
+            return String::new();
+        }
+
+        let mut section = String::from("=== SPECIFIC BEHAVIORAL CONTRACTS TO TEST ===\n");
+        section.push_str("The following behavioral contracts are defined for this endpoint.\n");
+        section.push_str("Use these as EXAMPLES to write your own multi-step test scripts.\n");
+        section.push_str("Each contract has a verification_script you can adapt.\n");
+        section.push_str("PRIORITY: Test these BEFORE doing simple input validation.\n\n");
+
+        let max_templates = 10;
+        for (i, bc) in self.contract.behavioral_contracts.iter().take(max_templates).enumerate() {
+            section.push_str(&format!("{}. [{:?}] {}\n", i + 1, bc.category, bc.name));
+            section.push_str(&format!("   Endpoints: {}\n", bc.endpoints.join(", ")));
+            section.push_str(&format!("   Expected: {}\n", bc.expected_outcome));
+            let script_preview = if bc.verification_script.len() > 800 {
+                format!("{}...", &bc.verification_script[..800])
+            } else {
+                bc.verification_script.clone()
+            };
+            section.push_str(&format!("   Script template:\n   {}\n\n", script_preview.replace('\n', "\n   ")));
+        }
+
+        if self.contract.behavioral_contracts.len() > max_templates {
+            section.push_str(&format!(
+                "... and {} more behavioral contracts. Follow the same pattern for those.\n",
+                self.contract.behavioral_contracts.len() - max_templates
+            ));
+        }
+
+        section.push_str("\nIMPORTANT: These scripts use {{TESTVDB_DB_URL}} as the database URL placeholder.\n");
+        section.push_str("Adapt them to your test scenario. You can modify the data, parameters, or assertions.\n");
+        section.push_str("Write a COMPLETE self-contained script that does setup + action + verification in one call.\n");
+
+        section
     }
 
     pub async fn run(
@@ -118,21 +149,64 @@ impl<'a> FAOrchestrator<'a> {
         String,
         generator::RunEvidence,
         crate::agent::classifier::ClassificationResult,
+        Vec<CollectedDefect>,
     )> {
-        let tools = vec![get_execute_test_script_tool(), get_submit_mre_tool()];
+        let tools = vec![get_execute_test_script_tool(), get_submit_mre_tool(), get_fuzz_boundary_values_tool(), get_fuzz_api_sequence_tool(), get_coverage_report_tool()];
         let system_prompt = build_system_prompt(&self.contract_content);
+        let mut coverage_tracker = CoverageTracker::new();
+
+        let mut param_names: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for tc in &self.contract.type_constraints {
+            param_names.insert(tc.param_name.clone());
+        }
+        for rc in &self.contract.range_constraints {
+            param_names.insert(rc.param_name.clone());
+        }
+        if !param_names.is_empty() {
+            let params: Vec<String> = param_names.into_iter().collect();
+            coverage_tracker.register_endpoint(ApiEndpoint {
+                path: self.contract.api_endpoint.clone(),
+                method: "POST".to_string(),
+                params,
+            });
+            info!("Coverage tracker: registered {} params for endpoint '{}'", coverage_tracker.endpoint_count(), self.contract.api_endpoint);
+        }
 
         let mut messages = vec![
             Message::system(system_prompt),
             Message::user(
-                "Begin exploration. Write a script and use execute_test_script to test it.",
+                "Begin exploration. Write a script and use execute_test_script(fresh_sandbox=true) to test it.",
             ),
         ];
 
         let mut executor = FAExecutor::new();
-        let oracle_checks = self.plugin.derive_oracle_checks(&self.contract);
+        let mut oracle_checks = self.plugin.derive_oracle_checks(&self.contract);
+        let mutation_checks = Oracle::from_mutation_rules(
+            &self.contract.behavioral_contracts.iter().flat_map(|c| c.mutation_rules.iter()).cloned().collect::<Vec<_>>(),
+        );
+        let mut_count = mutation_checks.len();
+        oracle_checks.splice(0..0, mutation_checks);
+        info!("Oracle initialized with {} checks ({} mutation rules prioritized first)", oracle_checks.len(), mut_count);
         let mut oracle = Oracle::new(oracle_checks);
-        let oracle_batch_size = 2;
+        let oracle_batch_size = 6;
+        let mut collected_defects: Vec<CollectedDefect> = Vec::new();
+
+        macro_rules! handle_defect {
+            ($script:expr, $evidence:expr, $classif:expr, $tc_id:expr, $messages:expr) => {
+                if self.multi_defect {
+                    info!("multi_defect mode: collecting defect and continuing exploration");
+                    collected_defects.push(CollectedDefect {
+                        script: $script,
+                        evidence: $evidence,
+                        classification: $classif,
+                    });
+                    $messages.push(Message::tool_response($tc_id, "Defect collected. Continue exploring for more defects. Try a different endpoint or parameter."));
+                    continue;
+                } else {
+                    return Ok(($script, $evidence, $classif, collected_defects));
+                }
+            };
+        }
 
         for turn in 0..self.max_turns {
             info!(
@@ -145,6 +219,15 @@ impl<'a> FAOrchestrator<'a> {
                 let state_json = executor.state.to_prompt_json();
                 let state_msg = build_state_message(&state_json);
                 messages.push(Message::user(state_msg));
+            }
+
+            if turn == 1 && executor.has_active_sandbox() {
+                messages.push(Message::user(
+                    "[HINT] Your database from the previous turn is still active and will be AUTOMATICALLY reused. \
+                     Just write a script that operates on the existing data — no need to create a new collection. \
+                     For example: delete points and verify count, or search and verify scores."
+                        .to_string(),
+                ));
             }
 
             if turn == 8 && executor.unique_assertions_count() < 2 {
@@ -205,33 +288,70 @@ impl<'a> FAOrchestrator<'a> {
                     let args: serde_json::Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                     let code = args.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                    let requested_fresh = args.get("fresh_sandbox").and_then(|v| v.as_bool()).unwrap_or(true);
+                    let fresh_sandbox = if executor.has_active_sandbox() {
+                        if requested_fresh {
+                            info!("FA requested fresh_sandbox=true but active sandbox exists. Auto-reusing sandbox (forced).");
+                        }
+                        false
+                    } else {
+                        true
+                    };
 
                     let result = executor
-                        .execute_test(code, &self.db_image, &self.pip_packages, self.db_port)
+                        .execute_test(code, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port)
                         .await?;
 
                     messages.push(Message::tool_response(&tc.id, &result.output));
 
-                    if oracle.has_pending() {
-                        if let Some(ref sandbox) = result.sandbox {
-                            if !result.db_url.is_empty() {
-                                info!("Running Oracle checks in same sandbox (batch of {})...", oracle_batch_size);
-                                let oracle_findings = oracle
-                                    .run_next_batch(sandbox, &result.db_url, oracle_batch_size)
-                                    .await;
-                                if !oracle_findings.is_empty() {
-                                    let violated_count = oracle_findings.iter().filter(|f| f.violated).count();
-                                    if violated_count > 0 {
-                                        info!("Oracle found {} violation(s)!", violated_count);
-                                    }
-                                    executor.state.record_oracle_findings(oracle_findings.clone());
-                                    let oracle_msg = build_oracle_findings_message(&oracle_findings);
-                                    if !oracle_msg.is_empty() {
-                                        messages.push(Message::user(oracle_msg));
-                                    }
+                    for param in &["limit", "offset", "hnsw_ef", "exact", "score_threshold", "vector", "dimension", "shard_number"] {
+                        if code.contains(param) {
+                            coverage_tracker.record_visit(&self.contract.api_endpoint, param, "executed");
+                        }
+                    }
+
+                    if let Some(sandbox) = result.sandbox {
+                        info!("Got sandbox from ExecutionResult (fresh), oracle_pending={}", oracle.has_pending());
+                        if oracle.has_pending() && !result.db_url.is_empty() {
+                            info!("Running Oracle checks in sandbox (batch of {})...", oracle_batch_size);
+                            let oracle_findings = oracle
+                                .run_next_batch(&sandbox, &result.db_url, oracle_batch_size)
+                                .await;
+                            if !oracle_findings.is_empty() {
+                                let violated_count = oracle_findings.iter().filter(|f| f.violated).count();
+                                if violated_count > 0 {
+                                    info!("Oracle found {} violation(s)!", violated_count);
+                                }
+                                executor.state.record_oracle_findings(oracle_findings.clone());
+                                let oracle_msg = build_oracle_findings_message(&oracle_findings);
+                                if !oracle_msg.is_empty() {
+                                    messages.push(Message::user(oracle_msg));
                                 }
                             }
                         }
+                        executor.put_sandbox(sandbox);
+                        info!("Sandbox returned to executor, has_active_sandbox={}", executor.has_active_sandbox());
+                    } else if executor.has_active_sandbox() && oracle.has_pending() && !result.db_url.is_empty() {
+                        info!("No sandbox in ExecutionResult (reused), but executor has active sandbox. Running Oracle...");
+                        let sandbox = executor.take_sandbox().unwrap();
+                        let oracle_findings = oracle
+                            .run_next_batch(&sandbox, &result.db_url, oracle_batch_size)
+                            .await;
+                        if !oracle_findings.is_empty() {
+                            let violated_count = oracle_findings.iter().filter(|f| f.violated).count();
+                            if violated_count > 0 {
+                                info!("Oracle found {} violation(s)!", violated_count);
+                            }
+                            executor.state.record_oracle_findings(oracle_findings.clone());
+                            let oracle_msg = build_oracle_findings_message(&oracle_findings);
+                            if !oracle_msg.is_empty() {
+                                messages.push(Message::user(oracle_msg));
+                            }
+                        }
+                        executor.put_sandbox(sandbox);
+                        info!("Sandbox returned to executor after Oracle, has_active_sandbox={}", executor.has_active_sandbox());
+                    } else {
+                        info!("No sandbox available for Oracle checks (sandbox=None, has_active={})", executor.has_active_sandbox());
                     }
 
                     if executor.error_state.should_intervene() {
@@ -246,6 +366,21 @@ impl<'a> FAOrchestrator<'a> {
                     }
                 }
                 "submit_mre" => {
+                    info!("Agent submitted MRE. Running all remaining Oracle checks before final validation...");
+                    while oracle.has_pending() {
+                        if let Some(sandbox) = executor.take_sandbox() {
+                            let db_url = format!("http://{}:{}", sandbox.db_host.as_deref().unwrap_or("localhost"), self.db_port);
+                            let violations = oracle.run_next_batch(&sandbox, &db_url, oracle_batch_size).await;
+                            for v in &violations {
+                                warn!("Oracle violation found: {} — {}", v.invariant_name, v.evidence);
+                            }
+                            executor.state.record_oracle_findings(violations);
+                            executor.put_sandbox(sandbox);
+                        } else {
+                            break;
+                        }
+                    }
+
                     let oracle_violations = executor.state.oracle_violations();
                     let total_assertions = executor.unique_assertions_count() + oracle_violations.len();
                     if total_assertions < 3 {
@@ -272,42 +407,77 @@ impl<'a> FAOrchestrator<'a> {
 
                     info!("Agent submitted MRE. Running final validation...");
                     let result = executor
-                        .execute_test(&code, &self.db_image, &self.pip_packages, self.db_port)
+                        .execute_test(&code, true, &self.db_image, &self.pip_packages, self.db_port)
                         .await?;
 
                     let classification = result.classification.clone();
 
+                    let oracle_violations = executor.state.oracle_violations_owned();
+                    if !oracle_violations.is_empty() {
+                        info!(
+                            "Oracle found {} violation(s). Using Oracle findings.",
+                            oracle_violations.len()
+                        );
+                    }
+
+                    info!("Running safety net probes (always executed regardless of FA result)...");
+                    let mut first_probe = true;
+                    for net in self.plugin.safety_nets() {
+                        if net.redundant_with_mutation { continue; }
+                        info!("Safety net probe: {} (fresh={})", net.name, first_probe);
+                        let safety_result = executor
+                            .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port)
+                            .await?;
+                        if first_probe {
+                            if let Some(s) = safety_result.sandbox {
+                                executor.put_sandbox(s);
+                            }
+                        }
+                        first_probe = false;
+
+                        if safety_result.found_defect {
+                            let initial_run = generator::RunEvidence {
+                                phase: "safety_net".to_string(),
+                                db_url: safety_result.db_url.clone(),
+                                stdout: String::new(),
+                                stderr: String::new(),
+                                classifier_reason: safety_result.classification.reason.clone(),
+                                classifier_evidence_excerpt: safety_result
+                                    .classification
+                                    .evidence_excerpt
+                                    .clone(),
+                            };
+                            handle_defect!(net.script, initial_run, safety_result.classification, &tc.id, &mut messages);
+                        }
+                    }
+
+                    if !oracle_violations.is_empty() {
+                        let first_violation = &oracle_violations[0];
+                        let oracle_defect_type = first_violation.defect_type.clone()
+                            .unwrap_or(crate::agent::classifier::DefectType::StateLogicViolation);
+                        let oracle_classification = crate::agent::classifier::ClassificationResult {
+                            disposition: ClassificationDisposition::CandidateDefect,
+                            defect_type: Some(oracle_defect_type),
+                            reason: format!("Oracle detected: {}", first_violation.evidence),
+                            evidence_excerpt: first_violation.evidence.chars().take(300).collect(),
+                            sub_type: None,
+                        };
+                        let initial_run = generator::RunEvidence {
+                            phase: "oracle".to_string(),
+                            db_url: result.db_url.clone(),
+                            stdout: String::new(),
+                            stderr: String::new(),
+                            classifier_reason: oracle_classification.reason.clone(),
+                            classifier_evidence_excerpt: oracle_classification.evidence_excerpt.clone(),
+                        };
+                        handle_defect!(code, initial_run, oracle_classification, &tc.id, &mut messages);
+                    }
+
                     if classification.disposition == ClassificationDisposition::Pass
                         || classification.disposition == ClassificationDisposition::CoverageDetected
                     {
-                        let oracle_violations = executor.state.oracle_violations();
-                        if !oracle_violations.is_empty() {
-                            info!(
-                                "FA found no defect, but Oracle found {} violation(s). Using Oracle findings.",
-                                oracle_violations.len()
-                            );
-                            let first_violation = &oracle_violations[0];
-                            let oracle_defect_type = first_violation.defect_type.clone()
-                                .unwrap_or(crate::agent::classifier::DefectType::StateLogicViolation);
-                            let oracle_classification = crate::agent::classifier::ClassificationResult {
-                                disposition: ClassificationDisposition::CandidateDefect,
-                                defect_type: Some(oracle_defect_type),
-                                reason: format!("Oracle detected: {}", first_violation.evidence),
-                                evidence_excerpt: first_violation.evidence.chars().take(300).collect(),
-                            };
-                            let initial_run = generator::RunEvidence {
-                                phase: "oracle".to_string(),
-                                db_url: result.db_url.clone(),
-                                stdout: String::new(),
-                                stderr: String::new(),
-                                classifier_reason: oracle_classification.reason.clone(),
-                                classifier_evidence_excerpt: oracle_classification.evidence_excerpt.clone(),
-                            };
-                            return Ok((code, initial_run, oracle_classification));
-                        }
-
                         warn!(
-                            "FA found no defect ({}). Running safety net probes.",
+                            "FA found no defect ({}).",
                             if matches!(
                                 classification.disposition,
                                 ClassificationDisposition::CoverageDetected
@@ -317,37 +487,6 @@ impl<'a> FAOrchestrator<'a> {
                                 "non-defect MRE"
                             }
                         );
-                        for net in self.plugin.safety_nets() {
-                            info!("Safety net probe: {}", net.name);
-                            if let Some(safety_result) = executor
-                                .execute_safety_net(
-                                    &net.name,
-                                    &net.script,
-                                    &self.db_image,
-                                    &self.pip_packages,
-                                    self.db_port,
-                                )
-                                .await?
-                            {
-                                let initial_run = generator::RunEvidence {
-                                    phase: "initial".to_string(),
-                                    db_url: safety_result.db_url.clone(),
-                                    stdout: String::new(),
-                                    stderr: String::new(),
-                                    classifier_reason: safety_result.classification.reason.clone(),
-                                    classifier_evidence_excerpt: safety_result
-                                        .classification
-                                        .evidence_excerpt
-                                        .clone(),
-                                };
-                                return Ok((net.script, initial_run, safety_result.classification));
-                            }
-                            warn!(
-                                "Safety net '{}' did not trigger (properly rejected).",
-                                net.name
-                            );
-                        }
-                        warn!("All safety nets passed. No defect found.");
                     }
 
                     let initial_run = generator::RunEvidence {
@@ -358,7 +497,86 @@ impl<'a> FAOrchestrator<'a> {
                         classifier_reason: classification.reason.clone(),
                         classifier_evidence_excerpt: classification.evidence_excerpt.clone(),
                     };
-                    return Ok((code, initial_run, classification));
+                    handle_defect!(code, initial_run, classification, &tc.id, &mut messages);
+                }
+                "fuzz_boundary_values" => {
+                    let cases = BoundaryValueGenerator::from_contract(&self.contract);
+                    let args: serde_json::Value =
+                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    let focus_params: Vec<String> = args.get("focus_params")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+                        .unwrap_or_default();
+
+                    let filtered: Vec<_> = if focus_params.is_empty() {
+                        cases
+                    } else {
+                        cases.into_iter().filter(|c| {
+                            focus_params.iter().any(|fp| c.name.contains(fp))
+                        }).collect()
+                    };
+
+                    let mut response = format!("Generated {} boundary value test cases:\n\n", filtered.len());
+                    for (i, case) in filtered.iter().enumerate() {
+                        response.push_str(&format!("{}. {} (expected_rejection={})\n", i + 1, case.name, case.expected_rejection));
+                        if let Some((ep, param, val)) = &case.coverage_entry {
+                            coverage_tracker.record_visit(ep, param, val);
+                        }
+                    }
+                    response.push_str("\nTo execute a test, copy the script from any case above and run it with execute_test_script.");
+                    response.push_str("\nAlternatively, I can provide the full script for any specific case - just ask by name.");
+
+                    let mut scripts_summary = String::new();
+                    for case in &filtered {
+                        scripts_summary.push_str(&format!("--- {} ---\n{}\n\n", case.name, case.script));
+                    }
+                    response.push_str(&format!("\n\n=== FULL SCRIPTS ===\n{}", scripts_summary));
+
+                    info!("fuzz_boundary_values generated {} cases", filtered.len());
+                    messages.push(Message::tool_response(&tc.id, &response));
+                    if !filtered.is_empty() {
+                        messages.push(Message::user(
+                            "[HINT] Boundary test scripts are provided above. Pick one with an interesting violation and run it with execute_test_script to confirm the defect. This will also run Oracle checks automatically."
+                        ));
+                    }
+                }
+                "get_coverage_report" => {
+                    let report = coverage_tracker.report();
+                    info!("get_coverage_report: {} entries tracked", coverage_tracker.visited_count());
+                    messages.push(Message::tool_response(&tc.id, &report));
+                }
+                "fuzz_api_sequence" => {
+                    let all_cases = APISequenceExplorer::generate_sequences();
+                    let args: serde_json::Value =
+                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    let seq_type = args.get("sequence_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("all");
+
+                    let filtered: Vec<_> = if seq_type == "all" {
+                        all_cases
+                    } else {
+                        all_cases.into_iter().filter(|c| c.sequence_type == seq_type).collect()
+                    };
+
+                    let mut response = format!("Generated {} API sequence test cases:\n\n", filtered.len());
+                    for (i, case) in filtered.iter().enumerate() {
+                        response.push_str(&format!("{}. {} [{}] (expected: {:?})\n", i + 1, case.name, case.sequence_type, case.expected_defect));
+                    }
+
+                    let mut scripts_summary = String::new();
+                    for case in &filtered {
+                        scripts_summary.push_str(&format!("--- {} [{}] ---\n{}\n\n", case.name, case.sequence_type, case.script));
+                    }
+                    response.push_str(&format!("\n=== FULL SCRIPTS ===\n{}", scripts_summary));
+
+                    info!("fuzz_api_sequence generated {} cases", filtered.len());
+                    messages.push(Message::tool_response(&tc.id, &response));
+                    if !filtered.is_empty() {
+                        messages.push(Message::user(
+                            "[HINT] Sequence test scripts are provided above. Run one with execute_test_script to confirm the defect and trigger Oracle state checks."
+                        ));
+                    }
                 }
                 _ => {
                     messages.push(Message::tool_response(&tc.id, "Unknown tool."));
@@ -369,7 +587,7 @@ impl<'a> FAOrchestrator<'a> {
         if let Some(code) = executor.last_test_code.clone() {
             warn!("Agentic exploration exceeded max turns. B2: submitting last test script as MRE.");
             let result = executor
-                .execute_test(&code, &self.db_image, &self.pip_packages, self.db_port)
+                .execute_test(&code, true, &self.db_image, &self.pip_packages, self.db_port)
                 .await?;
             let initial_run = generator::RunEvidence {
                 phase: "initial".to_string(),
@@ -379,22 +597,24 @@ impl<'a> FAOrchestrator<'a> {
                 classifier_reason: result.classification.reason.clone(),
                 classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
             };
-            return Ok((code, initial_run, result.classification));
+            return Ok((code, initial_run, result.classification, collected_defects));
         }
 
         warn!("No FA test scripts executed. Running safety net probes.");
+        let mut first_probe = true;
         for net in self.plugin.safety_nets() {
-            info!("Safety net probe (fallback): {}", net.name);
-            if let Some(safety_result) = executor
-                .execute_safety_net(
-                    &net.name,
-                    &net.script,
-                    &self.db_image,
-                    &self.pip_packages,
-                    self.db_port,
-                )
-                .await?
-            {
+            info!("Safety net probe (fallback): {} (fresh={})", net.name, first_probe);
+            let safety_result = executor
+                .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port)
+                .await?;
+            if first_probe {
+                if let Some(s) = safety_result.sandbox {
+                    executor.put_sandbox(s);
+                }
+            }
+            first_probe = false;
+
+            if safety_result.found_defect {
                 let initial_run = generator::RunEvidence {
                     phase: "initial".to_string(),
                     db_url: safety_result.db_url.clone(),
@@ -403,12 +623,16 @@ impl<'a> FAOrchestrator<'a> {
                     classifier_reason: safety_result.classification.reason.clone(),
                     classifier_evidence_excerpt: safety_result.classification.evidence_excerpt.clone(),
                 };
-                return Ok((net.script, initial_run, safety_result.classification));
+                return Ok((net.script, initial_run, safety_result.classification, collected_defects));
             }
             warn!(
                 "Safety net '{}' did not trigger (properly rejected).",
                 net.name
             );
+        }
+        if !collected_defects.is_empty() {
+            let first = collected_defects.remove(0);
+            return Ok((first.script, first.evidence, first.classification, collected_defects));
         }
         anyhow::bail!("No defect found by FA or any safety net probe");
     }

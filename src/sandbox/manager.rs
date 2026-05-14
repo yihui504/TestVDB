@@ -210,6 +210,30 @@ impl Sandbox {
         })
     }
 
+    pub async fn exec_script(&self, script: &str, env_vars: &[(&str, &str)]) -> anyhow::Result<ExecutionOutput> {
+        let script_path = "/tmp/testvdb_script.py";
+        let write_args: Vec<String> = vec![
+            "exec".to_string(),
+            "-i".to_string(),
+            self.runner_container_id.clone(),
+            "bash".to_string(),
+            "-c".to_string(),
+            format!("cat > {} << 'TESTVDB_SCRIPT_EOF'\n{}\nTESTVDB_SCRIPT_EOF", script_path, script),
+        ];
+        let write_output = Command::new("docker")
+            .args(&write_args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+            .context("Failed to write script to container")?;
+        if !write_output.status.success() {
+            anyhow::bail!("Failed to write script to container: {}", String::from_utf8_lossy(&write_output.stderr));
+        }
+
+        self.exec_command_with_env(&["python", script_path], env_vars).await
+    }
+
     /// Stops and removes the containers and network
     pub async fn cleanup(&self) -> anyhow::Result<()> {
         let _ = Command::new("docker").args(["rm", "-f", &self.runner_container_id]).output().await;

@@ -1,5 +1,6 @@
 use crate::agent::classifier::DefectType;
 use crate::agent::oracle::OracleFinding;
+use crate::contract::schema::BehaviorTestResult;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -41,6 +42,8 @@ pub struct ExplorationState {
     pub consecutive_no_defect: usize,
     #[serde(default)]
     pub oracle_findings: Vec<OracleFinding>,
+    #[serde(default)]
+    pub tested_behaviors: Vec<BehaviorTestResult>,
 }
 
 impl ExplorationState {
@@ -94,6 +97,10 @@ impl ExplorationState {
 
     pub fn oracle_violations(&self) -> Vec<&OracleFinding> {
         self.oracle_findings.iter().filter(|f| f.violated).collect()
+    }
+
+    pub fn oracle_violations_owned(&self) -> Vec<OracleFinding> {
+        self.oracle_findings.iter().filter(|f| f.violated).cloned().collect()
     }
 
     pub fn tested_param_names(&self) -> HashSet<String> {

@@ -10,6 +10,17 @@ pub use qdrant::QdrantPlugin;
 pub struct SafetyNet {
     pub name: String,
     pub script: String,
+    pub redundant_with_mutation: bool,
+}
+
+impl Default for SafetyNet {
+    fn default() -> Self {
+        SafetyNet {
+            name: String::new(),
+            script: String::new(),
+            redundant_with_mutation: false,
+        }
+    }
 }
 
 pub trait TargetPlugin: Send + Sync {

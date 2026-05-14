@@ -16,8 +16,8 @@ impl IndependentReviewer for QdrantIndependentReviewer {
     async fn run_probe(&self, sandbox: &Sandbox, port: u16) -> Result<ReviewResult> {
         let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), port);
         let probe_script = QDRANT_REVIEW_PROBE_TEMPLATE.replace("__DB_URL__", &db_url);
-        let output = sandbox.exec_command_with_env(
-            &["python", "-c", &probe_script],
+        let output = sandbox.exec_script(
+            &probe_script,
             &[("TESTVDB_DB_URL", &db_url)],
         ).await?;
         if !output.success {
@@ -39,6 +39,7 @@ impl IndependentReviewer for QdrantIndependentReviewer {
 const QDRANT_REVIEW_PROBE_TEMPLATE: &str = r#"
 import json
 import requests
+import time
 
 BASE_URL = "__DB_URL__"
 collection_name = "test_collection"
@@ -117,6 +118,91 @@ upsert_no_vector_resp = requests.put(
     json={"points": [{"id": 999}]}
 )
 
+# === Dimension mismatch probe ===
+dim_coll = "review_dim_test"
+requests.delete(f"{BASE_URL}/collections/{dim_coll}")
+requests.put(f"{BASE_URL}/collections/{dim_coll}", json={"vectors": {"size": 4, "distance": "Cosine"}})
+time.sleep(0.3)
+upsert_wrong_dim_wait_resp = requests.put(
+    f"{BASE_URL}/collections/{dim_coll}/points?wait=true",
+    json={"points": [{"id": 1, "vector": [0.1, 0.2, 0.3]}]}
+)
+upsert_wrong_dim_nowait_resp = requests.put(
+    f"{BASE_URL}/collections/{dim_coll}/points",
+    json={"points": [{"id": 2, "vector": [0.1, 0.2, 0.3]}]}
+)
+time.sleep(0.5)
+dim_count_resp = requests.get(f"{BASE_URL}/collections/{dim_coll}")
+dim_count_val = dim_count_resp.json().get("result", {}).get("points_count", -1)
+
+# === Batch upsert partial failure probe ===
+batch_coll = "review_batch_test"
+requests.delete(f"{BASE_URL}/collections/{batch_coll}")
+requests.put(f"{BASE_URL}/collections/{batch_coll}", json={"vectors": {"size": 4, "distance": "Cosine"}})
+time.sleep(0.3)
+batch_points = [
+    {"id": 1, "vector": [0.1, 0.2, 0.3, 0.4]},
+    {"id": 2, "vector": [0.5, 0.6]},
+    {"id": 3, "vector": [0.7, 0.8, 0.9, 1.0]}
+]
+batch_upsert_resp = requests.put(f"{BASE_URL}/collections/{batch_coll}/points", json={"points": batch_points})
+time.sleep(0.5)
+batch_count_resp = requests.get(f"{BASE_URL}/collections/{batch_coll}")
+batch_count_val = batch_count_resp.json().get("result", {}).get("points_count", -1)
+
+# === Behavioral probes ===
+import time
+
+# State consistency: upsert N points -> count
+state_coll = "review_state_test"
+requests.delete(f"{BASE_URL}/collections/{state_coll}")
+requests.put(f"{BASE_URL}/collections/{state_coll}", json={"vectors": {"size": 4, "distance": "Cosine"}})
+time.sleep(0.5)
+state_points = [{"id": i+1, "vector": [0.1*(i+1), 0.2*(i+1), 0.3*(i+1), 0.4*(i+1)]} for i in range(5)]
+state_upsert_resp = requests.put(f"{BASE_URL}/collections/{state_coll}/points", json={"points": state_points})
+time.sleep(1.0)
+for _attempt in range(5):
+    _info = requests.get(f"{BASE_URL}/collections/{state_coll}").json()
+    if _info.get("result", {}).get("points_count", 0) >= 5:
+        break
+    time.sleep(0.5)
+state_count_resp = requests.get(f"{BASE_URL}/collections/{state_coll}")
+state_count_val = state_count_resp.json().get("result", {}).get("points_count", -1)
+
+# State consistency: delete -> count
+state_delete_resp = requests.post(f"{BASE_URL}/collections/{state_coll}/points/delete", json={"points": [1, 2]})
+time.sleep(1.0)
+for _attempt in range(5):
+    _info = requests.get(f"{BASE_URL}/collections/{state_coll}").json()
+    if _info.get("result", {}).get("points_count", 0) <= 3:
+        break
+    time.sleep(0.5)
+state_count_after_del_resp = requests.get(f"{BASE_URL}/collections/{state_coll}")
+state_count_after_del_val = state_count_after_del_resp.json().get("result", {}).get("points_count", -1)
+
+# Semantic correctness: search score descending
+semantic_coll = "review_semantic_test"
+requests.delete(f"{BASE_URL}/collections/{semantic_coll}")
+requests.put(f"{BASE_URL}/collections/{semantic_coll}", json={"vectors": {"size": 4, "distance": "Cosine"}})
+time.sleep(0.5)
+semantic_points = [{"id": i+1, "vector": [0.1*(i+1), 0.2*(i+1), 0.3*(i+1), 0.4*(i+1)]} for i in range(10)]
+requests.put(f"{BASE_URL}/collections/{semantic_coll}/points", json={"points": semantic_points})
+time.sleep(1.0)
+semantic_search_resp = requests.post(f"{BASE_URL}/collections/{semantic_coll}/points/search", json={"vector": [0.5, 0.5, 0.5, 0.5], "limit": 10})
+semantic_scores = [h.get("score", -999) for h in semantic_search_resp.json().get("result", [])]
+semantic_scores_descending = semantic_scores == sorted(semantic_scores, reverse=True)
+
+# Semantic correctness: score_threshold filtering
+semantic_thresh_resp = requests.post(f"{BASE_URL}/collections/{semantic_coll}/points/search", json={"vector": [0.5, 0.5, 0.5, 0.5], "limit": 10, "score_threshold": 0.5})
+semantic_thresh_scores = [h.get("score", -999) for h in semantic_thresh_resp.json().get("result", [])]
+semantic_thresh_ok = all(s >= 0.5 for s in semantic_thresh_scores)
+
+# Cleanup
+requests.delete(f"{BASE_URL}/collections/{state_coll}")
+requests.delete(f"{BASE_URL}/collections/{semantic_coll}")
+requests.delete(f"{BASE_URL}/collections/{dim_coll}")
+requests.delete(f"{BASE_URL}/collections/{batch_coll}")
+
 print(json.dumps({
     "create_status": create_resp.status_code,
     "create_body": create_resp.text,
@@ -147,7 +233,18 @@ print(json.dumps({
     "upsert_missing_id_status": upsert_missing_id_resp.status_code,
     "upsert_missing_id_body": upsert_missing_id_resp.text,
     "upsert_no_vector_status": upsert_no_vector_resp.status_code,
-    "upsert_no_vector_body": upsert_no_vector_resp.text
+    "upsert_no_vector_body": upsert_no_vector_resp.text,
+    "state_upsert_status": state_upsert_resp.status_code,
+    "state_count": state_count_val,
+    "state_delete_status": state_delete_resp.status_code,
+    "state_count_after_del": state_count_after_del_val,
+    "semantic_scores_descending": semantic_scores_descending,
+    "semantic_thresh_ok": semantic_thresh_ok,
+    "upsert_wrong_dim_wait_status": upsert_wrong_dim_wait_resp.status_code,
+    "upsert_wrong_dim_nowait_status": upsert_wrong_dim_nowait_resp.status_code,
+    "dim_count": dim_count_val,
+    "batch_upsert_status": batch_upsert_resp.status_code,
+    "batch_count": batch_count_val
 }))
 "#;
 
@@ -157,6 +254,7 @@ fn is_expected_validation_failure(status: u16) -> bool {
 
 fn summarize_qdrant_independent_probe_from_value(probe_value: &Value) -> Option<(DefectType, Vec<String>)> {
     let mut illegal_success_issues: Vec<String> = Vec::new();
+    let mut state_logic_issues: Vec<String> = Vec::new();
     let mut poor_diagnostics_issues: Vec<String> = Vec::new();
 
     let g = |key: &str| -> u16 {
@@ -164,6 +262,12 @@ fn summarize_qdrant_independent_probe_from_value(probe_value: &Value) -> Option<
     };
     let b = |key: &str| -> String {
         probe_value.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    };
+    let bool_val = |key: &str| -> bool {
+        probe_value.get(key).and_then(|v| v.as_bool()).unwrap_or(true)
+    };
+    let int_val = |key: &str| -> i64 {
+        probe_value.get(key).and_then(|v| v.as_i64()).unwrap_or(-1)
     };
 
     let vector_status = g("vector_status");
@@ -216,9 +320,51 @@ fn summarize_qdrant_independent_probe_from_value(probe_value: &Value) -> Option<
     if g("upsert_no_vector_status") == 200 {
         illegal_success_issues.push("upsert with missing vector succeeded despite documented constraint".to_string());
     }
+    if g("upsert_wrong_dim_wait_status") == 400 && g("upsert_wrong_dim_nowait_status") == 200 {
+        let dim_count = int_val("dim_count");
+        if dim_count == 0 {
+            poor_diagnostics_issues.push("upsert with wrong dimension: wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data".to_string());
+        }
+    }
+    if g("upsert_wrong_dim_wait_status") == 200 && g("upsert_wrong_dim_nowait_status") == 200 {
+        illegal_success_issues.push("upsert with wrong dimension vector: both wait=true and wait=false accepted invalid dimension".to_string());
+    }
+    if g("batch_upsert_status") == 200 {
+        let batch_count = int_val("batch_count");
+        if batch_count == 3 {
+            state_logic_issues.push("batch upsert with one invalid vector fully accepted (count=3, expected 0 or 2)".to_string());
+        }
+    }
 
     if !illegal_success_issues.is_empty() {
-        return Some((DefectType::IllegalSuccess, illegal_success_issues));
+        let mut all_issues = illegal_success_issues;
+        all_issues.append(&mut poor_diagnostics_issues);
+        return Some((DefectType::IllegalSuccess, all_issues));
+    }
+
+    let state_upsert_status = g("state_upsert_status");
+    let state_count = int_val("state_count");
+    let state_count_after_del = int_val("state_count_after_del");
+
+    if state_upsert_status == 200 {
+        if state_count >= 0 && state_count != 5 {
+            state_logic_issues.push(format!("upsert 5 points but count={}", state_count));
+        }
+        if state_count_after_del >= 0 && state_count_after_del != 3 {
+            state_logic_issues.push(format!("delete 2 of 5 points but count={}", state_count_after_del));
+        }
+    }
+
+    // Semantic correctness checks
+    if !bool_val("semantic_scores_descending") {
+        state_logic_issues.push("search results scores not in descending order".to_string());
+    }
+    if !bool_val("semantic_thresh_ok") {
+        state_logic_issues.push("score_threshold filtering returned scores below threshold".to_string());
+    }
+
+    if !state_logic_issues.is_empty() {
+        return Some((DefectType::StateLogicViolation, state_logic_issues));
     }
 
     let vector_body = b("vector_body").to_lowercase();
@@ -290,8 +436,9 @@ fn summarize_qdrant_independent_probe_from_value(probe_value: &Value) -> Option<
     None
 }
 
-/// Legacy struct for test compatibility.
-#[derive(Debug, serde::Deserialize, serde::Serialize, Default)]
+fn default_true() -> bool { true }
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct IndependentProbeResult {
     pub create_status: u16,
     pub create_body: String,
@@ -341,16 +488,67 @@ pub struct IndependentProbeResult {
     pub upsert_no_vector_status: u16,
     #[serde(default)]
     pub upsert_no_vector_body: String,
+    #[serde(default)]
+    pub state_upsert_status: u16,
+    #[serde(default)]
+    pub state_count: i64,
+    #[serde(default)]
+    pub state_delete_status: u16,
+    #[serde(default)]
+    pub state_count_after_del: i64,
+    #[serde(default = "default_true")]
+    pub semantic_scores_descending: bool,
+    #[serde(default = "default_true")]
+    pub semantic_thresh_ok: bool,
 }
 
-/// Legacy wrapper for test compatibility — delegates to summarize_qdrant_independent_probe_from_value.
+impl Default for IndependentProbeResult {
+    fn default() -> Self {
+        Self {
+            create_status: 0,
+            create_body: String::new(),
+            upsert_status: 0,
+            upsert_body: String::new(),
+            vector_status: 0,
+            vector_body: String::new(),
+            limit_status: 0,
+            limit_body: String::new(),
+            offset_status: 0,
+            offset_body: String::new(),
+            hnsw_ef_status: 0,
+            hnsw_ef_body: String::new(),
+            score_threshold_high_status: 0,
+            score_threshold_high_body: String::new(),
+            score_threshold_neg_status: 0,
+            score_threshold_neg_body: String::new(),
+            cc_size0_status: 0,
+            cc_size0_body: String::new(),
+            cc_bad_metric_status: 0,
+            cc_bad_metric_body: String::new(),
+            cc_shard0_status: 0,
+            cc_shard0_body: String::new(),
+            search_no_collection_status: 0,
+            search_no_collection_body: String::new(),
+            upsert_empty_status: 0,
+            upsert_empty_body: String::new(),
+            upsert_missing_id_status: 0,
+            upsert_missing_id_body: String::new(),
+            upsert_no_vector_status: 0,
+            upsert_no_vector_body: String::new(),
+            state_upsert_status: 0,
+            state_count: 0,
+            state_delete_status: 0,
+            state_count_after_del: 0,
+            semantic_scores_descending: true,
+            semantic_thresh_ok: true,
+        }
+    }
+}
+
 pub fn summarize_qdrant_independent_probe(result: &IndependentProbeResult) -> Option<(DefectType, Vec<String>)> {
     let value = serde_json::to_value(result).ok()?;
     summarize_qdrant_independent_probe_from_value(&value)
 }
-
-
-
 
 pub fn build_qdrant_search_poor_diagnostics_mre(validated_issues: &[String]) -> String {
     let mut mre = String::from(r#"import requests, json

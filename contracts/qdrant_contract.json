@@ -50,6 +50,18 @@
     "[CREATE] shard_number must be >= 1 if specified",
     "[CREATE] shard_number=0 must be rejected",
     "[CREATE] missing required vectors config must be rejected",
-    "[CREATE] duplicate collection name must return a clear conflict error (not 200)"
+    "[CREATE] duplicate collection name must return a clear conflict error (not 200)",
+    "[BEHAVIOR:STATE] upsert N points → points_count must equal N",
+    "[BEHAVIOR:STATE] delete M of N points → points_count must equal N-M",
+    "[BEHAVIOR:STATE] upsert same point ID twice → points_count must NOT increase",
+    "[BEHAVIOR:SEMANTIC] search results must have scores in descending order",
+    "[BEHAVIOR:SEMANTIC] score_threshold must filter out results below threshold",
+    "[BEHAVIOR:SEMANTIC] limit=1 must return exactly 1 result",
+    "[BEHAVIOR:SEMANTIC] offset beyond total points must return empty results",
+    "[BEHAVIOR:SEMANTIC] scroll with limit must paginate through all points without duplicates",
+    "[BEHAVIOR:STATE] delete non-existent point IDs → points_count must NOT change",
+    "[BEHAVIOR:STATE] delete collection then recreate with same name → must succeed",
+    "[BEHAVIOR:SEMANTIC] exact=true search must return same results as approximate search",
+    "[BEHAVIOR:DIAGNOSTIC] when limit=0 is rejected, error message must mention 'limit'"
   ]
 }
