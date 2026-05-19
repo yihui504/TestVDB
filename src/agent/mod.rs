@@ -5,6 +5,8 @@ pub mod llm;
 pub mod oracle;
 pub mod orchestrator;
 pub mod probe;
+pub mod probe_milvus;
+pub mod probe_milvus_advanced;
 pub mod sandbox_runner;
 pub mod state;
 pub mod tools;

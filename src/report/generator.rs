@@ -235,6 +235,15 @@ impl BugReport {
             DefectType::PerformanceRegression => {
                 "An operation took significantly longer than the expected baseline, which suggests a performance regression in the server-side processing path.".to_string()
             }
+            DefectType::MetamorphicViolation => {
+                "A metamorphic relation that should hold between related operations was violated, indicating a semantic inconsistency in the server's behavior.".to_string()
+            }
+            DefectType::DifferentialMismatch => {
+                "The same operation produced different results through different API paths (e.g., REST vs SDK), indicating an inconsistency in the server's implementation.".to_string()
+            }
+            DefectType::SequenceViolation => {
+                "An API call sequence produced an unexpected state or result, indicating a state transition or ordering dependency that violates documented behavior.".to_string()
+            }
             DefectType::ScriptError | DefectType::Pass => {
                 "This report should not have been promoted for the observed classification.".to_string()
             }
@@ -263,6 +272,15 @@ impl BugReport {
             }
             DefectType::PerformanceRegression => {
                 "Profile the slow operation path to identify the bottleneck, then add a performance regression test with a timing assertion.".to_string()
+            }
+            DefectType::MetamorphicViolation => {
+                "Audit the metamorphic relation that was violated and add a regression test that asserts the relation holds for the affected operation pair.".to_string()
+            }
+            DefectType::DifferentialMismatch => {
+                "Ensure the REST and SDK paths use the same underlying implementation for the affected operation, then add a regression test that asserts both paths return consistent results.".to_string()
+            }
+            DefectType::SequenceViolation => {
+                "Audit the state transition logic for the affected API sequence and add a regression test that asserts the documented ordering constraints hold.".to_string()
             }
             DefectType::ScriptError | DefectType::Pass => {
                 "Do not promote this result to a formal defect report until the classification path is corrected.".to_string()

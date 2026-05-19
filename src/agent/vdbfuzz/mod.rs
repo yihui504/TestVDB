@@ -1,3 +1,9 @@
 pub mod boundary;
 pub mod coverage;
+pub mod diff_concurrent;
+pub mod metamorphic;
+pub mod mutation;
+pub mod resource_combo;
 pub mod sequence;
+pub mod sequence_gen;
+pub mod state_gen;

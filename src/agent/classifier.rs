@@ -71,6 +71,9 @@ pub enum DefectType {
     StateLogicViolation,
     DataCorruption,
     PerformanceRegression,
+    MetamorphicViolation,
+    DifferentialMismatch,
+    SequenceViolation,
     ScriptError,
     Pass,
 }
@@ -119,6 +122,15 @@ pub fn detect_defect_type(stdout: &str, stderr: &str) -> Option<DefectType> {
     if combined.contains("[defect: async_inconsistency]") {
         return Some(DefectType::PoorDiagnostics);
     }
+    if combined.contains("[defect: metamorphic_violation]") {
+        return Some(DefectType::MetamorphicViolation);
+    }
+    if combined.contains("[defect: differential_mismatch]") {
+        return Some(DefectType::DifferentialMismatch);
+    }
+    if combined.contains("[defect: sequence_violation]") {
+        return Some(DefectType::SequenceViolation);
+    }
     if lower_stderr.contains("assertionerror") {
         return Some(DefectType::StateLogicViolation);
     }
@@ -129,10 +141,24 @@ pub fn is_script_error(stdout: &str, stderr: &str) -> bool {
     let lower_stderr = stderr.to_lowercase();
     let lower_stdout = stdout.to_lowercase();
     lower_stderr.contains("syntaxerror")
+        || lower_stderr.contains("indentationerror")
         || lower_stderr.contains("importerror")
         || lower_stderr.contains("modulenotfounderror")
         || lower_stderr.contains("nameerror")
         || lower_stderr.contains("typeerror")
+        || lower_stderr.contains("jsondecodeerror")
+        || lower_stderr.contains("attributeerror")
+        || lower_stderr.contains("keyerror")
+        || lower_stderr.contains("valueerror")
+        || lower_stderr.contains("runtimeerror")
+        || lower_stderr.contains("oserror")
+        || lower_stderr.contains("ioerror")
+        || lower_stderr.contains("zerodivisionerror")
+        || lower_stderr.contains("overflowerror")
+        || lower_stderr.contains("indexerror")
+        || lower_stderr.contains("filenotfounderror")
+        || lower_stderr.contains("permissionerror")
+        || lower_stderr.contains("traceback (most recent call last)")
         || lower_stdout.contains("[test_infra]")
 }
 
@@ -181,6 +207,25 @@ pub fn analyze_execution_result(stdout: &str, stderr: &str) -> ClassificationRes
         };
     }
 
+    if combined_output.contains("[defect: permissive_parsing]") {
+        return ClassificationResult {
+            disposition: ClassificationDisposition::CoverageDetected,
+            defect_type: Some(DefectType::PoorDiagnostics),
+            reason: "Server accepted request with unknown/extra parameters (permissive parsing).".to_string(),
+            evidence_excerpt: combined_output.chars().take(300).collect(),
+            sub_type: Some("permissive_parsing".to_string()),
+        };
+    }
+    if combined_output.contains("[defect: idempotent_success]") {
+        return ClassificationResult {
+            disposition: ClassificationDisposition::CoverageDetected,
+            defect_type: Some(DefectType::PoorDiagnostics),
+            reason: "Server returned success for idempotent operation on nonexistent resource.".to_string(),
+            evidence_excerpt: combined_output.chars().take(300).collect(),
+            sub_type: Some("idempotent_success".to_string()),
+        };
+    }
+
     if let Some(defect_type) = detect_defect_type(stdout, stderr) {
         let sub_type = if defect_type == DefectType::StateLogicViolation && lower_stdout.contains("cross_step") {
             Some("cross_step".to_string())
@@ -212,10 +257,10 @@ pub fn analyze_execution_result(stdout: &str, stderr: &str) -> ClassificationRes
 
     if !stderr.trim().is_empty() {
         return ClassificationResult {
-            disposition: ClassificationDisposition::RetryableScriptError,
-            defect_type: Some(DefectType::ScriptError),
-            reason: "Unclassified stderr output treated as retryable script error.".to_string(),
-            evidence_excerpt: stderr.chars().take(300).collect(),
+            disposition: ClassificationDisposition::Pass,
+            defect_type: Some(DefectType::Pass),
+            reason: "Execution completed without defect markers. (Non-error stderr output present but no recognized defect or error pattern.)".to_string(),
+            evidence_excerpt: stdout.chars().take(300).collect(),
             sub_type: None,
         };
     }
@@ -295,5 +340,70 @@ mod tests {
     fn test_environment_addressing_error_does_not_become_poor_diagnostics() {
         let stdout = "[DEFECT: POOR_DIAGNOSTICS] Failed to create collection: {'error': \"encoding with 'idna' codec failed (UnicodeError: label too long)\"}";
         assert_eq!(analyze_execution_result(stdout, "").disposition, ClassificationDisposition::NonDefectInfraError);
+    }
+
+    #[test]
+    fn test_metamorphic_violation() {
+        assert_eq!(
+            detect_defect_type("some [DEFECT: METAMORPHIC_VIOLATION] text", ""),
+            Some(DefectType::MetamorphicViolation)
+        );
+        let result = analyze_execution_result("[DEFECT: METAMORPHIC_VIOLATION] nprobe subset failed", "");
+        assert_eq!(result.disposition, ClassificationDisposition::CandidateDefect);
+        assert_eq!(result.defect_type, Some(DefectType::MetamorphicViolation));
+    }
+
+    #[test]
+    fn test_differential_mismatch() {
+        assert_eq!(
+            detect_defect_type("some [DEFECT: DIFFERENTIAL_MISMATCH] text", ""),
+            Some(DefectType::DifferentialMismatch)
+        );
+        let result = analyze_execution_result("[DEFECT: DIFFERENTIAL_MISMATCH] REST vs SDK", "");
+        assert_eq!(result.disposition, ClassificationDisposition::CandidateDefect);
+        assert_eq!(result.defect_type, Some(DefectType::DifferentialMismatch));
+    }
+
+    #[test]
+    fn test_sequence_violation() {
+        assert_eq!(
+            detect_defect_type("some [DEFECT: SEQUENCE_VIOLATION] text", ""),
+            Some(DefectType::SequenceViolation)
+        );
+        let result = analyze_execution_result("[DEFECT: SEQUENCE_VIOLATION] delete-then-search", "");
+        assert_eq!(result.disposition, ClassificationDisposition::CandidateDefect);
+        assert_eq!(result.defect_type, Some(DefectType::SequenceViolation));
+    }
+
+    #[test]
+    fn test_new_defect_types_from_stderr() {
+        assert_eq!(
+            detect_defect_type("", "error: [DEFECT: METAMORPHIC_VIOLATION] detected"),
+            Some(DefectType::MetamorphicViolation)
+        );
+        assert_eq!(
+            detect_defect_type("", "[DEFECT: DIFFERENTIAL_MISMATCH] mismatch"),
+            Some(DefectType::DifferentialMismatch)
+        );
+        assert_eq!(
+            detect_defect_type("", "[DEFECT: SEQUENCE_VIOLATION] bad order"),
+            Some(DefectType::SequenceViolation)
+        );
+    }
+
+    #[test]
+    fn test_permissive_parsing_not_candidate_defect() {
+        let result = analyze_execution_result("[DEFECT: PERMISSIVE_PARSING] unknown_param accepted", "");
+        assert_eq!(result.disposition, ClassificationDisposition::CoverageDetected);
+        assert_eq!(result.defect_type, Some(DefectType::PoorDiagnostics));
+        assert_eq!(result.sub_type, Some("permissive_parsing".to_string()));
+    }
+
+    #[test]
+    fn test_idempotent_success_not_candidate_defect() {
+        let result = analyze_execution_result("[DEFECT: IDEMPOTENT_SUCCESS] drop nonexistent accepted", "");
+        assert_eq!(result.disposition, ClassificationDisposition::CoverageDetected);
+        assert_eq!(result.defect_type, Some(DefectType::PoorDiagnostics));
+        assert_eq!(result.sub_type, Some("idempotent_success".to_string()));
     }
 }

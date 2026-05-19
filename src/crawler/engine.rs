@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 /// Common interface for fetching HTML content from a URL
+#[allow(async_fn_in_trait)]
 pub trait Crawler: Send + Sync {
     async fn fetch_page(&self, url: &str) -> Result<String>;
 }

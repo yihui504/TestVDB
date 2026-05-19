@@ -3,9 +3,14 @@ use super::tools::{
     get_submit_contract_tool, crawl_docs
 };
 use super::llm::{DeepSeekClient, Message};
-use crate::contract::schema::StructuredContract;
+use crate::contract::schema::{
+    Determinism, RangeConstraint, StateConstraint,
+    StructuredContract, TypeConstraint,
+};
+use crate::contract::store::{Confidence, ConstraintSource, ContractStore};
 use crate::sandbox::manager::Sandbox;
 use anyhow::Result;
+use serde::Deserialize;
 use tracing::{info, warn};
 
 pub async fn knowledge_exploration_loop(
@@ -31,7 +36,8 @@ pub async fn knowledge_exploration_loop(
         Target Repo: {}\n\
         Repo is at /workspace.\n\n\
         TASK: Extract constraints for endpoint '{}' ({}). Docs: {}\n\n\
-        Constraints use prefixes:\n\
+        ## Constraint Categories\n\
+        Use these prefixes:\n\
         - [TYPE] for types: '[TYPE] limit must be integer'\n\
         - [RANGE] for ranges: '[RANGE] limit must be > 0'\n\
         - [STATE] for state: '[STATE:deterministic] collection must exist'\n\
@@ -39,6 +45,19 @@ pub async fn knowledge_exploration_loop(
         - [BEHAVIOR:SEMANTIC] for semantic correctness: '[BEHAVIOR:SEMANTIC] search results sorted by score descending'\n\
         - [BEHAVIOR:INTERFACE] for interface consistency: '[BEHAVIOR:INTERFACE] gRPC and REST return same results'\n\
         - [BEHAVIOR:DIAGNOSTIC] for diagnostic quality: '[BEHAVIOR:DIAGNOSTIC] error message mentions parameter name'\n\n\
+        ## Implicit Constraints (CRITICAL)\n\
+        Also extract IMPLICIT constraints that are NOT explicitly stated but can be inferred:\n\
+        - [IMPLICIT:REQUIRED] doc says optional but API behavior suggests required\n\
+        - [IMPLICIT:OPTIONAL] doc says required but API accepts request without it\n\
+        - [IMPLICIT:ACCEPTED] doc does not mention parameter but API accepts it\n\
+        - [IMPLICIT:REJECTED] doc does not mention constraint but API enforces it\n\
+        - [IMPLICIT:DEFAULT] parameter has undocumented default value\n\
+        - [IMPLICIT:COERCION] API silently converts type (e.g., string '123' -> int 123)\n\n\
+        ## Required/Enum Extraction\n\
+        For each endpoint, identify:\n\
+        - Which parameters are REQUIRED (must be present, not null)\n\
+        - Which parameters have ENUM values (fixed set of allowed values)\n\
+        - Which parameters have RANGE constraints (min/max values)\n\n\
         Crawl docs + grep 1-2 times, then call submit_contract. Submit by turn 3.",
         target_name, target_repo_url,
         endpoint_name, endpoint_api_path, endpoint_docs_url
@@ -64,54 +83,88 @@ pub async fn knowledge_exploration_loop(
                 "[REMINDER] Next turn you MUST summarize and submit. Gather your findings now."
             ));
         }
-        // Turn 3: force LLM summary
+        // Turn 3: force LLM to output structured JSON
         if turn == 3 {
             messages.push(Message::user(format!(
-                "[SYSTEM] DO NOT use any tools. Just reply in plain text.\n\
-                List ALL constraints you found for endpoint '{}' as assertions with prefixes:\n\
-                One per line, format: [TYPE] description or [RANGE] description or [STATE:deterministic] description\n\
-                Example:\n\
-                [TYPE] limit must be integer\n\
-                [RANGE] limit must be > 0\n\
-                [STATE:deterministic] collection must exist\n\n\
-                Just list them. No explanations.",
+                "[SYSTEM] DO NOT use any tools. Output a JSON object with this EXACT schema:\n\
+                {{\n\
+                  \"api_endpoint\": \"{}\",\n\
+                  \"doc_url\": \"\",\n\
+                  \"assertions\": [\"[TYPE] ...\", \"[RANGE] ...\", \"[STATE:deterministic] ...\", \"[IMPLICIT:REQUIRED] ...\"],\n\
+                  \"type_constraints\": [\n\
+                    {{\"param_name\": \"limit\", \"expected_type\": \"integer\"}}\n\
+                  ],\n\
+                  \"range_constraints\": [\n\
+                    {{\"param_name\": \"limit\", \"description\": \"limit range\", \"min\": 1, \"max\": 16384}}\n\
+                  ],\n\
+                  \"required_params\": [\"collectionName\", \"data\"],\n\
+                  \"enum_values\": {{\"metricType\": [\"COSINE\", \"L2\", \"IP\"]}},\n\
+                  \"state_constraints\": [],\n\
+                  \"state_invariants\": [],\n\
+                  \"behavioral_contracts\": []\n\
+                }}\n\n\
+                Rules:\n\
+                - assertions: ALL constraints with their prefix tags (including [IMPLICIT:*])\n\
+                - type_constraints: one per parameter with its expected JSON type\n\
+                - range_constraints: only for parameters with min/max bounds\n\
+                - required_params: parameters that MUST be present\n\
+                - enum_values: parameters with fixed allowed values\n\
+                - min/max in range_constraints must be numbers (not strings)\n\
+                - Output ONLY the JSON object, no markdown, no explanation.",
                 endpoint_name
             )));
         }
-        // Turn 4: parse LLM summary and auto-submit, or fallback
+        // Turn 4: parse LLM structured JSON and auto-submit, or fallback
         if turn == 4 {
-            // Try to parse tagged assertions from the last LLM text response
-            let mut parsed: Vec<String> = Vec::new();
-            for line in last_assistant_text.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("[TYPE]") || trimmed.starts_with("[RANGE]") || trimmed.starts_with("[STATE]") {
-                    parsed.push(trimmed.to_string());
+            let contract = parse_structured_contract_from_text(
+                &last_assistant_text,
+                endpoint_name,
+                endpoint_docs_url,
+            );
+
+            match contract {
+                Ok(c) => {
+                    info!("B1: Parsed structured contract from LLM JSON for '{}': {} assertions, {} type_constraints, {} range_constraints, {} required, {} enum",
+                        endpoint_name, c.assertions.len(), c.type_constraints.len(),
+                        c.range_constraints.len(),
+                        c.assertions.iter().filter(|a| a.starts_with("[IMPLICIT:REQUIRED]")).count(),
+                        c.assertions.iter().filter(|a| a.starts_with("[IMPLICIT:ENUM]")).count(),
+                    );
+                    return Ok(c);
                 }
-            }
-            if !parsed.is_empty() {
-                info!("B1: Parsed {} tagged assertions from LLM summary for '{}'.", parsed.len(), endpoint_name);
-                return Ok(StructuredContract {
-                    api_endpoint: endpoint_name.to_string(),
-                    doc_url: endpoint_docs_url.to_string(),
-                    assertions: parsed,
-                    type_constraints: vec![],
-                    range_constraints: vec![],
-                    state_constraints: vec![],
-                    state_invariants: vec![],
-                    behavioral_contracts: vec![],
-                });
-            } else {
-                warn!("B1: Could not parse tagged assertions from LLM summary for '{}'. Falling back.", endpoint_name);
-                return Ok(StructuredContract {
-                    api_endpoint: endpoint_name.to_string(),
-                    doc_url: endpoint_docs_url.to_string(),
-                    assertions: vec![format!("[{}] parameter validation for {}", endpoint_name, endpoint_api_path)],
-                    type_constraints: vec![],
-                    range_constraints: vec![],
-                    state_constraints: vec![],
-                    state_invariants: vec![],
-                    behavioral_contracts: vec![],
-                });
+                Err(e) => {
+                    warn!("B1: Failed to parse structured JSON for '{}': {}. Falling back to assertion-only.", endpoint_name, e);
+                    let mut parsed: Vec<String> = Vec::new();
+                    for line in last_assistant_text.lines() {
+                        let trimmed = line.trim();
+                        if trimmed.starts_with("[TYPE]") || trimmed.starts_with("[RANGE]") || trimmed.starts_with("[STATE]") || trimmed.starts_with("[IMPLICIT:") {
+                            parsed.push(trimmed.to_string());
+                        }
+                    }
+                    if !parsed.is_empty() {
+                        return Ok(StructuredContract {
+                            api_endpoint: endpoint_name.to_string(),
+                            doc_url: endpoint_docs_url.to_string(),
+                            assertions: parsed,
+                            type_constraints: vec![],
+                            range_constraints: vec![],
+                            state_constraints: vec![],
+                            state_invariants: vec![],
+                            behavioral_contracts: vec![],
+                        });
+                    } else {
+                        return Ok(StructuredContract {
+                            api_endpoint: endpoint_name.to_string(),
+                            doc_url: endpoint_docs_url.to_string(),
+                            assertions: vec![format!("[{}] parameter validation for {}", endpoint_name, endpoint_api_path)],
+                            type_constraints: vec![],
+                            range_constraints: vec![],
+                            state_constraints: vec![],
+                            state_invariants: vec![],
+                            behavioral_contracts: vec![],
+                        });
+                    }
+                }
             }
         }
         // Force at turn 4 is removed — B1 handles it
@@ -285,25 +338,45 @@ pub async fn knowledge_exploration_loop(
                         }
                     }
 
-                    // Simple validation
+                    let type_constraints = parse_type_constraints_from_json(&args);
+                    let range_constraints = parse_range_constraints_from_json(&args);
+                    let required_params = parse_string_array_from_json(&args, "required_params");
+                    let enum_values = parse_enum_values_from_json(&args);
+
+                    if !api_endpoint.is_empty() && !assertions.is_empty() {
+                        info!("Contract for {}: {} assertions, {} type_constraints, {} range_constraints, {} required, {} enum",
+                            endpoint_name, assertions.len(), type_constraints.len(),
+                            range_constraints.len(), required_params.len(), enum_values.len());
+                    }
+
                     if api_endpoint.is_empty() {
                         messages.push(Message::tool_response(&tc.id, "REJECTED: api_endpoint is empty."));
                         continue;
                     }
-                    if assertions.is_empty() {
-                        messages.push(Message::tool_response(&tc.id, "REJECTED: assertions array is empty. Add at least 1 constraint string."));
+                    if assertions.is_empty() && type_constraints.is_empty() && range_constraints.is_empty() {
+                        messages.push(Message::tool_response(&tc.id, "REJECTED: no constraints provided. Add at least 1 assertion, type_constraint, or range_constraint."));
                         continue;
                     }
 
                     info!("Contract for {}: {} assertions", endpoint_name, assertions.len());
+
+                    for param in &required_params {
+                        if !assertions.iter().any(|a| a.contains(param)) {
+                            assertions.push(format!("[IMPLICIT:REQUIRED] {} is required", param));
+                        }
+                    }
+                    for (param, values) in &enum_values {
+                        if !assertions.iter().any(|a| a.contains(param)) {
+                            assertions.push(format!("[IMPLICIT:ENUM] {} must be one of {:?}", param, values));
+                        }
+                    }
                     
-                    // Build contract — layered fields will be filled by post-processing in main.rs
                     let contract = StructuredContract {
                         api_endpoint,
                         doc_url,
                         assertions,
-                        type_constraints: vec![],
-                        range_constraints: vec![],
+                        type_constraints,
+                        range_constraints,
                         state_constraints: vec![],
                         state_invariants: vec![],
                         behavioral_contracts: vec![],
@@ -339,4 +412,391 @@ pub async fn knowledge_exploration_loop(
         state_invariants: vec![],
         behavioral_contracts: vec![],
     })
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct KaContractJson {
+    #[serde(default)]
+    api_endpoint: Option<String>,
+    #[serde(default)]
+    doc_url: Option<String>,
+    #[serde(default)]
+    assertions: Vec<String>,
+    #[serde(default)]
+    type_constraints: Vec<KaTypeConstraint>,
+    #[serde(default)]
+    range_constraints: Vec<KaRangeConstraint>,
+    #[serde(default)]
+    required_params: Vec<String>,
+    #[serde(default)]
+    enum_values: std::collections::HashMap<String, Vec<String>>,
+    #[serde(default)]
+    state_constraints: Vec<KaStateConstraint>,
+    #[serde(default)]
+    state_invariants: Vec<serde_json::Value>,
+    #[serde(default)]
+    behavioral_contracts: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KaTypeConstraint {
+    param_name: String,
+    expected_type: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct KaRangeConstraint {
+    param_name: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    min: Option<f64>,
+    #[serde(default)]
+    max: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KaStateConstraint {
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    determinism: Option<String>,
+}
+
+fn parse_structured_contract_from_text(
+    text: &str,
+    endpoint_name: &str,
+    endpoint_docs_url: &str,
+) -> Result<StructuredContract> {
+    let json_str = extract_json_from_text(text);
+    let parsed: KaContractJson = serde_json::from_str(&json_str)
+        .map_err(|e| anyhow::anyhow!("JSON parse error: {}", e))?;
+
+    let type_constraints: Vec<TypeConstraint> = parsed.type_constraints.iter().map(|tc| {
+        TypeConstraint {
+            param_name: tc.param_name.clone(),
+            expected_type: tc.expected_type.clone(),
+            violation_examples: vec![],
+        }
+    }).collect();
+
+    let range_constraints: Vec<RangeConstraint> = parsed.range_constraints.iter().map(|rc| {
+        RangeConstraint {
+            param_name: rc.param_name.clone(),
+            description: rc.description.clone(),
+            min: rc.min,
+            max: rc.max,
+            violation_examples: vec![],
+        }
+    }).collect();
+
+    let state_constraints: Vec<StateConstraint> = parsed.state_constraints.iter().map(|sc| {
+        let det = match sc.determinism.as_deref() {
+            Some("deterministic") => Determinism::Deterministic,
+            _ => Determinism::NonDeterministic,
+        };
+        StateConstraint {
+            description: sc.description.clone(),
+            determinism: det,
+            setup_script_template: None,
+        }
+    }).collect();
+
+    let mut assertions = parsed.assertions;
+    for param in &parsed.required_params {
+        if !assertions.iter().any(|a| a.contains(param)) {
+            assertions.push(format!("[IMPLICIT:REQUIRED] {} is required", param));
+        }
+    }
+    for (param, values) in &parsed.enum_values {
+        if !assertions.iter().any(|a| a.contains(param)) {
+            assertions.push(format!("[IMPLICIT:ENUM] {} must be one of {:?}", param, values));
+        }
+    }
+
+    Ok(StructuredContract {
+        api_endpoint: parsed.api_endpoint.unwrap_or_else(|| endpoint_name.to_string()),
+        doc_url: parsed.doc_url.unwrap_or_else(|| endpoint_docs_url.to_string()),
+        assertions,
+        type_constraints,
+        range_constraints,
+        state_constraints,
+        state_invariants: vec![],
+        behavioral_contracts: vec![],
+    })
+}
+
+fn extract_json_from_text(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.starts_with('{') {
+        return trimmed.to_string();
+    }
+    if let Some(start) = trimmed.find("```json") {
+        let after = &trimmed[start + 7..];
+        if let Some(end) = after.find("```") {
+            return after[..end].trim().to_string();
+        }
+    }
+    if let Some(start) = trimmed.find("```") {
+        let after = &trimmed[start + 3..];
+        if let Some(end) = after.find("```") {
+            return after[..end].trim().to_string();
+        }
+    }
+    if let Some(start) = trimmed.find('{') {
+        let mut depth = 0i32;
+        for (i, c) in trimmed[start..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return trimmed[start..start + i + 1].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+fn parse_type_constraints_from_json(args: &serde_json::Value) -> Vec<TypeConstraint> {
+    let mut result = Vec::new();
+    if let Some(arr) = args.get("type_constraints").and_then(|v| v.as_array()) {
+        for item in arr {
+            let param_name = item.get("param_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let expected_type = item.get("expected_type").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if !param_name.is_empty() && !expected_type.is_empty() {
+                result.push(TypeConstraint {
+                    param_name,
+                    expected_type,
+                    violation_examples: vec![],
+                });
+            }
+        }
+    }
+    result
+}
+
+fn parse_range_constraints_from_json(args: &serde_json::Value) -> Vec<RangeConstraint> {
+    let mut result = Vec::new();
+    if let Some(arr) = args.get("range_constraints").and_then(|v| v.as_array()) {
+        for item in arr {
+            let param_name = item.get("param_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let description = item.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let min = item.get("min").and_then(|v| v.as_f64());
+            let max = item.get("max").and_then(|v| v.as_f64());
+            if !param_name.is_empty() {
+                result.push(RangeConstraint {
+                    param_name,
+                    description,
+                    min,
+                    max,
+                    violation_examples: vec![],
+                });
+            }
+        }
+    }
+    result
+}
+
+fn parse_string_array_from_json(args: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut result = Vec::new();
+    if let Some(arr) = args.get(key).and_then(|v| v.as_array()) {
+        for item in arr {
+            if let Some(s) = item.as_str() {
+                result.push(s.to_string());
+            }
+        }
+    }
+    result
+}
+
+fn parse_enum_values_from_json(args: &serde_json::Value) -> std::collections::HashMap<String, Vec<String>> {
+    let mut result = std::collections::HashMap::new();
+    if let Some(obj) = args.get("enum_values").and_then(|v| v.as_object()) {
+        for (key, val) in obj {
+            if let Some(arr) = val.as_array() {
+                let values: Vec<String> = arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                if !values.is_empty() {
+                    result.insert(key.clone(), values);
+                }
+            }
+        }
+    }
+    result
+}
+
+pub fn knowledge_contracts_to_store(
+    contracts: &[StructuredContract],
+    target: &str,
+    version: &str,
+) -> ContractStore {
+    let mut store = ContractStore::from_structured_contracts(
+        target,
+        version,
+        contracts,
+        ConstraintSource::ExplicitDoc,
+        Confidence::Medium,
+    );
+
+    for contract in contracts {
+        let endpoint = &contract.api_endpoint;
+        let mut required: Vec<String> = Vec::new();
+        let mut enum_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+
+        for assertion in &contract.assertions {
+            if let Some(rest) = assertion.strip_prefix("[IMPLICIT:REQUIRED]") {
+                let param = rest.trim().split_whitespace().next().unwrap_or("").trim_end_matches(':');
+                if !param.is_empty() && !required.contains(&param.to_string()) {
+                    required.push(param.to_string());
+                }
+            }
+            if let Some(rest) = assertion.strip_prefix("[IMPLICIT:ENUM]") {
+                if let Some(bracket_start) = rest.find('[') {
+                    let before_bracket = rest[..bracket_start].trim();
+                    let param = before_bracket.split_whitespace().next().unwrap_or("").trim_end_matches(':');
+                    if !param.is_empty() {
+                        let after_bracket = &rest[bracket_start + 1..];
+                        let bracket_end = after_bracket.find(']').unwrap_or(after_bracket.len());
+                        let bracket_content = &after_bracket[..bracket_end];
+                        let values: Vec<String> = bracket_content
+                            .split(',')
+                            .map(|v| v.trim().trim_matches('"').trim_matches('\'').to_string())
+                            .filter(|v| !v.is_empty())
+                            .collect();
+                        if !values.is_empty() {
+                            enum_map.insert(param.to_string(), values);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !required.is_empty() {
+            store.set_required_params(endpoint, required);
+        }
+        for (param, values) in enum_map {
+            store.set_enum_values(&param, values);
+        }
+    }
+
+    store
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_structured_contract_from_text() {
+        let json = r#"{
+            "api_endpoint": "search",
+            "doc_url": "https://milvus.io/docs",
+            "assertions": ["[TYPE] limit must be integer", "[IMPLICIT:REQUIRED] collectionName is required"],
+            "type_constraints": [{"param_name": "limit", "expected_type": "integer"}],
+            "range_constraints": [{"param_name": "limit", "description": "limit range", "min": 1, "max": 16384}],
+            "required_params": ["collectionName", "data"],
+            "enum_values": {"metricType": ["COSINE", "L2", "IP"]},
+            "state_constraints": [],
+            "state_invariants": [],
+            "behavioral_contracts": []
+        }"#;
+
+        let contract = parse_structured_contract_from_text(json, "search", "https://milvus.io/docs").unwrap();
+
+        assert_eq!(contract.api_endpoint, "search");
+        assert_eq!(contract.type_constraints.len(), 1);
+        assert_eq!(contract.type_constraints[0].param_name, "limit");
+        assert_eq!(contract.range_constraints.len(), 1);
+        assert_eq!(contract.range_constraints[0].min, Some(1.0));
+        assert!(contract.assertions.iter().any(|a| a.starts_with("[IMPLICIT:REQUIRED]")));
+        assert!(contract.assertions.iter().any(|a| a.starts_with("[IMPLICIT:ENUM]")));
+    }
+
+    #[test]
+    fn test_parse_structured_contract_with_markdown_wrapper() {
+        let text = "```json\n{\"api_endpoint\": \"create\", \"assertions\": [\"[TYPE] dim must be integer\"], \"type_constraints\": [{\"param_name\": \"dim\", \"expected_type\": \"integer\"}], \"range_constraints\": [], \"required_params\": [], \"enum_values\": {}, \"state_constraints\": [], \"state_invariants\": [], \"behavioral_contracts\": []}\n```";
+        let contract = parse_structured_contract_from_text(text, "create", "").unwrap();
+        assert_eq!(contract.api_endpoint, "create");
+        assert_eq!(contract.type_constraints.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_json_from_text_pure_json() {
+        let json = r#"{"key": "value"}"#;
+        assert_eq!(extract_json_from_text(json), json);
+    }
+
+    #[test]
+    fn test_extract_json_from_text_markdown() {
+        let text = "```json\n{\"key\": \"value\"}\n```";
+        assert_eq!(extract_json_from_text(text), r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn test_knowledge_contracts_to_store() {
+        let contract = StructuredContract {
+            api_endpoint: "search".to_string(),
+            doc_url: "https://milvus.io".to_string(),
+            assertions: vec![
+                "[TYPE] limit must be integer".to_string(),
+                "[RANGE] limit must be > 0".to_string(),
+                "[IMPLICIT:REQUIRED] collectionName is required".to_string(),
+                "[IMPLICIT:ENUM] metricType must be one of [COSINE, L2, IP]".to_string(),
+            ],
+            type_constraints: vec![TypeConstraint {
+                param_name: "limit".to_string(),
+                expected_type: "integer".to_string(),
+                violation_examples: vec![],
+            }],
+            range_constraints: vec![RangeConstraint {
+                param_name: "limit".to_string(),
+                description: "limit range".to_string(),
+                min: Some(1.0),
+                max: Some(16384.0),
+                violation_examples: vec![],
+            }],
+            state_constraints: vec![],
+            state_invariants: vec![],
+            behavioral_contracts: vec![],
+        };
+
+        let store = knowledge_contracts_to_store(&[contract], "milvus", "2.4");
+
+        assert_eq!(store.target, "milvus");
+        assert_eq!(store.type_constraints.len(), 1);
+        assert_eq!(store.range_constraints.len(), 1);
+        assert!(store.required_params.contains_key("search"));
+        assert!(store.required_params["search"].contains(&"collectionName".to_string()));
+        assert!(store.enum_values.contains_key("metricType"));
+        assert!(store.enum_values["metricType"].contains(&"COSINE".to_string()));
+    }
+
+    #[test]
+    fn test_knowledge_contracts_to_store_source_and_confidence() {
+        let contract = StructuredContract {
+            api_endpoint: "search".to_string(),
+            doc_url: "".to_string(),
+            assertions: vec![],
+            type_constraints: vec![TypeConstraint {
+                param_name: "limit".to_string(),
+                expected_type: "integer".to_string(),
+                violation_examples: vec![],
+            }],
+            range_constraints: vec![],
+            state_constraints: vec![],
+            state_invariants: vec![],
+            behavioral_contracts: vec![],
+        };
+
+        let store = knowledge_contracts_to_store(&[contract], "milvus", "2.4");
+
+        assert_eq!(store.type_constraints[0].source, ConstraintSource::ExplicitDoc);
+        assert_eq!(store.type_constraints[0].confidence, Confidence::Medium);
+    }
 }

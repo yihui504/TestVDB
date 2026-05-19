@@ -49,4 +49,64 @@ pub enum Commands {
         #[arg(long, default_value_t = false)]
         multi_defect: bool,
     },
+    /// Batch-run all safety net probes against a running DB instance
+    Batch {
+        /// Target vector database
+        #[arg(long)]
+        target: String,
+
+        /// Docker network name where the DB is running
+        #[arg(long)]
+        network: Option<String>,
+
+        /// DB hostname inside the Docker network (default: derived from target)
+        #[arg(long)]
+        db_host: Option<String>,
+
+        /// DB port inside the Docker network
+        #[arg(long, default_value_t = 19530)]
+        db_port: u16,
+
+        /// Only run non-redundant probes
+        #[arg(long, default_value_t = false)]
+        non_redundant_only: bool,
+    },
+    /// Contract-driven bug mining: extract contracts → generate prompts → LLM tests → find bugs
+    Mine {
+        /// Target vector database (e.g., milvus, qdrant)
+        #[arg(long)]
+        target: String,
+
+        /// Target version
+        #[arg(long)]
+        version: String,
+
+        /// Optional: Directory containing extracted JSON contracts
+        #[arg(long)]
+        contracts: Option<String>,
+
+        /// Optional: Git repo URL for Knowledge Agent
+        #[arg(long)]
+        repo_url: Option<String>,
+
+        /// Optional: Documentation URL for Knowledge Agent
+        #[arg(long)]
+        docs_url: Option<String>,
+
+        /// Continue exploration after finding the first defect
+        #[arg(long, default_value_t = false)]
+        multi_defect: bool,
+
+        /// Also run batch mode (hand-written probes) for shadow comparison
+        #[arg(long, default_value_t = false)]
+        shadow: bool,
+
+        /// Skip verification pipeline (only run deterministic + LLM, no per-defect sandbox verification)
+        #[arg(long, default_value_t = false)]
+        skip_verify: bool,
+
+        /// Max feedback loop rounds (default: 5)
+        #[arg(long, default_value_t = 5)]
+        max_rounds: usize,
+    },
 }

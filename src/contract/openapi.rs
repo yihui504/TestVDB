@@ -1,8 +1,11 @@
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::HashMap;
 
 use super::schema::{EndpointEntry, RangeConstraint, TypeConstraint};
+use super::store::{
+    AnnotatedRangeConstraint, AnnotatedTypeConstraint, Confidence, ConstraintSource, ContractStore,
+};
 
 #[derive(Debug, Deserialize)]
 struct OpenApiSpec {
@@ -25,22 +28,24 @@ struct OpenApiPathItem {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenApiOperation {
     #[serde(default)]
     summary: Option<String>,
     #[serde(default)]
     description: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "operationId")]
     operation_id: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
     #[serde(default)]
     parameters: Vec<OpenApiParameter>,
-    #[serde(default)]
+    #[serde(default, rename = "requestBody")]
     request_body: Option<OpenApiRequestBody>,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct OpenApiParameter {
     name: String,
     #[serde(default)]
@@ -62,6 +67,7 @@ struct OpenApiMediaType {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 struct OpenApiSchema {
     #[serde(rename = "type", default)]
     schema_type: Option<String>,
@@ -85,6 +91,10 @@ struct OpenApiSchema {
     description: Option<String>,
     #[serde(default)]
     required: Vec<String>,
+    #[serde(default)]
+    pattern: Option<String>,
+    #[serde(default)]
+    default: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -131,20 +141,6 @@ impl OpenApiParser {
         endpoints
     }
 
-    pub fn extract_type_constraints(&self, endpoint_name: &str) -> Vec<TypeConstraint> {
-        let mut constraints = Vec::new();
-        if let Some((_path, _item, op)) = self.find_operation(endpoint_name) {
-            if let Some(body) = &op.request_body {
-                for (_content_type, media) in &body.content {
-                    if let Some(schema) = &media.schema {
-                        self.extract_type_constraints_from_schema(schema, "", &mut constraints);
-                    }
-                }
-            }
-        }
-        constraints
-    }
-
     pub fn extract_all_type_constraints(&self) -> Vec<TypeConstraint> {
         let mut constraints = Vec::new();
         for (_path, item) in &self.spec.paths {
@@ -157,25 +153,6 @@ impl OpenApiParser {
                             }
                         }
                     }
-                }
-            }
-        }
-        constraints
-    }
-
-    pub fn extract_range_constraints(&self, endpoint_name: &str) -> Vec<RangeConstraint> {
-        let mut constraints = Vec::new();
-        if let Some((_path, _item, op)) = self.find_operation(endpoint_name) {
-            if let Some(body) = &op.request_body {
-                for (_content_type, media) in &body.content {
-                    if let Some(schema) = &media.schema {
-                        self.extract_range_constraints_from_schema(schema, "", &mut constraints);
-                    }
-                }
-            }
-            for param in &op.parameters {
-                if let Some(schema) = &param.schema {
-                    self.extract_range_constraints_from_schema(schema, &param.name, &mut constraints);
                 }
             }
         }
@@ -203,19 +180,6 @@ impl OpenApiParser {
             }
         }
         constraints
-    }
-
-    fn find_operation(&self, endpoint_name: &str) -> Option<(&String, &OpenApiPathItem, &OpenApiOperation)> {
-        for (path, item) in &self.spec.paths {
-            for op in [&item.post, &item.put, &item.delete, &item.get, &item.patch].iter() {
-                if let Some(op) = op {
-                    if op.operation_id.as_deref() == Some(endpoint_name) {
-                        return Some((path, item, op));
-                    }
-                }
-            }
-        }
-        None
     }
 
     fn extract_type_constraints_from_schema(
@@ -284,5 +248,447 @@ impl OpenApiParser {
             }
         }
         schema
+    }
+
+    pub fn extract_to_contract_store(&self, target: &str, version: &str) -> ContractStore {
+        let mut store = ContractStore::new(target, version);
+
+        for (path, item) in &self.spec.paths {
+            for (method, op) in [
+                ("POST", &item.post),
+                ("PUT", &item.put),
+                ("DELETE", &item.delete),
+                ("GET", &item.get),
+                ("PATCH", &item.patch),
+            ] {
+                if let Some(op) = op {
+                    let endpoint_name = op.operation_id.clone().unwrap_or_else(|| {
+                        format!("{}_{}", method.to_lowercase(), path.replace('/', "_").trim_matches('_'))
+                    });
+
+                    if let Some(body) = &op.request_body {
+                        for (_content_type, media) in &body.content {
+                            if let Some(schema) = &media.schema {
+                                self.extract_annotated_type_constraints(
+                                    schema, &endpoint_name, "", &mut store.type_constraints,
+                                );
+                                self.extract_annotated_range_constraints(
+                                    schema, &endpoint_name, "", &mut store.range_constraints,
+                                );
+                                self.extract_required_from_schema(
+                                    schema, &endpoint_name, &mut store.required_params,
+                                );
+                                self.extract_enum_from_schema(
+                                    schema, &endpoint_name, "", &mut store.enum_values,
+                                );
+                            }
+                        }
+                    }
+
+                    for param in &op.parameters {
+                        if let Some(schema) = &param.schema {
+                            let resolved = self.resolve_ref(schema);
+                            if resolved.minimum.is_some() || resolved.maximum.is_some() {
+                                store.range_constraints.push(AnnotatedRangeConstraint {
+                                    constraint: RangeConstraint {
+                                        param_name: param.name.clone(),
+                                        description: resolved.description.clone().unwrap_or_default(),
+                                        min: resolved.minimum,
+                                        max: resolved.maximum,
+                                        violation_examples: vec![],
+                                    },
+                                    endpoint: endpoint_name.clone(),
+                                    source: ConstraintSource::OpenapiDerived,
+                                    confidence: Confidence::High,
+                                });
+                            }
+                            if let Some(t) = &resolved.schema_type {
+                                store.type_constraints.push(AnnotatedTypeConstraint {
+                                    constraint: TypeConstraint {
+                                        param_name: param.name.clone(),
+                                        expected_type: t.clone(),
+                                        violation_examples: vec![],
+                                    },
+                                    endpoint: endpoint_name.clone(),
+                                    source: ConstraintSource::OpenapiDerived,
+                                    confidence: Confidence::High,
+                                });
+                            }
+                            if let Some(values) = &param.required {
+                                if *values {
+                                    store.required_params
+                                        .entry(endpoint_name.clone())
+                                        .or_default()
+                                        .push(param.name.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    store.endpoints.push(EndpointEntry {
+                        name: endpoint_name,
+                        api_path: format!("{} {}", method, path),
+                        docs_url: String::new(),
+                        category: op.tags.first().cloned().unwrap_or_else(|| "general".to_string()),
+                    });
+                }
+            }
+        }
+
+        store
+    }
+
+    fn extract_annotated_type_constraints(
+        &self,
+        schema: &OpenApiSchema,
+        endpoint: &str,
+        prefix: &str,
+        constraints: &mut Vec<AnnotatedTypeConstraint>,
+    ) {
+        let resolved = self.resolve_ref(schema);
+        for (name, prop) in &resolved.properties {
+            let full_name = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{}", prefix, name)
+            };
+            let prop_resolved = self.resolve_ref(prop);
+            if let Some(t) = &prop_resolved.schema_type {
+                constraints.push(AnnotatedTypeConstraint {
+                    constraint: TypeConstraint {
+                        param_name: full_name.clone(),
+                        expected_type: t.clone(),
+                        violation_examples: vec![],
+                    },
+                    endpoint: endpoint.to_string(),
+                    source: ConstraintSource::OpenapiDerived,
+                    confidence: Confidence::High,
+                });
+            }
+            if !prop_resolved.properties.is_empty() {
+                self.extract_annotated_type_constraints(prop, endpoint, &full_name, constraints);
+            }
+        }
+    }
+
+    fn extract_annotated_range_constraints(
+        &self,
+        schema: &OpenApiSchema,
+        endpoint: &str,
+        prefix: &str,
+        constraints: &mut Vec<AnnotatedRangeConstraint>,
+    ) {
+        let resolved = self.resolve_ref(schema);
+
+        if resolved.minimum.is_some() || resolved.maximum.is_some() {
+            if !prefix.is_empty() {
+                constraints.push(AnnotatedRangeConstraint {
+                    constraint: RangeConstraint {
+                        param_name: prefix.to_string(),
+                        description: resolved.description.clone().unwrap_or_default(),
+                        min: resolved.minimum,
+                        max: resolved.maximum,
+                        violation_examples: vec![],
+                    },
+                    endpoint: endpoint.to_string(),
+                    source: ConstraintSource::OpenapiDerived,
+                    confidence: Confidence::High,
+                });
+            }
+        }
+
+        for (name, prop) in &resolved.properties {
+            let full_name = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{}", prefix, name)
+            };
+            let prop_resolved = self.resolve_ref(prop);
+            self.extract_annotated_range_constraints(prop_resolved, endpoint, &full_name, constraints);
+        }
+    }
+
+    fn extract_required_from_schema(
+        &self,
+        schema: &OpenApiSchema,
+        endpoint: &str,
+        required_params: &mut HashMap<String, Vec<String>>,
+    ) {
+        let resolved = self.resolve_ref(schema);
+        if !resolved.required.is_empty() {
+            let entry = required_params.entry(endpoint.to_string()).or_default();
+            for name in &resolved.required {
+                if !entry.contains(name) {
+                    entry.push(name.clone());
+                }
+            }
+        }
+        for (_name, prop) in &resolved.properties {
+            let prop_resolved = self.resolve_ref(prop);
+            if !prop_resolved.required.is_empty() {
+                let entry = required_params.entry(endpoint.to_string()).or_default();
+                for req in &prop_resolved.required {
+                    if !entry.contains(req) {
+                        entry.push(req.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    fn extract_enum_from_schema(
+        &self,
+        schema: &OpenApiSchema,
+        endpoint: &str,
+        prefix: &str,
+        enum_values: &mut HashMap<String, Vec<String>>,
+    ) {
+        let resolved = self.resolve_ref(schema);
+        for (name, prop) in &resolved.properties {
+            let full_name = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{}.{}", prefix, name)
+            };
+            let prop_resolved = self.resolve_ref(prop);
+            if !prop_resolved.enum_values.is_empty() {
+                let values: Vec<String> = prop_resolved
+                    .enum_values
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                if !values.is_empty() {
+                    enum_values.insert(full_name.clone(), values);
+                }
+            }
+            if !prop_resolved.properties.is_empty() {
+                self.extract_enum_from_schema(prop, endpoint, &full_name, enum_values);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_openapi_json() -> String {
+        r#"{
+            "paths": {
+                "/v2/vectordb/collections/create": {
+                    "post": {
+                        "operationId": "create_collection",
+                        "tags": ["collections"],
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["collectionName", "schema"],
+                                        "properties": {
+                                            "collectionName": {
+                                                "type": "string",
+                                                "description": "Name of the collection"
+                                            },
+                                            "schema": {
+                                                "type": "object",
+                                                "required": ["fields"],
+                                                "properties": {
+                                                    "fields": {
+                                                        "type": "array"
+                                                    }
+                                                }
+                                            },
+                                            "dim": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 32768
+                                            },
+                                            "metricType": {
+                                                "type": "string",
+                                                "enum": ["COSINE", "L2", "IP", "HAMMING", "JACCARD"]
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "/v2/vectordb/entities/search": {
+                    "post": {
+                        "operationId": "search",
+                        "tags": ["entities"],
+                        "requestBody": {
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "type": "object",
+                                        "required": ["collectionName", "data"],
+                                        "properties": {
+                                            "collectionName": {
+                                                "type": "string"
+                                            },
+                                            "data": {
+                                                "type": "array"
+                                            },
+                                            "limit": {
+                                                "type": "integer",
+                                                "minimum": 1,
+                                                "maximum": 16384
+                                            },
+                                            "offset": {
+                                                "type": "integer",
+                                                "minimum": 0
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        "parameters": [
+                            {
+                                "name": "X-Request-Id",
+                                "required": false,
+                                "schema": {
+                                    "type": "string"
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        }"#.to_string()
+    }
+
+    #[test]
+    fn test_extract_to_contract_store() {
+        let parser = OpenApiParser::from_json(&sample_openapi_json()).unwrap();
+        let store = parser.extract_to_contract_store("milvus", "2.4");
+
+        assert_eq!(store.target, "milvus");
+        assert_eq!(store.version, "2.4");
+        assert!(store.endpoints.len() >= 2, "endpoints: {:?}", store.endpoints.len());
+
+        assert!(!store.type_constraints.is_empty(),
+            "type_constraints empty! endpoints: {:?}, required_params: {:?}, enum_values: {:?}",
+            store.endpoints.len(), store.required_params, store.enum_values);
+
+        assert!(store.type_constraints.iter().any(|tc| tc.constraint.param_name == "collectionName"),
+            "no collectionName in type_constraints: {:?}", store.type_constraints.iter().map(|tc| &tc.constraint.param_name).collect::<Vec<_>>());
+        assert!(store.type_constraints.iter().any(|tc| tc.constraint.param_name == "limit"));
+        assert!(store.type_constraints.iter().any(|tc| tc.constraint.param_name == "metricType"));
+
+        assert!(store.range_constraints.iter().any(|rc| rc.constraint.param_name == "dim" && rc.constraint.min == Some(1.0)));
+        assert!(store.range_constraints.iter().any(|rc| rc.constraint.param_name == "limit" && rc.constraint.max == Some(16384.0)));
+    }
+
+    #[test]
+    fn test_extract_required_params() {
+        let parser = OpenApiParser::from_json(&sample_openapi_json()).unwrap();
+        let store = parser.extract_to_contract_store("milvus", "2.4");
+
+        let create_required = store.required_params.get("create_collection");
+        assert!(create_required.is_some());
+        let create_required = create_required.unwrap();
+        assert!(create_required.contains(&"collectionName".to_string()));
+        assert!(create_required.contains(&"schema".to_string()));
+
+        let search_required = store.required_params.get("search");
+        assert!(search_required.is_some());
+        let search_required = search_required.unwrap();
+        assert!(search_required.contains(&"collectionName".to_string()));
+        assert!(search_required.contains(&"data".to_string()));
+    }
+
+    #[test]
+    fn test_extract_enum_values() {
+        let parser = OpenApiParser::from_json(&sample_openapi_json()).unwrap();
+        let store = parser.extract_to_contract_store("milvus", "2.4");
+
+        let metric_values = store.enum_values.get("metricType");
+        assert!(metric_values.is_some());
+        let metric_values = metric_values.unwrap();
+        assert!(metric_values.contains(&"COSINE".to_string()));
+        assert!(metric_values.contains(&"L2".to_string()));
+        assert!(metric_values.contains(&"IP".to_string()));
+    }
+
+    #[test]
+    fn test_annotated_constraints_have_source() {
+        let parser = OpenApiParser::from_json(&sample_openapi_json()).unwrap();
+        let store = parser.extract_to_contract_store("milvus", "2.4");
+
+        for tc in &store.type_constraints {
+            assert_eq!(tc.source, ConstraintSource::OpenapiDerived);
+            assert_eq!(tc.confidence, Confidence::High);
+            assert!(!tc.endpoint.is_empty());
+        }
+        for rc in &store.range_constraints {
+            assert_eq!(rc.source, ConstraintSource::OpenapiDerived);
+            assert_eq!(rc.confidence, Confidence::High);
+            assert!(!rc.endpoint.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_from_store_generates_boundary_tests() {
+        let parser = OpenApiParser::from_json(&sample_openapi_json()).unwrap();
+        let store = parser.extract_to_contract_store("milvus", "2.4");
+
+        use crate::agent::vdbfuzz::boundary::BoundaryValueGenerator;
+        use crate::target::TargetStyle;
+
+        let cases = BoundaryValueGenerator::from_store(&store, TargetStyle::Milvus);
+        assert!(!cases.is_empty());
+        assert!(cases.iter().any(|c| c.name.contains("limit")));
+        assert!(cases.iter().any(|c| c.name.contains("dim")));
+        assert!(cases.iter().any(|c| c.name.contains("missing_required")));
+        assert!(cases.iter().any(|c| c.name.contains("invalid_enum")));
+    }
+
+    #[test]
+    fn test_milvus_openapi_extraction_rate() {
+        let openapi_path = std::path::Path::new("contracts/milvus_openapi.json");
+        if !openapi_path.exists() {
+            eprintln!("SKIP: contracts/milvus_openapi.json not found (run from TestVDB root)");
+            return;
+        }
+
+        let spec_content = std::fs::read_to_string(openapi_path)
+            .expect("Failed to read milvus_openapi.json");
+        let parser = OpenApiParser::from_json(&spec_content)
+            .expect("Failed to parse Milvus OpenAPI JSON");
+        let store = parser.extract_to_contract_store("milvus", "2.4");
+
+        println!("{}", store.constraint_stats());
+
+        let violation_targets = store.query_violations();
+        println!("Violation targets: {}", violation_targets.len());
+
+        let critical_params = ["collectionName", "limit", "dim", "metricType", "data", "filter", "offset"];
+        let mut found = 0;
+        let total = critical_params.len();
+        for param in &critical_params {
+            let has_type = store.type_constraints.iter().any(|tc| tc.constraint.param_name == *param);
+            let has_range = store.range_constraints.iter().any(|rc| rc.constraint.param_name == *param);
+            let has_required = store.required_params.values().any(|params| params.iter().any(|p| p == *param));
+            let has_enum = store.enum_values.contains_key(*param);
+            if has_type || has_range || has_required || has_enum {
+                found += 1;
+            } else {
+                eprintln!("  MISSING: {} not found in any constraint", param);
+            }
+        }
+
+        let extraction_rate = found as f64 / total as f64;
+        println!("Critical param extraction rate: {}/{} = {:.0}%", found, total, extraction_rate * 100.0);
+
+        assert!(store.endpoints.len() >= 10,
+            "Expected at least 10 endpoints, got {}", store.endpoints.len());
+        assert!(store.type_constraints.len() >= 20,
+            "Expected at least 20 type constraints, got {}", store.type_constraints.len());
+        assert!(extraction_rate >= 0.85,
+            "Critical param extraction rate {:.0}% < 85%", extraction_rate * 100.0);
     }
 }

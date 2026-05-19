@@ -1,7 +1,7 @@
 use crate::agent::classifier::{analyze_execution_result, ClassificationDisposition};
 use crate::agent::state::{ExplorationState, TestResult};
 use crate::agent::tools::{execute_test_script, execute_test_in_sandbox};
-use crate::sandbox::manager::Sandbox;
+use crate::sandbox::manager::{Sandbox, SidecarSpec};
 use regex::Regex;
 use std::collections::HashSet;
 use tracing::info;
@@ -166,6 +166,9 @@ impl FAExecutor {
         db_image: &str,
         pip_packages: &[String],
         db_port: u16,
+        sidecars: &[SidecarSpec],
+        db_env: &[(String, String)],
+        db_command: &[String],
     ) -> anyhow::Result<ExecutionResult> {
         self.last_test_code = Some(code.to_string());
 
@@ -190,7 +193,7 @@ impl FAExecutor {
         }
 
         info!("Creating fresh sandbox (fresh_sandbox={})...", fresh_sandbox);
-        match execute_test_script(code, db_image, pip_packages, db_port).await {
+        match execute_test_script(code, db_image, pip_packages, db_port, sidecars, db_env, db_command).await {
             Ok((output, sandbox, db_url)) => {
                 self.active_sandbox = Some(sandbox);
                 self.active_db_url = Some(db_url.clone());

@@ -8,6 +8,7 @@ use crate::agent::vdbfuzz::coverage::{CoverageTracker, ApiEndpoint};
 use crate::agent::vdbfuzz::sequence::APISequenceExplorer;
 use crate::contract::schema::StructuredContract;
 use crate::report::generator;
+use crate::sandbox::manager::SidecarSpec;
 use crate::target::TargetPlugin;
 use tracing::{info, warn};
 
@@ -61,8 +62,13 @@ pub struct FAOrchestrator<'a> {
     db_image: String,
     pip_packages: Vec<String>,
     db_port: u16,
+    sidecars: Vec<SidecarSpec>,
+    db_env: Vec<(String, String)>,
+    db_command: Vec<String>,
     max_turns: usize,
     multi_defect: bool,
+    custom_system_prompt: Option<String>,
+    custom_initial_message: Option<String>,
 }
 
 pub struct CollectedDefect {
@@ -83,6 +89,9 @@ impl<'a> FAOrchestrator<'a> {
         let db_image = plugin.target_image(version);
         let pip_packages = plugin.pip_packages();
         let db_port = plugin.db_port();
+        let sidecars = plugin.db_sidecars();
+        let db_env = plugin.db_env();
+        let db_command = plugin.db_command();
         let contract: StructuredContract = serde_json::from_str(&contract_content)
             .unwrap_or(StructuredContract {
                 api_endpoint: String::new(),
@@ -102,11 +111,23 @@ impl<'a> FAOrchestrator<'a> {
             db_image,
             pip_packages,
             db_port,
+            sidecars,
+            db_env,
+            db_command,
             max_turns,
             multi_defect,
+            custom_system_prompt: None,
+            custom_initial_message: None,
         }
     }
 
+    pub fn with_custom_prompt(mut self, system_prompt: String, initial_message: String) -> Self {
+        self.custom_system_prompt = Some(system_prompt);
+        self.custom_initial_message = Some(initial_message);
+        self
+    }
+
+    #[allow(dead_code)]
     fn build_behavioral_section(&self) -> String {
         if self.contract.behavioral_contracts.is_empty() {
             return String::new();
@@ -154,7 +175,8 @@ impl<'a> FAOrchestrator<'a> {
         Vec<CollectedDefect>,
     )> {
         let tools = vec![get_execute_test_script_tool(), get_submit_mre_tool(), get_fuzz_boundary_values_tool(), get_fuzz_api_sequence_tool(), get_coverage_report_tool()];
-        let system_prompt = build_system_prompt(&self.contract_content);
+        let system_prompt = self.custom_system_prompt.clone()
+            .unwrap_or_else(|| build_system_prompt(&self.contract_content));
         let mut coverage_tracker = CoverageTracker::new();
 
         let mut param_names: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -176,7 +198,7 @@ impl<'a> FAOrchestrator<'a> {
 
         let mut fuzz_context = String::new();
 
-        let boundary_cases = BoundaryValueGenerator::from_contract(&self.contract);
+        let boundary_cases = BoundaryValueGenerator::from_contract(&self.contract, self.plugin.target_style());
         let high_value_cases: Vec<_> = boundary_cases.iter().filter(|case| case.expected_rejection).take(5).collect();
         if !high_value_cases.is_empty() {
             for case in &high_value_cases {
@@ -206,7 +228,9 @@ impl<'a> FAOrchestrator<'a> {
             }
         }
 
-        let initial_msg = if fuzz_context.is_empty() {
+        let initial_msg = if let Some(ref custom_msg) = self.custom_initial_message {
+            custom_msg.clone()
+        } else if fuzz_context.is_empty() {
             "Begin exploration. Write a script and use execute_test_script(fresh_sandbox=true) to test it.".to_string()
         } else {
             format!(
@@ -295,7 +319,7 @@ impl<'a> FAOrchestrator<'a> {
                 let mut first_in_batch = !executor.has_active_sandbox();
                 for net in &all_safety_nets[sn_next_idx..batch_end] {
                     let safety_result = executor
-                        .execute_test(&net.script, first_in_batch, &self.db_image, &self.pip_packages, self.db_port)
+                        .execute_test(&net.script, first_in_batch, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
                         .await?;
                     if let Some(s) = safety_result.sandbox {
                         executor.put_sandbox(s);
@@ -343,7 +367,7 @@ impl<'a> FAOrchestrator<'a> {
                 let mut batch2_defects = Vec::new();
                 for net in &all_safety_nets[sn_next_idx..batch_end] {
                     let safety_result = executor
-                        .execute_test(&net.script, first_in_batch, &self.db_image, &self.pip_packages, self.db_port)
+                        .execute_test(&net.script, first_in_batch, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
                         .await?;
                     if let Some(s) = safety_result.sandbox {
                         executor.put_sandbox(s);
@@ -455,7 +479,7 @@ impl<'a> FAOrchestrator<'a> {
                     };
 
                     let result = executor
-                        .execute_test(code, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port)
+                        .execute_test(code, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
                         .await?;
 
                     messages.push(Message::tool_response(&tc.id, &result.output));
@@ -571,7 +595,7 @@ impl<'a> FAOrchestrator<'a> {
 
                     info!("Agent submitted MRE. Running final validation...");
                     let result = executor
-                        .execute_test(&code, true, &self.db_image, &self.pip_packages, self.db_port)
+                        .execute_test(&code, true, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
                         .await?;
 
                     let classification = result.classification.clone();
@@ -589,7 +613,7 @@ impl<'a> FAOrchestrator<'a> {
                     for net in &all_safety_nets[sn_next_idx..] {
                         info!("Safety net probe: {} (fresh={})", net.name, first_probe);
                         let safety_result = executor
-                            .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port)
+                            .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
                             .await?;
                         if let Some(s) = safety_result.sandbox {
                             executor.put_sandbox(s);
@@ -671,7 +695,7 @@ impl<'a> FAOrchestrator<'a> {
                     handle_defect!(code, initial_run, classification, &tc.id, &mut messages);
                 }
                 "fuzz_boundary_values" => {
-                    let cases = BoundaryValueGenerator::from_contract(&self.contract);
+                    let cases = BoundaryValueGenerator::from_contract(&self.contract, self.plugin.target_style());
                     let args: serde_json::Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                     let focus_params: Vec<String> = args.get("focus_params")
@@ -758,7 +782,7 @@ impl<'a> FAOrchestrator<'a> {
         if let Some(code) = executor.last_test_code.clone() {
             warn!("Agentic exploration exceeded max turns. B2: submitting last test script as MRE.");
             let result = executor
-                .execute_test(&code, true, &self.db_image, &self.pip_packages, self.db_port)
+                .execute_test(&code, true, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
                 .await?;
             let initial_run = generator::RunEvidence {
                 phase: "initial".to_string(),
@@ -776,7 +800,7 @@ impl<'a> FAOrchestrator<'a> {
         for net in &all_safety_nets[sn_next_idx..] {
             info!("Safety net probe (fallback): {} (fresh={})", net.name, first_probe);
             let safety_result = executor
-                .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port)
+                .execute_test(&net.script, first_probe, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
                 .await?;
             if let Some(s) = safety_result.sandbox {
                 executor.put_sandbox(s);

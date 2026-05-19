@@ -1,0 +1,9 @@
+services:
+  qdrant:
+    container_name: qdrant-standalone
+    image: qdrant/qdrant:v1.13.4
+    volumes:
+      - ./volumes/qdrant:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"

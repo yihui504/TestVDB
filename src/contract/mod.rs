@@ -1,5 +1,8 @@
+pub mod analyzer;
 pub mod schema;
 pub mod openapi;
+pub mod store;
+pub mod prompt;
 
 use anyhow::Context;
 use schema::{StructuredContract, EndpointRegistry, BehavioralContract, TypeConstraint, RangeConstraint, StateConstraint, Determinism, BehaviorCategory};

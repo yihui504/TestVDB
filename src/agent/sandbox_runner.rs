@@ -1,5 +1,6 @@
 use crate::agent::classifier::{analyze_execution_result, ClassificationDisposition, normalize_observed_output};
 use crate::report::generator::{CandidateDefect, CandidateStatus, RunEvidence};
+use crate::sandbox::manager::SidecarSpec;
 
 pub async fn run_script_in_fresh_sandbox(
     db_image: &str,
@@ -7,13 +8,20 @@ pub async fn run_script_in_fresh_sandbox(
     db_port: u16,
     script_code: &str,
     phase: &str,
+    sidecars: &[SidecarSpec],
+    db_env: &[(String, String)],
+    db_command: &[String],
 ) -> anyhow::Result<RunEvidence> {
     use crate::sandbox::manager::Sandbox;
 
     let pip_refs: Vec<&str> = pip_packages.iter().map(|s| s.as_str()).collect();
-    let sandbox = Sandbox::create_network_and_containers(db_image, &pip_refs, db_port).await?;
+    let sandbox = Sandbox::create_network_and_containers(db_image, &pip_refs, db_port, sidecars, db_env, db_command).await?;
     let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), db_port);
-    let rebound_script = script_code.replace("{{TESTVDB_DB_URL}}", &db_url);
+    let rebound_script = script_code
+        .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
+        .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
+        .replace("{TESTVDB_DB_URL}", &db_url)
+        .replace("{{TESTVDB_DB_URL}}", &db_url);
     let output = sandbox.exec_script(&rebound_script, &[("TESTVDB_DB_URL", &db_url)]).await?;
     let normalized_stdout = normalize_observed_output(&output.stdout);
     let normalized_stderr = normalize_observed_output(&output.stderr);
@@ -34,6 +42,9 @@ pub async fn refresh_candidate_evidence_with_mre(
     db_image: &str,
     pip_packages: &[String],
     db_port: u16,
+    sidecars: &[SidecarSpec],
+    db_env: &[(String, String)],
+    db_command: &[String],
 ) -> anyhow::Result<Option<String>> {
     let phases = ["initial", "repro_1", "repro_2"];
     let mut refreshed_runs = Vec::new();
@@ -46,6 +57,9 @@ pub async fn refresh_candidate_evidence_with_mre(
             db_port,
             &candidate.mre_code,
             phase,
+            sidecars,
+            db_env,
+            db_command,
         )
         .await
         {
@@ -109,6 +123,9 @@ pub async fn run_additional_reproduction(
     db_image: &str,
     pip_packages: &[String],
     db_port: u16,
+    sidecars: &[SidecarSpec],
+    db_env: &[(String, String)],
+    db_command: &[String],
 ) -> anyhow::Result<Option<String>> {
     let run = match run_script_in_fresh_sandbox(
         db_image,
@@ -116,6 +133,9 @@ pub async fn run_additional_reproduction(
         db_port,
         &candidate.mre_code,
         "independent_review",
+        sidecars,
+        db_env,
+        db_command,
     )
     .await
     {

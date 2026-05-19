@@ -81,7 +81,7 @@ else: print(f'properly rejected {label}: {{r.status_code}}'); sys.exit(0)"#,
     )
 }
 
-pub fn search_params_probe(param: &str, value: &str, label: &str) -> String {
+pub fn search_params_probe(param: &str, value: &str, _label: &str) -> String {
     format!(
         r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
@@ -122,7 +122,7 @@ else: print(f'properly rejected {label}: {{r.status_code}}'); sys.exit(0)"#,
     )
 }
 
-pub fn upsert_probe(param: &str, value: &str, label: &str) -> String {
+pub fn upsert_probe(param: &str, value: &str, _label: &str) -> String {
     format!(
         r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
@@ -140,7 +140,7 @@ else: print(f'properly rejected string value for {param}: {{r.status_code}}'); s
     )
 }
 
-pub fn delete_probe(param: &str, value: &str, label: &str) -> String {
+pub fn delete_probe(param: &str, value: &str, _label: &str) -> String {
     format!(
         r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
@@ -265,7 +265,8 @@ c = 'oracle_nan_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":4,"distance":"Cosine"}})
 if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
 import time; time.sleep(0.5)
-r = requests.post(f'{BASE}/collections/{c}/points/search', json={"vector":[float('nan'),0.2,0.3,0.4],"limit":3})
+body = '{"vector":[NaN,0.2,0.3,0.4],"limit":3}'
+r = requests.post(f'{BASE}/collections/{c}/points/search', data=body, headers={'Content-Type':'application/json'})
 if r.status_code == 200: print('[DEFECT: ILLEGAL_SUCCESS] NaN vector accepted'); sys.exit(1)
 else: print(f'properly rejected NaN vector: {r.status_code}'); sys.exit(0)"#.to_string()
 }
@@ -328,7 +329,8 @@ c = 'oracle_upnan_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":4,"distance":"Cosine"}})
 if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
 time.sleep(0.5)
-r = requests.put(f'{BASE}/collections/{c}/points', json={"points":[{"id":1,"vector":[float('nan'),0.2,0.3,0.4]}]})
+body = '{"points":[{"id":1,"vector":[NaN,0.2,0.3,0.4]}]}'
+r = requests.put(f'{BASE}/collections/{c}/points', data=body, headers={'Content-Type':'application/json'})
 if r.status_code == 200: print('[DEFECT: ILLEGAL_SUCCESS] NaN vector accepted'); sys.exit(1)
 else: print(f'NaN vector properly rejected: {r.status_code}'); sys.exit(0)"#.to_string()
 }
@@ -340,7 +342,8 @@ c = 'oracle_upinf_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":4,"distance":"Cosine"}})
 if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
 time.sleep(0.5)
-r = requests.put(f'{BASE}/collections/{c}/points', json={"points":[{"id":1,"vector":[float('inf'),0.2,0.3,0.4]}]})
+body = '{"points":[{"id":1,"vector":[Infinity,0.2,0.3,0.4]}]}'
+r = requests.put(f'{BASE}/collections/{c}/points', data=body, headers={'Content-Type':'application/json'})
 if r.status_code == 200: print('[DEFECT: ILLEGAL_SUCCESS] Infinity vector accepted'); sys.exit(1)
 else: print(f'Infinity vector properly rejected: {r.status_code}'); sys.exit(0)"#.to_string()
 }

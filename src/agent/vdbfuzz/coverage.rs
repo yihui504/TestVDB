@@ -8,13 +8,6 @@ pub struct ApiEndpoint {
     pub params: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CoverageEntry {
-    pub endpoint: String,
-    pub param: String,
-    pub value: String,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct CoverageTracker {
     visited: HashSet<String>,

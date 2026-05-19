@@ -4,6 +4,7 @@ use serde_json::Value;
 use crate::agent::classifier::DefectType;
 use crate::sandbox::manager::Sandbox;
 
+pub mod milvus;
 pub mod qdrant;
 
 pub type ReviewResult = Value;

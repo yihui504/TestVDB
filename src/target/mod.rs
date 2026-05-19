@@ -1,11 +1,22 @@
 use crate::agent::oracle::InvariantCheck;
 use crate::contract::schema::StructuredContract;
 use crate::review::IndependentReviewer;
+use crate::sandbox::manager::SidecarSpec;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod milvus;
 pub mod qdrant;
 
+pub use milvus::MilvusPlugin;
 pub use qdrant::QdrantPlugin;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetStyle {
+    Qdrant,
+    Milvus,
+}
 
 pub struct SafetyNet {
     pub name: String,
@@ -31,6 +42,11 @@ pub trait TargetPlugin: Send + Sync {
     fn safety_nets(&self) -> Vec<SafetyNet>;
     fn create_reviewer(&self) -> Option<Box<dyn IndependentReviewer>>;
     fn derive_oracle_checks(&self, contract: &StructuredContract) -> Vec<InvariantCheck>;
+    fn target_style(&self) -> TargetStyle;
+    fn doc_citation_url(&self) -> String;
+    fn db_sidecars(&self) -> Vec<SidecarSpec> { Vec::new() }
+    fn db_env(&self) -> Vec<(String, String)> { Vec::new() }
+    fn db_command(&self) -> Vec<String> { Vec::new() }
 }
 
 pub struct TargetRegistry {
@@ -71,6 +87,11 @@ mod tests {
         fn safety_nets(&self) -> Vec<SafetyNet> { vec![] }
         fn create_reviewer(&self) -> Option<Box<dyn IndependentReviewer>> { None }
         fn derive_oracle_checks(&self, _contract: &StructuredContract) -> Vec<InvariantCheck> { vec![] }
+        fn target_style(&self) -> TargetStyle { TargetStyle::Qdrant }
+        fn doc_citation_url(&self) -> String { "https://docs.dummy.io/api".to_string() }
+        fn db_sidecars(&self) -> Vec<SidecarSpec> { Vec::new() }
+        fn db_env(&self) -> Vec<(String, String)> { Vec::new() }
+        fn db_command(&self) -> Vec<String> { Vec::new() }
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use crate::agent::classifier::{ClassificationDisposition, analyze_execution_result};
 use crate::agent::sandbox_runner::{run_script_in_fresh_sandbox, refresh_candidate_evidence_with_mre, run_additional_reproduction};
 use crate::report::generator::{BugReport, CandidateDefect, CandidateStatus};
+use crate::sandbox::manager::SidecarSpec;
 use crate::target::TargetPlugin;
 use crate::review::IndependentReviewer;
 use crate::sandbox::manager::Sandbox;
@@ -14,6 +15,9 @@ pub async fn verify_candidate_defect(
     db_port: u16,
     plugin: &dyn TargetPlugin,
     target: &str,
+    sidecars: &[SidecarSpec],
+    db_env: &[(String, String)],
+    db_command: &[String],
 ) -> anyhow::Result<VerificationOutcome> {
     let defect_type = candidate.defect_type.clone();
 
@@ -24,6 +28,9 @@ pub async fn verify_candidate_defect(
             db_port,
             script_code,
             phase,
+            sidecars,
+            db_env,
+            db_command,
         )
         .await?;
         let repro_classification = analyze_execution_result(&run.stdout, &run.stderr);
@@ -58,6 +65,9 @@ pub async fn verify_candidate_defect(
             db_image,
             &pip_refs,
             db_port,
+            sidecars,
+            db_env,
+            db_command,
         ).await?;
         let probe_result = match reviewer.run_probe(&review_sandbox, db_port).await {
             Ok(v) => v,
@@ -97,8 +107,7 @@ pub async fn verify_candidate_defect(
             candidate.surviving_assertions.join("; ")
         ));
         candidate.review_scope = Some(
-            "Fresh independent replay covered collection creation, seed insert, and the narrowed Qdrant search assertions outside the LLM-generated script."
-                .to_string(),
+            format!("Fresh independent replay covered collection creation, seed insert, and the narrowed {} search assertions outside the LLM-generated script.", candidate.target)
         );
         if candidate.defect_type == crate::agent::classifier::DefectType::PoorDiagnostics {
             candidate.mre_code =
@@ -108,6 +117,9 @@ pub async fn verify_candidate_defect(
                 db_image,
                 pip_packages,
                 db_port,
+                sidecars,
+                db_env,
+                db_command,
             )
             .await?
             {
@@ -127,6 +139,9 @@ pub async fn verify_candidate_defect(
             db_image,
             pip_packages,
             db_port,
+            sidecars,
+            db_env,
+            db_command,
         )
         .await?
         {

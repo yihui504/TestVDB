@@ -4,7 +4,7 @@ use tracing::info;
 use crate::crawler::engine::{Crawler, ChromiumCrawler, ReqwestCrawler};
 use crate::crawler::parser::clean_content;
 use crate::agent::llm::{Tool, Function};
-use crate::sandbox::manager::Sandbox;
+use crate::sandbox::manager::{Sandbox, SidecarSpec};
 
 pub enum ToolResult {
     Success(String),
@@ -16,10 +16,13 @@ pub async fn execute_test_script(
     db_image: &str,
     pip_packages: &[String],
     db_port: u16,
+    sidecars: &[SidecarSpec],
+    db_env: &[(String, String)],
+    db_command: &[String],
 ) -> Result<(String, Sandbox, String)> {
     info!("Agent invoked execute_test_script. Creating fresh sandbox...");
     let pip_refs: Vec<&str> = pip_packages.iter().map(|s| s.as_str()).collect();
-    let sandbox = Sandbox::create_network_and_containers(db_image, &pip_refs, db_port).await?;
+    let sandbox = Sandbox::create_network_and_containers(db_image, &pip_refs, db_port, sidecars, db_env, db_command).await?;
     let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), db_port);
     let script_code = code.replace("{{TESTVDB_DB_URL}}", &db_url);
     

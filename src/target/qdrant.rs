@@ -1,4 +1,4 @@
-use super::{SafetyNet, TargetPlugin};
+use super::{SafetyNet, TargetPlugin, TargetStyle};
 use crate::agent::oracle::{InvariantCheck, InvariantSource};
 use crate::agent::probe::{
     classify_endpoint_type, count_consistency_check, create_probe, delete_probe,
@@ -1006,6 +1006,14 @@ print(f'large limit OK: {len(results)} <= 3'); sys.exit(0)"#.to_string(),
 
         checks
     }
+
+    fn target_style(&self) -> TargetStyle {
+        TargetStyle::Qdrant
+    }
+
+    fn doc_citation_url(&self) -> String {
+        "https://qdrant.github.io/qdrant/redoc/index.html".to_string()
+    }
 }
 
 fn check_key(check: &InvariantCheck) -> String {
@@ -1023,7 +1031,7 @@ impl OracleCheckDeriver {
 
             if has_structured {
                 if let Some(min_val) = rc.min {
-                    let boundary = if min_val > 0.0 { min_val - 1.0 } else { 0.0 };
+                    let boundary = if min_val > 0.0 { min_val - 1.0 } else { -1.0 };
                     let label = format!("{}={}", rc.param_name, format_boundary(boundary));
                     let et = classify_endpoint_type(&rc.param_name, &contract.api_endpoint);
 

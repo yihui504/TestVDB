@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css@5/github-markdown.min.css">
+<style>
+body { background: #fff; }
+.markdown-body { max-width: 980px; margin: 0 auto; padding: 45px; }
+.markdown-body pre { background: #24292e; color: #e1e4e8; }
+.markdown-body table { border-collapse: collapse; }
+.markdown-body table th, .markdown-body table td { border: 1px solid #d0d7de; padding: 6px 13px; }
+</style>
+</head>
+<body>
+<article class="markdown-body">
+<h1>Bug: REST API v2 accepts empty string for <code>dbName</code> parameter</h1>
+<h2>Summary</h2>
+<p>The Milvus v2 REST API accepts empty strings (<code>""</code>) for the <code>dbName</code> parameter across multiple endpoints. The official documentation defines <code>dbName</code> as "The name of an <strong>existing</strong> database" — an empty string is not a valid database name, yet the API returns <code>code: 0</code> (success) with no validation error.</p>
+<p>This is the same category of bug as #49844 (filter null/missing accepted), which has been <code>triage/accepted</code> and assigned to a developer.</p>
+<blockquote>
+<p><strong>Note</strong>: The <code>filter=""</code> variant (on the query endpoint) has been <strong>fixed</strong> in v2.6.16 (returns <code>code: 100</code>). The <code>dbName=""</code> variant remains unfixed across all endpoints.</p>
+</blockquote>
+<h2>Steps to Reproduce</h2>
+<pre><code class="language-bash"># 1. Empty dbName on collections/list
+curl -s -X POST 'http://localhost:19530/v2/vectordb/collections/list' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer root:Milvus' \
+  -d '{"dbName": ""}'
+
+# 2. Empty dbName on collections/describe
+curl -s -X POST 'http://localhost:19530/v2/vectordb/collections/describe' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer root:Milvus' \
+  -d '{"collectionName": "&lt;any_collection&gt;", "dbName": ""}'
+
+# 3. Empty dbName on collections/drop
+curl -s -X POST 'http://localhost:19530/v2/vectordb/collections/drop' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer root:Milvus' \
+  -d '{"collectionName": "&lt;any_collection&gt;", "dbName": ""}'
+</code></pre>
+<p>All three return <code>{"code": 0, ...}</code> — success with no validation error.</p>
+<h2>Expected Behavior</h2>
+<p>Return a non-zero code with an error message indicating that <code>dbName</code> must be a valid database name, consistent with how <code>filter=""</code> is now rejected (code=100) and <code>limit=0</code> is rejected (code=65535):</p>
+<pre><code class="language-json">{"code": 65535, "message": "invalid parameter: dbName must be a valid database name, got empty string"}
+</code></pre>
+<h2>Actual Behavior</h2>
+<p>HTTP 200 with <code>code: 0</code> and results returned as if the empty string was a valid database name (silently defaults to the default database):</p>
+<pre><code class="language-json">{"code": 0, "data": ["..."]}
+</code></pre>
+<h2>Impact</h2>
+<ul>
+<li><strong>Ambiguous database targeting</strong>: Empty <code>dbName</code> silently defaults to the default database, which may not be the user's intent. A typo like <code>dbName: ""</code> (from a variable that was never set) silently operates on the wrong database.</li>
+<li><strong>Documentation violation</strong>: The official <a href="https://milvus.io/api-reference/restful/v2.4.x/v2/Collection%20(v2)/List.md">List Collections</a> documentation defines <code>dbName</code> as "The name of an existing database." An empty string is not an existing database name.</li>
+<li><strong>Inconsistency with filter validation</strong>: <code>filter=""</code> is now correctly rejected (code=100 in v2.6.16), but <code>dbName=""</code> is still accepted. Both are empty string values for parameters that should require non-empty values.</li>
+<li><strong>No error feedback</strong>: Users receive no indication that their input is invalid.</li>
+</ul>
+<h2>Environment</h2>
+<ul>
+<li>Milvus version: v2.6.16</li>
+<li>API: REST v2</li>
+<li>Deployment: Docker (standalone)</li>
+</ul>
+<h2>Verification</h2>
+<table>
+<thead>
+<tr><th>Variant</th><th>v2.4.4</th><th>v2.6.16</th><th>Status</th></tr>
+</thead>
+<tbody>
+<tr><td><code>dbName=""</code> on collections/list</td><td>DEFECT (code=0)</td><td>DEFECT (code=0)</td><td>Still present</td></tr>
+<tr><td><code>dbName=""</code> on collections/describe</td><td>DEFECT (code=0)</td><td>DEFECT (code=0)</td><td>Still present</td></tr>
+<tr><td><code>filter=""</code> on entities/query</td><td>DEFECT (code=0)</td><td>FIXED (code=100)</td><td>Fixed in v2.6.16</td></tr>
+</tbody>
+</table>
+<h2>Suggested Fix</h2>
+<p>Add server-side validation to reject empty strings for <code>dbName</code> parameter, consistent with the fix applied to <code>filter=""</code>. Return a non-zero code with a clear error message indicating the parameter must be a non-empty string that matches an existing database name.</p>
+<h2>Official Issue Tracking</h2>
+<h3>dbName="" variant</h3>
+<ul>
+<li><strong>Official Issue</strong>: None (not yet reported)</li>
+<li><strong>Related Issue</strong>: <a href="https://github.com/milvus-io/milvus/issues/49844">#49844</a> (filter null/missing — same category of empty/null string parameter validation)</li>
+<li><strong>Documentation Comparison</strong>: Official <a href="https://milvus.io/api-reference/restful/v2.4.x/v2/Collection%20(v2)/List.md">List Collections</a> defines <code>dbName</code> as <code>string</code> (optional), described as "The name of an existing database." An empty string <code>""</code> is not a valid database name, so accepting it violates the documented constraint. The same <code>dbName</code> parameter appears in <a href="https://milvus.io/api-reference/restful/v2.4.x/v2/Collection%20(v2)/Create.md">Create Collection</a>, <a href="https://milvus.io/api-reference/restful/v2.4.x/v2/Collection%20(v2)/Describe.md">Describe Collection</a>, and other endpoints — all with the same definition.</li>
+<li><strong>Developer Attitude</strong>: Not yet reported. #49844 has been <code>triage/accepted</code> and assigned to MrPresent-Han (milestone 3.0), demonstrating that the development team is actively accepting REST API v2 parameter validation fixes. <code>dbName=""</code> is the same category of issue (empty string accepted where a meaningful value is required), so the <strong>estimated acceptance rate is high (70-80%)</strong>.</li>
+</ul>
+<h3>filter="" variant</h3>
+<ul>
+<li><strong>Official Issue</strong>: <a href="https://github.com/milvus-io/milvus/issues/49844">#49844</a> — <strong>open</strong>, <code>kind/bug</code> + <code>triage/accepted</code>, assigned to MrPresent-Han, milestone 3.0</li>
+<li><strong>Status</strong>: v2.6.16 has fixed <code>filter=""</code> (returns code=100), but <code>filter=null</code> and missing <code>filter</code> still return all data</li>
+<li><strong>Documentation Comparison</strong>: Official <a href="https://milvus.io/api-reference/restful/v2.4.x/v2/Vector%20(v2)/Query.md">Query</a> explicitly marks <code>filter (string, required)</code></li>
+</ul>
+<h2>Related</h2>
+<ul>
+<li><a href="https://github.com/milvus-io/milvus/issues/49844">milvus-io/milvus#49844</a> - REST API v2 query accepts null/missing filter (open, triage/accepted)</li>
+<li><a href="https://github.com/milvus-io/milvus/issues/49823">milvus-io/milvus#49823</a> - REST API v2 accepts nprobe=0 (open, triage/accepted)</li>
+</ul>
+</article>
+</body>
+</html>

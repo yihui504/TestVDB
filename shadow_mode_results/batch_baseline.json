@@ -1,0 +1,105 @@
+{
+  "defects": [
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] nprobe=0 accepted",
+      "name": "search_nprobe_zero"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] nprobe=-1 accepted",
+      "name": "search_nprobe_negative"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] duplicate collection name accepted (code=0)",
+      "name": "duplicate_collection"
+    },
+    {
+      "line": "[DEFECT: IDEMPOTENT_SUCCESS] drop nonexistent index accepted",
+      "name": "drop_nonexistent_index"
+    },
+    {
+      "line": "[DEFECT: IDEMPOTENT_SUCCESS] drop nonexistent partition accepted",
+      "name": "drop_nonexistent_partition"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] negative TTL accepted",
+      "name": "alter_invalid_ttl"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] empty id array accepted",
+      "name": "get_empty_ids"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] nonexistent entity IDs accepted",
+      "name": "get_nonexistent_ids"
+    },
+    {
+      "line": "[DEFECT: IDEMPOTENT_SUCCESS] drop nonexistent database accepted",
+      "name": "drop_nonexistent_database"
+    },
+    {
+      "line": "[DEFECT: IDEMPOTENT_SUCCESS] drop nonexistent collection accepted",
+      "name": "drop_nonexistent_collection"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] empty dbName for list accepted",
+      "name": "coll_list_empty_db"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] has nonexistent collection accepted",
+      "name": "coll_has_nonexistent"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] has nonexistent partition accepted",
+      "name": "part_has_nonexistent"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] empty collectionName for alias list accepted",
+      "name": "alias_list_empty_name"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] invalid param for db list accepted",
+      "name": "db_list_invalid_param"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] oversized_dimension accepted",
+      "name": "create_mutation_oversized_dimension"
+    },
+    {
+      "line": "[DEFECT: PERMISSIVE_PARSING] unknown_param accepted",
+      "name": "create_mutation_unknown_param"
+    },
+    {
+      "line": "[DEFECT: PERMISSIVE_PARSING] extra_fields accepted",
+      "name": "create_mutation_extra_fields"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] oversized_data accepted",
+      "name": "insert_mutation_oversized_data"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] boundary_float_data accepted",
+      "name": "insert_mutation_boundary_float_data"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] null_injection_filter accepted",
+      "name": "query_mutation_null_injection_filter"
+    },
+    {
+      "line": "[DEFECT: SEQUENCE_VIOLATION] duplicate id insert count: expected 1 got -1",
+      "name": "sequence_6"
+    },
+    {
+      "line": "[DEFECT: SEQUENCE_VIOLATION] recreate dim: expected 8 got None",
+      "name": "state_create_drop_create_dim"
+    },
+    {
+      "line": "[DEFECT: ILLEGAL_SUCCESS] 32768-dim collection created (may cause OOM)",
+      "name": "resource_large_dimension"
+    }
+  ],
+  "errors": 0,
+  "passed": 163,
+  "target": "milvus",
+  "timestamp": "2026-05-19T03:29:15.648408800+00:00",
+  "total": 205
+}

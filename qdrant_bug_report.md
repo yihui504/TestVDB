@@ -1,7 +1,7 @@
-# Verified IllegalSuccess: qdrant 1.18.0
+# Verified IllegalSuccess: qdrant v1.13.4
 
 - **Target**: qdrant
-- **Version**: 1.18.0
+- **Version**: v1.13.4
 - **Defect Type**: IllegalSuccess
 
 ## Documentation Evidence
@@ -47,24 +47,20 @@
 ```
 import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-c = 'safety_wrongdim_' + uuid.uuid4().hex[:8]
+c = 'safety_clear_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":4,"distance":"Cosine"}})
 if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
 time.sleep(0.5)
-r_wait = requests.put(f'{BASE}/collections/{c}/points?wait=true', json={"points":[{"id":1,"vector":[0.1,0.2,0.3]}]})
-r_nowait = requests.put(f'{BASE}/collections/{c}/points', json={"points":[{"id":2,"vector":[0.1,0.2,0.3]}]})
+points = [{"id": i+1, "vector": [0.1*i, 0.2*i, 0.3*i, 0.4*i]} for i in range(5)]
+r = requests.put(f'{BASE}/collections/{c}/points', json={"points": points})
+if r.status_code != 200: print(f'upsert failed: {r.status_code}'); sys.exit(0)
+time.sleep(0.5)
+r = requests.post(f'{BASE}/collections/{c}/points/clear', json={})
 time.sleep(0.5)
 info = requests.get(f'{BASE}/collections/{c}').json()
 count = info.get('result',{}).get('points_count',-1)
-if r_wait.status_code == 400 and r_nowait.status_code == 200 and count == 0:
-    print(f'[DEFECT: POOR_DIAGNOSTICS] wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data (count={count})')
-    sys.exit(1)
-elif r_wait.status_code == 200 and r_nowait.status_code == 200:
-    print(f'[DEFECT: ILLEGAL_SUCCESS] both wait=true and wait=false accepted wrong dimension')
-    sys.exit(1)
-else:
-    print(f'wrong dimension properly handled: wait={r_wait.status_code} nowait={r_nowait.status_code} count={count}')
-    sys.exit(0)
+if count != 0: print(f'[DEFECT: STATE_LOGIC_VIOLATION] after clear, count={count}, expected 0'); sys.exit(1)
+print(f'clear points correct: count=0'); sys.exit(0)
 ```
 
 ## Rerun Instructions
@@ -77,8 +73,8 @@ Replace `{{TESTVDB_DB_URL}}` with a live target URL that matches the documented 
 
 ## Runtime Evidence
 ```
-Initial DB URL: http://testvdb-db-8ec7fdcce3ab41df90e56681ddb8eb5b:6333
-Initial Evidence Excerpt: [defect: poor_diagnostics] wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data (count=0)
+Initial DB URL: http://testvdb-db-a1d5ddcd231544e3bc1b8dde09f6332d:6333
+Initial Evidence Excerpt: [defect: state_logic_violation] after clear, count=5, expected 0
 
 
 Initial STDOUT:
@@ -89,22 +85,22 @@ Initial STDERR:
 
 Reproductions:
 repro_1
-DB URL: http://testvdb-db-f7fb05020fdf49b0b9e6d886a282439e:6333
+DB URL: http://testvdb-db-add77564f3084657a074feaea63bc3a6:6333
 Reason: Observed explicit defect marker.
-Evidence Excerpt: [defect: poor_diagnostics] wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data (count=0)
+Evidence Excerpt: [defect: state_logic_violation] after clear, count=5, expected 0
 
 STDOUT:
-[DEFECT: POOR_DIAGNOSTICS] wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data (count=0)
+[DEFECT: STATE_LOGIC_VIOLATION] after clear, count=5, expected 0
 STDERR:
 
 
 repro_2
-DB URL: http://testvdb-db-3e28419913ae4f02ac7b01a4e4dffc2d:6333
+DB URL: http://testvdb-db-7eb6e8f3aa034019bee87ca464876662:6333
 Reason: Observed explicit defect marker.
-Evidence Excerpt: [defect: poor_diagnostics] wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data (count=0)
+Evidence Excerpt: [defect: state_logic_violation] after clear, count=5, expected 0
 
 STDOUT:
-[DEFECT: POOR_DIAGNOSTICS] wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data (count=0)
+[DEFECT: STATE_LOGIC_VIOLATION] after clear, count=5, expected 0
 STDERR:
 
 
@@ -112,7 +108,7 @@ STDERR:
 
 ## Independent Review
 - **Summary**: Independent developer-side replay confirmed the surviving issue subset: hnsw_ef=0 request succeeded despite documented positive hnsw_ef constraint; score_threshold=2.0 request succeeded despite documented 0.0-1.0 range constraint; score_threshold=-0.5 request succeeded despite documented 0.0-1.0 range constraint; upsert with wrong dimension: wait=true correctly rejects (400) but wait=false returns 200+acknowledged while silently discarding data.
-- **Scope**: Fresh independent replay covered collection creation, seed insert, and the narrowed Qdrant search assertions outside the LLM-generated script.
+- **Scope**: Fresh independent replay covered collection creation, seed insert, and the narrowed qdrant search assertions outside the LLM-generated script.
 
 ## Submission-Grade Review
 - **Verdict**: SubmissionGrade

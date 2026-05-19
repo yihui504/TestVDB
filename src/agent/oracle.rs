@@ -93,8 +93,8 @@ impl Oracle {
 
             let script = check
                 .script
-                .replace("{TESTVDB_DB_URL}", db_url)
-                .replace("{{TESTVDB_DB_URL}}", db_url);
+                .replace("{{TESTVDB_DB_URL}}", db_url)
+                .replace("{TESTVDB_DB_URL}", db_url);
             let script_b64 = base64::engine::general_purpose::STANDARD.encode(&script);
             let script_path = format!("/tmp/oracle_{}.py", check.name);
             let decode_script = format!(
@@ -126,7 +126,8 @@ impl Oracle {
                         debug!("Oracle check '{}' stderr: {}", check.name, &stderr[..stderr.len().min(500)]);
                     }
 
-                    let finding = Self::classify_check_result(check, &stdout, &stderr);
+                    let exit_code = if output.success { 0 } else { 1 };
+                    let finding = Self::classify_check_result(check, &stdout, &stderr, exit_code);
                     if finding.violated {
                         warn!(
                             "Oracle FOUND violation: {} — {}",
@@ -170,6 +171,7 @@ impl Oracle {
         check: &InvariantCheck,
         stdout: &str,
         stderr: &str,
+        exit_code: i32,
     ) -> OracleFinding {
         if is_script_error(stdout, stderr) || stderr.to_lowercase().contains("traceback") {
             return OracleFinding {
@@ -197,6 +199,15 @@ impl Oracle {
 
         if !stderr.is_empty() && stdout.is_empty() {
             warn!("Oracle check '{}' had stderr but no stdout: {}", check.name, &stderr[..stderr.len().min(300)]);
+        }
+
+        if exit_code != 0 {
+            return OracleFinding {
+                invariant_name: check.name.clone(),
+                violated: true,
+                evidence: format!("Non-zero exit code ({}) without explicit defect marker. stdout: {} stderr: {}", exit_code, stdout.chars().take(200).collect::<String>(), stderr.chars().take(200).collect::<String>()),
+                defect_type: Some(DefectType::PoorDiagnostics),
+            };
         }
 
         OracleFinding {
@@ -280,6 +291,7 @@ mod tests {
             &check,
             "[DEFECT: ILLEGAL_SUCCESS] limit=0 accepted",
             "",
+            0,
         );
         assert!(finding.violated);
         assert_eq!(finding.defect_type, Some(DefectType::IllegalSuccess));
@@ -297,6 +309,7 @@ mod tests {
             &check,
             "",
             "AssertionError: count mismatch: expected 5, got 0",
+            0,
         );
         assert!(finding.violated);
         assert_eq!(finding.defect_type, Some(DefectType::StateLogicViolation));
@@ -310,7 +323,7 @@ mod tests {
             script: String::new(),
             source: InvariantSource::DerivedFromRange,
         };
-        let finding = Oracle::classify_check_result(&check, "properly rejected limit=0: 400", "");
+        let finding = Oracle::classify_check_result(&check, "properly rejected limit=0: 400", "", 0);
         assert!(!finding.violated);
         assert_eq!(finding.defect_type, None);
     }
@@ -327,8 +340,22 @@ mod tests {
             &check,
             "",
             "SyntaxError: invalid syntax",
+            1,
         );
         assert!(!finding.violated);
+    }
+
+    #[test]
+    fn test_nonzero_exit_without_defect_marker() {
+        let check = InvariantCheck {
+            name: "exit_code_check".to_string(),
+            check_type: CheckType::ValueRange,
+            script: String::new(),
+            source: InvariantSource::DerivedFromRange,
+        };
+        let finding = Oracle::classify_check_result(&check, "some output without defect", "some error", 1);
+        assert!(finding.violated);
+        assert_eq!(finding.defect_type, Some(DefectType::PoorDiagnostics));
     }
 
     #[test]
