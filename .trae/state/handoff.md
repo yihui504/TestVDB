@@ -1,8 +1,8 @@
 # TestVDB 交接信息
 
-## 最后更新: 2026-05-19
+## 最后更新: 2026-05-20
 
-## 项目状态: 缺陷类型多样性增强 — 计划已精炼，待执行
+## 项目状态: 缺陷类型多样性增强 — Step 1-5 代码完成，Step 2 验证运行中
 
 ---
 
@@ -24,50 +24,50 @@
 
 | Step | 内容 | 状态 |
 |------|------|------|
-| 1 | Endpoint 修复（方案A：openapi.rs 1行改动） | ⬜ 未开始 |
-| 2 | 验证确定性生成器产出（≥4种DefectKind，每种≥1个缺陷） | ⬜ 未开始 |
-| 3 | LLM 批次1 — P1(消息截断) + L1(prompt重写) + L2(工具集替换) | ⬜ 未开始 |
-| 4 | LLM 批次2 — L3(信息孤岛) + L4(死代码启用) | ⬜ 未开始 |
-| 5 | LLM 批次3 — P2(收敛判断) + P3(沙箱复用) | ⬜ 未开始 |
+| 1 | Endpoint 修复（方案A：openapi.rs path.clone()） | ✅ 已完成 |
+| 2 | 验证确定性生成器产出（≥4种DefectKind） | 🔄 运行中（mine --skip-verify --max-rounds 2） |
+| 3 | LLM 批次1 — P1(消息截断) + L1(prompt重写) + L2(工具集替换) | ✅ 已完成 |
+| 4 | LLM 批次2 — L3(信息孤岛) + L4(死代码启用) | ✅ 已完成 |
+| 5 | LLM 批次3 — P2(收敛判断) + P3(沙箱复用) | ✅ 已完成 |
 | 6 | LLM 端到端验证（增量缺陷 + 覆盖多样性） | ⬜ 未开始 |
 
-### 根因诊断
+### 代码修改记录
 
-**确定性生成器零产出根因：**
-OpenAPI 解析器将 `/v2/vectordb/entities/search` 转为 `post__v2_vectordb_entities_search`（下划线分隔），导致 `atc.endpoint.contains("entities/search")` 永远为 false。已确认 Milvus OpenAPI spec 无 operationId，fallback 分支一定会走。
+**Step 1: openapi.rs**
+- 第 128 行：`format!("{}_{}", method.to_lowercase(), path.replace('/', "_").trim_matches('_'))` → `path.clone()`
+- 第 265 行：同上
+- 效果：OpenAPI fallback 的 endpoint_name 从 `post__v2_vectordb_entities_search` 变为 `/v2/vectordb/entities/search`
 
-**LLM 编排器零增量根因（4层叠加）：**
-- L1: Prompt 重复 — system prompt 引导边界值探索，与确定性生成器同质
-- L2: 工具重复 — `fuzz_boundary_values`/`fuzz_api_sequence` 与确定性生成器功能重叠
-- L3: 信息孤岛 — 确定性生成器发现的缺陷不注入 LLM 上下文
-- L4: 死代码 — `build_behavioral_section` 标记 `#[allow(dead_code)]`，最有价值的测试模板未注入
+**Step 3: LLM 编排器批次1**
+- tools.rs：移除 `get_fuzz_boundary_values_tool()` 和 `get_fuzz_api_sequence_tool()`，新增 `get_execute_api_sequence_tool()` 和 `get_compare_endpoints_tool()`
+- orchestrator.rs：
+  - P1: 消息历史截断（max 20 messages）
+  - L1: system prompt 从"边界值探索"重写为"状态序列探索+跨端点语义推理"
+  - L2: 工具集替换（5个工具：execute_test_script, submit_mre, execute_api_sequence, compare_endpoints, get_coverage_report）
+  - 移除 fuzz_context 构建代码（boundary_cases + sequence_cases）
+  - 移除 BoundaryValueGenerator 和 APISequenceExplorer 导入
 
-**LLM 编排器架构问题（3项）：**
-- P1: 消息历史无限增长 — 12轮 token 可能超过 DeepSeek 上下文窗口
-- P2: 无收敛判断 — 固定跑12轮，即使 LLM 已陷入重复也不提前终止
-- P3: 沙箱强制复用 — LLM 请求 fresh_sandbox=true 也被忽略
+**Step 4: LLM 编排器批次2**
+- orchestrator.rs：
+  - L3: 新增 `batch_defects_summary` 字段 + `with_batch_defects()` builder + 初始消息注入
+  - L4: 移除 `#[allow(dead_code)]`，`build_behavioral_section()` 在 `run()` 中调用并注入初始消息
 
-### 验收标准
+**Step 5: LLM 编排器批次3**
+- orchestrator.rs：
+  - P2: 收敛判断（连续3轮无新assertion + turn>=5 → 提前终止）
+  - P3: 沙箱复用修复（尊重 LLM 的 fresh_sandbox=true 请求，销毁旧沙箱创建新的）
 
-**确定性生成器：**
-- Mine 产出 ≥ 4 种 DefectKind，每种至少 1 个缺陷
-- 验证：`mine --target milvus --skip-verify`，v2.6.16
+### 验证运行状态
 
-**LLM 编排器：**
-- 验收 A：1 次运行中 LLM 产出 ≥ 1 个确定性生成器未发现的缺陷
-- 验收 B：LLM 探索的 API 序列覆盖 ≥ 5 种不同状态转换模式
+- 第一次运行（旧代码）：96 缺陷（95 ILLEGAL_SUCCESS + 1 DIFFERENTIAL_MISMATCH）
+- 第二次运行（新代码）：进行中，Round 2 mutation 98/3103
+- 预计完成时间：约 1-2 小时
 
-### 新工具集设计
+### 关键风险
 
-| 工具 | 类型 | 描述 |
-|------|------|------|
-| `execute_test_script` | 保留 | LLM 自由探索，直接写 Python 脚本 |
-| `execute_api_sequence` | 新增 | 中层数据流：LLM 描述每步端点+参数+期望状态，工具自动生成脚本 |
-| `compare_endpoints` | 新增 | 语义等价对比：LLM 描述"两个操作语义上应该等价"，工具分别执行并对比 |
-| `submit_mre` | 保留 | 提交最小可复现示例 |
-| `get_coverage_report` | 保留 | 返回 API 覆盖率报告 |
-| ~~`fuzz_boundary_values`~~ | 移除 | 与确定性 boundary 生成器重复 |
-| ~~`fuzz_api_sequence`~~ | 移除 | 与确定性 sequence 生成器重复 |
+1. **方案 A 可能不够**：如果 mine 运行结果仍然是 2 种缺陷类型，需要升级为方案 B（ContractStore 规范化）
+2. **state/metamorphic/sequence 生成器可能产出 0 缺陷**：即使 endpoint 匹配修复了，Milvus 可能在这些维度上确实没有 bug
+3. **LLM 编排器优化尚未验证**：Step 6 需要完整运行 LLM 编排器来验证增量产出
 
 ---
 
@@ -77,48 +77,25 @@ OpenAPI 解析器将 `/v2/vectordb/entities/search` 转为 `post__v2_vectordb_en
 
 | Step | 内容 | 状态 |
 |------|------|------|
-| 0 | 前置条件验证（DefectKind+merge去重+3轮闭环Go/No-Go） | ✅ 已完成 |
-| 1 | 精简版架构重构 — 提取 infra.rs | ✅ 已完成 |
-| 2 | Qdrant 生成器完整实现（消除所有placeholder） | ✅ 已完成 |
-| 3 | Milvus 侧代码质量修复（range/enum约束+SDK参数化+extract_context） | ✅ 已完成 |
-| 4 | 闭环反馈修复（日志+收敛验证+fallback策略） | ✅ 已完成 |
-| 5 | 完整架构重构（contract_loader/feedback_loop/verification_runner） | ✅ 已完成 |
-| 6 | 端到端验证（Milvus+Qdrant+Shadow Mode） | ✅ 已完成 |
-| 7 | Full Cutover | ⬜ 不建议执行（Shadow Mode结论：两种模式互补） |
+| 0 | 前置条件验证 | ✅ |
+| 1 | 精简版架构重构 | ✅ |
+| 2 | Qdrant 生成器完整实现 | ✅ |
+| 3 | Milvus 侧代码质量修复 | ✅ |
+| 4 | 闭环反馈修复 | ✅ |
+| 5 | 完整架构重构 | ✅ |
+| 6 | 端到端验证 | ✅ |
+| 7 | Full Cutover | ⬜ 不建议执行 |
 
 ---
 
 ## 关键技术决策
 
-1. **Milvus错误码判断**：HTTP状态码始终200，必须检查`r.json().get('code')`
-2. **Milvus认证头**：所有请求带`Authorization: Bearer root:Milvus`
-3. **PERMISSIVE_PARSING**：Go JSON默认忽略未知字段，不是缺陷
-4. **IDEMPOTENT_SUCCESS**：drop不存在资源返回成功是幂等行为，不是缺陷
-5. **Endpoint规范化**：方案A先行（openapi.rs 1行改动），不够再升级方案B
-6. **LLM编排器角色**：从"边界值探索"改为"状态序列探索+跨端点语义推理"
-7. **新工具粒度**：execute_api_sequence 用中层数据流，compare_endpoints 用语义等价对比
-8. **分批验证策略**：P1→L1+L2→L3+L4→P2+P3，每批验证后再继续
-
----
-
-## Shadow Mode 验证结果（2026-05-19）
-
-### 结果摘要
-
-| 指标 | Batch（手写探针） | Mine（确定性生成器+LLM） |
-|------|------------------|------------------------|
-| 唯一缺陷数 | 24 | 96 |
-| 缺陷类型数 | 4 | 2（ILLEGAL_SUCCESS 95, DIFFERENTIAL_MISMATCH 1） |
-| 端点覆盖 | ~15 | 45 |
-| LLM编排器增量 | — | 0 |
-
-### GitHub Issue状态
-| # | 标题 | 状态 |
-|---|------|------|
-| #49823 | REST API v2 accepts nprobe=0 | open, triage/accepted, milestone 2.6.18 |
-| #49928 | Default proxy.maxDimension=32768 too permissive | open, 待triage |
-| #49929 | REST/SDK inconsistent default index creation | open, 待triage |
-| #49930 | searchParams (ef/nprobe) validation gap | open, 待triage |
+1. **Endpoint规范化**：方案A先行（openapi.rs 1行改动），不够再升级方案B
+2. **LLM编排器角色**：从"边界值探索"改为"状态序列探索+跨端点语义推理"
+3. **新工具集**：execute_api_sequence(中层数据流) + compare_endpoints(语义等价对比)
+4. **分批验证策略**：P1→L1+L2→L3+L4→P2+P3，每批验证后再继续
+5. **收敛判断**：连续3轮无新assertion + turn>=5 → 提前终止
+6. **沙箱复用**：尊重LLM的fresh_sandbox=true请求
 
 ---
 
@@ -137,10 +114,8 @@ OpenAPI 解析器将 `/v2/vectordb/entities/search` 转为 `post__v2_vectordb_en
 
 ## 下次开工
 
-1. **Step 1**: Endpoint 修复 — openapi.rs 1行改动（path.clone()）
-2. **Step 2**: 验证确定性生成器产出（`mine --target milvus --skip-verify`）
-3. **Step 3**: LLM 批次1 — P1(消息截断) + L1(prompt) + L2(工具集)
-4. **Step 4**: LLM 批次2 — L3(信息孤岛) + L4(死代码启用)
-5. **Step 5**: LLM 批次3 — P2(收敛判断) + P3(沙箱复用)
-6. **Step 6**: 端到端验证
-7. 跟踪已提交 issue 状态
+1. **等待 mine 运行完成**，检查缺陷类型分布是否 ≥ 4 种
+2. 如果 < 4 种，升级为方案 B（ContractStore 规范化）
+3. **Step 6: LLM 端到端验证**（增量缺陷 + 覆盖多样性）
+4. 跟踪已提交 issue 状态（#49928/#49929/#49930）
+5. 更新 diversity-enhancement-plan.md 状态
