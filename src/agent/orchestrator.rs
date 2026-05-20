@@ -2,10 +2,8 @@ use crate::agent::classifier::ClassificationDisposition;
 use crate::agent::executor::FAExecutor;
 use crate::agent::llm::{DeepSeekClient, Message};
 use crate::agent::oracle::{build_oracle_findings_message, Oracle};
-use crate::agent::tools::{get_execute_test_script_tool, get_submit_mre_tool, get_fuzz_boundary_values_tool, get_coverage_report_tool, get_fuzz_api_sequence_tool};
-use crate::agent::vdbfuzz::boundary::BoundaryValueGenerator;
+use crate::agent::tools::{get_execute_test_script_tool, get_submit_mre_tool, get_execute_api_sequence_tool, get_compare_endpoints_tool, get_coverage_report_tool};
 use crate::agent::vdbfuzz::coverage::{CoverageTracker, ApiEndpoint};
-use crate::agent::vdbfuzz::sequence::APISequenceExplorer;
 use crate::contract::schema::StructuredContract;
 use crate::report::generator;
 use crate::sandbox::manager::SidecarSpec;
@@ -14,37 +12,42 @@ use tracing::{info, warn};
 
 fn build_system_prompt(contract_content: &str) -> String {
     format!(
-        "You are a security researcher performing Agentic Fuzzing. Find REAL defects where the server violates contracts or silently accepts invalid input.\n\
+        "You are a security researcher performing CREATIVE defect discovery. Your UNIQUE role is to find defects that deterministic generators CANNOT find.\n\
+        \n\
+        === YOUR UNIQUE CAPABILITIES ===\n\
+        Unlike deterministic generators (which test individual parameters), you can:\n\
+        1. Test STATE SEQUENCES — multi-step API flows that expose state inconsistencies\n\
+        2. Test SEMANTIC EQUIVALENCE — compare operations that should behave the same but don't\n\
         \n\
         === TOOLS ===\n\
-        `execute_test_script(code, fresh_sandbox?)` — Run Python scripts. Auto-reuses DB across calls. Set fresh_sandbox=true ONLY for clean start.\n\
-        `fuzz_boundary_values(focus_params?)` — Auto-generate boundary value tests from contract constraints.\n\
-        `fuzz_api_sequence(sequence_type?)` — Auto-generate multi-step API sequence tests.\n\
+        `execute_test_script(code, fresh_sandbox?)` — Run Python scripts. Reuses DB across calls by default.\n\
+        `execute_api_sequence(sequence_name, steps, invariant)` — Declare a multi-step API sequence. Tool auto-generates and runs the script.\n\
+        `compare_endpoints(comparison_name, operation_a, operation_b, expected_equivalence)` — Compare two semantically equivalent operations for inconsistencies.\n\
         `get_coverage_report()` — Show tested vs untested parameters.\n\
         \n\
         === MANDATORY RULES ===\n\
         1. DO NOT submit MRE before turn 5. You MUST explore at least 5 turns first.\n\
-        2. DO NOT repeat the same test pattern. Each turn MUST test a DIFFERENT parameter or endpoint.\n\
-        3. If AUTO-GENERATED scripts are provided in the context, you MUST execute at least ONE of them before writing your own.\n\
-        4. You MUST test at least 3 DIFFERENT parameters before submitting.\n\
-        5. After finding a defect, test 2 MORE parameters to see if the same class of defect exists elsewhere.\n\
+        2. DO NOT test individual parameter boundary values (e.g., nprobe=-1, dimension=0). Deterministic generators already cover these.\n\
+        3. FOCUS on multi-step sequences and cross-endpoint comparisons that deterministic tools cannot do.\n\
+        4. Each turn MUST test a DIFFERENT sequence pattern or comparison.\n\
+        5. After finding a defect, test 2 MORE variants to confirm the pattern.\n\
         \n\
         === EXPLORATION STRATEGY ===\n\
-        Turn 1-2: Execute auto-generated boundary/sequence tests from the context above.\n\
-        Turn 3-4: Test STATE consistency (upsert N -> count=N, delete K -> count=N-K).\n\
-        Turn 5-6: Test DATA integrity (write -> read back -> verify match) and ASYNC behavior (wait=true vs wait=false).\n\
-        Turn 7+: Test CROSS-STEP lifecycle (create -> delete -> recreate) and explore untested parameters from coverage report.\n\
+        Turn 1-2: Use execute_api_sequence to test lifecycle sequences (create→insert→search, create→drop→create, insert→delete→count).\n\
+        Turn 3-4: Use compare_endpoints to test semantic equivalence (same operation via different paths, repeated calls for idempotency).\n\
+        Turn 5-6: Use execute_test_script for creative multi-step scenarios that the declarative tools can't express.\n\
+        Turn 7+: Explore untested combinations from coverage report. Focus on STATE_VIOLATION and SEQUENCE_VIOLATION defect types.\n\
         \n\
         === DEFECT TYPES TO LOOK FOR ===\n\
-        - ILLEGAL_SUCCESS: Server accepts input that should be rejected (e.g., negative values, zero, out-of-range)\n\
-        - POOR_DIAGNOSTICS: Server returns 200 but silently discards data (test wait=true vs wait=false)\n\
-        - STATE_VIOLATION: Count mismatch, data inconsistency after operations\n\
-        - DATA_CORRUPTION: Write vector -> read back -> values don't match\n\
+        - SEQUENCE_VIOLATION: State inconsistency after a sequence of operations (e.g., create→drop→create loses properties)\n\
+        - STATE_LOGIC_VIOLATION: Count mismatch, data inconsistency after operations\n\
+        - IDEMPOTENT_SUCCESS: Operation that should be idempotent but behaves differently on repeat calls\n\
+        - DIFFERENTIAL_MISMATCH: Same logical operation produces different results via different API paths\n\
         \n\
         === SCRIPT RULES ===\n\
         - Use {{{{TESTVDB_DB_URL}}}} as DB URL placeholder\n\
         - time.sleep(0.5) after create, 0.3 after upsert\n\
-        - Print [DEFECT: ILLEGAL_SUCCESS|STATE_LOGIC_VIOLATION|DATA_CORRUPTION|POOR_DIAGNOSTICS] on defect\n\
+        - Print [DEFECT: SEQUENCE_VIOLATION|STATE_LOGIC_VIOLATION|IDEMPOTENT_SUCCESS|DIFFERENTIAL_MISMATCH] on defect\n\
         - sys.exit(1) on defect, sys.exit(0) on pass\n\
         - Unique collection name with uuid\n\
         - Submit with submit_mre when >= 3 surviving assertions found\n\
@@ -69,6 +72,7 @@ pub struct FAOrchestrator<'a> {
     multi_defect: bool,
     custom_system_prompt: Option<String>,
     custom_initial_message: Option<String>,
+    batch_defects_summary: String,
 }
 
 pub struct CollectedDefect {
@@ -118,6 +122,7 @@ impl<'a> FAOrchestrator<'a> {
             multi_defect,
             custom_system_prompt: None,
             custom_initial_message: None,
+            batch_defects_summary: String::new(),
         }
     }
 
@@ -127,7 +132,11 @@ impl<'a> FAOrchestrator<'a> {
         self
     }
 
-    #[allow(dead_code)]
+    pub fn with_batch_defects(mut self, summary: String) -> Self {
+        self.batch_defects_summary = summary;
+        self
+    }
+
     fn build_behavioral_section(&self) -> String {
         if self.contract.behavioral_contracts.is_empty() {
             return String::new();
@@ -174,7 +183,7 @@ impl<'a> FAOrchestrator<'a> {
         crate::agent::classifier::ClassificationResult,
         Vec<CollectedDefect>,
     )> {
-        let tools = vec![get_execute_test_script_tool(), get_submit_mre_tool(), get_fuzz_boundary_values_tool(), get_fuzz_api_sequence_tool(), get_coverage_report_tool()];
+        let tools = vec![get_execute_test_script_tool(), get_submit_mre_tool(), get_execute_api_sequence_tool(), get_compare_endpoints_tool(), get_coverage_report_tool()];
         let system_prompt = self.custom_system_prompt.clone()
             .unwrap_or_else(|| build_system_prompt(&self.contract_content));
         let mut coverage_tracker = CoverageTracker::new();
@@ -196,50 +205,23 @@ impl<'a> FAOrchestrator<'a> {
             info!("Coverage tracker: registered {} params for endpoint '{}'", coverage_tracker.endpoint_count(), self.contract.api_endpoint);
         }
 
-        let mut fuzz_context = String::new();
-
-        let boundary_cases = BoundaryValueGenerator::from_contract(&self.contract, self.plugin.target_style());
-        let high_value_cases: Vec<_> = boundary_cases.iter().filter(|case| case.expected_rejection).take(5).collect();
-        if !high_value_cases.is_empty() {
-            for case in &high_value_cases {
-                if let Some((ep, param, val)) = &case.coverage_entry {
-                    coverage_tracker.record_visit(ep, param, val);
-                }
-            }
-            fuzz_context.push_str("=== PRE-BUILT DEFECT HUNT SCRIPTS ===\n");
-            fuzz_context.push_str("CRITICAL: These scripts test parameters that are LIKELY to have defects.\n");
-            fuzz_context.push_str("You MUST execute at least ONE of these scripts in your FIRST turn.\n");
-            fuzz_context.push_str("Copy the script exactly and call execute_test_script(code=<script>).\n\n");
-            for (i, case) in high_value_cases.iter().enumerate() {
-                fuzz_context.push_str(&format!("{}. {} (expected_rejection={})\n", i + 1, case.name, case.expected_rejection));
-                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", case.script.replace('\n', "\n   ")));
-            }
-        }
-
-        let sequence_cases = APISequenceExplorer::generate_sequences();
-        let high_value_seqs: Vec<_> = sequence_cases.iter().filter(|case| case.expected_defect.is_some()).take(3).collect();
-        if !high_value_seqs.is_empty() {
-            fuzz_context.push_str("\n=== PRE-BUILT API SEQUENCE TESTS ===\n");
-            fuzz_context.push_str("These multi-step tests check for state consistency defects.\n");
-            fuzz_context.push_str("Execute at least ONE after the boundary tests.\n\n");
-            for (i, case) in high_value_seqs.iter().enumerate() {
-                fuzz_context.push_str(&format!("{}. {} [{}] (expected: {:?})\n", i + 1, case.name, case.sequence_type, case.expected_defect));
-                fuzz_context.push_str(&format!("   Script:\n   {}\n\n", case.script.replace('\n', "\n   ")));
-            }
-        }
-
         let initial_msg = if let Some(ref custom_msg) = self.custom_initial_message {
             custom_msg.clone()
-        } else if fuzz_context.is_empty() {
-            "Begin exploration. Write a script and use execute_test_script(fresh_sandbox=true) to test it.".to_string()
         } else {
-            format!(
-                "START by executing one of the PRE-BUILT scripts below. Do NOT write your own script first.\n\
-                 Step 1: Copy a PRE-BUILT script and call execute_test_script(code=<copied_script>)\n\
-                 Step 2: If it finds a defect, test similar parameters to find more defects of the same class\n\
-                 Step 3: Only write your own scripts AFTER you have exhausted the pre-built ones\n\n{}",
-                fuzz_context
-            )
+            "Begin creative exploration. Use execute_api_sequence to test multi-step API sequences, or compare_endpoints to test semantic equivalence between operations. Focus on finding defects that deterministic generators cannot find.".to_string()
+        };
+
+        let behavioral_section = self.build_behavioral_section();
+        let initial_msg = if !behavioral_section.is_empty() {
+            format!("{}\n\n{}", initial_msg, behavioral_section)
+        } else {
+            initial_msg
+        };
+
+        let initial_msg = if !self.batch_defects_summary.is_empty() {
+            format!("{}\n\n=== DETERMINISTIC GENERATOR FINDINGS ===\n{}\n\nFocus on finding defects the deterministic generators MISSED — state sequences, semantic equivalence, and cross-endpoint inconsistencies.", initial_msg, self.batch_defects_summary)
+        } else {
+            initial_msg
         };
 
         let mut messages = vec![
@@ -285,7 +267,34 @@ impl<'a> FAOrchestrator<'a> {
             };
         }
 
+        let mut last_assertion_count = 0usize;
+        let mut no_progress_turns = 0usize;
+
         for turn in 0..self.max_turns {
+            // P1: Truncate message history to prevent token overflow
+            if messages.len() > 20 {
+                let system_msg = messages.first().cloned();
+                messages = messages.split_off(messages.len().saturating_sub(16));
+                if let Some(sys) = system_msg {
+                    messages.insert(0, sys);
+                }
+                info!("Truncated message history to {} messages (max 20)", messages.len());
+            }
+
+            // P2: Convergence detection — stop early if no new assertions for 3 turns
+            let current_assertions = executor.unique_assertions_count();
+            if turn > 0 && current_assertions == last_assertion_count {
+                no_progress_turns += 1;
+            } else {
+                no_progress_turns = 0;
+            }
+            last_assertion_count = current_assertions;
+
+            if no_progress_turns >= 3 && turn >= 5 {
+                info!("Convergence: no new assertions for {} turns. Stopping early at turn {}.", no_progress_turns, turn + 1);
+                break;
+            }
+
             info!(
                 "Agentic Exploration Turn {}/{}",
                 turn + 1,
@@ -471,9 +480,14 @@ impl<'a> FAOrchestrator<'a> {
                     let requested_fresh = args.get("fresh_sandbox").and_then(|v| v.as_bool()).unwrap_or(true);
                     let fresh_sandbox = if executor.has_active_sandbox() {
                         if requested_fresh {
-                            info!("FA requested fresh_sandbox=true but active sandbox exists. Auto-reusing sandbox (forced).");
+                            info!("FA requested fresh_sandbox=true. Destroying old sandbox and creating fresh one.");
+                            if let Some(old_sandbox) = executor.take_sandbox() {
+                                let _ = old_sandbox.cleanup().await;
+                            }
+                            true
+                        } else {
+                            false
                         }
-                        false
                     } else {
                         true
                     };
@@ -694,84 +708,117 @@ impl<'a> FAOrchestrator<'a> {
                     };
                     handle_defect!(code, initial_run, classification, &tc.id, &mut messages);
                 }
-                "fuzz_boundary_values" => {
-                    let cases = BoundaryValueGenerator::from_contract(&self.contract, self.plugin.target_style());
+                "execute_api_sequence" => {
                     let args: serde_json::Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                    let focus_params: Vec<String> = args.get("focus_params")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-                        .unwrap_or_default();
+                    let sequence_name = args.get("sequence_name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                    let steps = args.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                    let invariant = args.get("invariant").and_then(|v| v.as_str()).unwrap_or("");
 
-                    let filtered: Vec<_> = if focus_params.is_empty() {
-                        cases
-                    } else {
-                        cases.into_iter().filter(|c| {
-                            focus_params.iter().any(|fp| c.name.contains(fp))
-                        }).collect()
-                    };
+                    let mut script = format!("# API Sequence Test: {}\n", sequence_name);
+                    script.push_str("import requests, sys, uuid, time, json\n");
+                    script.push_str("BASE = '{{TESTVDB_DB_URL}}'\n");
+                    script.push_str("HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}\n");
+                    script.push_str("def api(path, body):\n");
+                    script.push_str("    r = requests.post(f'{BASE}{path}', headers=HEADERS, json=body)\n");
+                    script.push_str("    return r.json()\n\n");
 
-                    let mut response = format!("Generated {} boundary value test cases:\n\n", filtered.len());
-                    for (i, case) in filtered.iter().enumerate() {
-                        response.push_str(&format!("{}. {} (expected_rejection={})\n", i + 1, case.name, case.expected_rejection));
-                        if let Some((ep, param, val)) = &case.coverage_entry {
-                            coverage_tracker.record_visit(ep, param, val);
+                    for (i, step) in steps.iter().enumerate() {
+                        let endpoint = step.get("endpoint").and_then(|v| v.as_str()).unwrap_or("/");
+                        let params = step.get("params").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        let expect = step.get("expect").and_then(|v| v.as_str()).unwrap_or("any");
+                        let params_str = serde_json::to_string(&params).unwrap_or_default();
+
+                        script.push_str(&format!("# Step {}: {} (expect: {})\n", i + 1, endpoint, expect));
+                        script.push_str(&format!("r{} = api('{}', {})\n", i + 1, endpoint, params_str));
+                        script.push_str(&format!("print('Step {} result:', json.dumps(r{}))\n", i + 1, i + 1));
+                        if expect == "success" {
+                            script.push_str(&format!("if r{}.get('code') != 0: print('[DEFECT: SEQUENCE_VIOLATION] Step {} expected success but got:', r{}); sys.exit(1)\n", i + 1, i + 1, i + 1));
+                        } else if expect == "error" {
+                            script.push_str(&format!("if r{}.get('code') == 0: print('[DEFECT: SEQUENCE_VIOLATION] Step {} expected error but succeeded'); sys.exit(1)\n", i + 1, i + 1));
                         }
+                        script.push_str("time.sleep(0.3)\n\n");
                     }
-                    response.push_str("\nTo execute a test, copy the script from any case above and run it with execute_test_script.");
-                    response.push_str("\nAlternatively, I can provide the full script for any specific case - just ask by name.");
 
-                    let mut scripts_summary = String::new();
-                    for case in &filtered {
-                        scripts_summary.push_str(&format!("--- {} ---\n{}\n\n", case.name, case.script));
+                    if !invariant.is_empty() {
+                        script.push_str(&format!("# Invariant check: {}\n", invariant));
+                        script.push_str(&format!("print('Invariant: {}')\n", invariant));
                     }
-                    response.push_str(&format!("\n\n=== FULL SCRIPTS ===\n{}", scripts_summary));
 
-                    info!("fuzz_boundary_values generated {} cases", filtered.len());
-                    messages.push(Message::tool_response(&tc.id, &response));
-                    if !filtered.is_empty() {
-                        messages.push(Message::user(
-                            "[HINT] Boundary test scripts are provided above. Pick one with an interesting violation and run it with execute_test_script to confirm the defect. This will also run Oracle checks automatically."
-                        ));
+                    script.push_str("print('All steps completed successfully')\nsys.exit(0)\n");
+
+                    let fresh_sandbox = !executor.has_active_sandbox();
+                    let result = executor
+                        .execute_test(&script, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
+                        .await?;
+
+                    messages.push(Message::tool_response(&tc.id, &result.output));
+
+                    if let Some(sandbox) = result.sandbox {
+                        executor.put_sandbox(sandbox);
+                    }
+                }
+                "compare_endpoints" => {
+                    let args: serde_json::Value =
+                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    let comparison_name = args.get("comparison_name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                    let op_a = args.get("operation_a").cloned().unwrap_or_default();
+                    let op_b = args.get("operation_b").cloned().unwrap_or_default();
+                    let expected_eq = args.get("expected_equivalence").and_then(|v| v.as_str()).unwrap_or("");
+
+                    let endpoint_a = op_a.get("endpoint").and_then(|v| v.as_str()).unwrap_or("/");
+                    let params_a = op_a.get("params").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    let desc_a = op_a.get("description").and_then(|v| v.as_str()).unwrap_or("Operation A");
+
+                    let endpoint_b = op_b.get("endpoint").and_then(|v| v.as_str()).unwrap_or("/");
+                    let params_b = op_b.get("params").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                    let desc_b = op_b.get("description").and_then(|v| v.as_str()).unwrap_or("Operation B");
+
+                    let params_a_str = serde_json::to_string(&params_a).unwrap_or_default();
+                    let params_b_str = serde_json::to_string(&params_b).unwrap_or_default();
+
+                    let script = format!(
+                        "# Semantic Equivalence Comparison: {}\n\
+                        import requests, sys, uuid, time, json\n\
+                        BASE = '{{{{TESTVDB_DB_URL}}}}'\n\
+                        HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}\n\
+                        def api(path, body):\n\
+                            r = requests.post(f'{{BASE}}{{path}}', headers=HEADERS, json=body)\n\
+                            return r.json()\n\n\
+                        # Operation A: {}\n\
+                        rA = api('{}', {})\n\
+                        print('Operation A result:', json.dumps(rA))\n\
+                        time.sleep(0.3)\n\n\
+                        # Operation B: {}\n\
+                        rB = api('{}', {})\n\
+                        print('Operation B result:', json.dumps(rB))\n\n\
+                        # Expected equivalence: {}\n\
+                        code_a = rA.get('code')\n\
+                        code_b = rB.get('code')\n\
+                        if code_a != code_b:\n\
+                            print(f'[DEFECT: DIFFERENTIAL_MISMATCH] Operation A code={{code_a}} vs Operation B code={{code_b}}')\n\
+                            print(f'Expected equivalence: {}')\n\
+                            sys.exit(1)\n\
+                        print('Both operations returned same status code. No differential mismatch found.')\n\
+                        sys.exit(0)\n",
+                        comparison_name, desc_a, endpoint_a, params_a_str, desc_b, endpoint_b, params_b_str, expected_eq, expected_eq
+                    );
+
+                    let fresh_sandbox = !executor.has_active_sandbox();
+                    let result = executor
+                        .execute_test(&script, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command)
+                        .await?;
+
+                    messages.push(Message::tool_response(&tc.id, &result.output));
+
+                    if let Some(sandbox) = result.sandbox {
+                        executor.put_sandbox(sandbox);
                     }
                 }
                 "get_coverage_report" => {
                     let report = coverage_tracker.report();
                     info!("get_coverage_report: {} entries tracked", coverage_tracker.visited_count());
                     messages.push(Message::tool_response(&tc.id, &report));
-                }
-                "fuzz_api_sequence" => {
-                    let all_cases = APISequenceExplorer::generate_sequences();
-                    let args: serde_json::Value =
-                        serde_json::from_str(&tc.function.arguments).unwrap_or_default();
-                    let seq_type = args.get("sequence_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("all");
-
-                    let filtered: Vec<_> = if seq_type == "all" {
-                        all_cases
-                    } else {
-                        all_cases.into_iter().filter(|c| c.sequence_type == seq_type).collect()
-                    };
-
-                    let mut response = format!("Generated {} API sequence test cases:\n\n", filtered.len());
-                    for (i, case) in filtered.iter().enumerate() {
-                        response.push_str(&format!("{}. {} [{}] (expected: {:?})\n", i + 1, case.name, case.sequence_type, case.expected_defect));
-                    }
-
-                    let mut scripts_summary = String::new();
-                    for case in &filtered {
-                        scripts_summary.push_str(&format!("--- {} [{}] ---\n{}\n\n", case.name, case.sequence_type, case.script));
-                    }
-                    response.push_str(&format!("\n=== FULL SCRIPTS ===\n{}", scripts_summary));
-
-                    info!("fuzz_api_sequence generated {} cases", filtered.len());
-                    messages.push(Message::tool_response(&tc.id, &response));
-                    if !filtered.is_empty() {
-                        messages.push(Message::user(
-                            "[HINT] Sequence test scripts are provided above. Run one with execute_test_script to confirm the defect and trigger Oracle state checks."
-                        ));
-                    }
                 }
                 _ => {
                     messages.push(Message::tool_response(&tc.id, "Unknown tool."));

@@ -86,43 +86,108 @@ pub fn get_execute_test_script_tool() -> Tool {
     }
 }
 
-pub fn get_fuzz_boundary_values_tool() -> Tool {
+pub fn get_execute_api_sequence_tool() -> Tool {
     Tool {
         r#type: "function".to_string(),
         function: Function {
-            name: "fuzz_boundary_values".to_string(),
-            description: Some("Generates boundary value test scripts from contract constraints. Systematically tests zero values, out-of-range values, and type violations for API parameters. Returns a list of test scripts to execute.".to_string()),
+            name: "execute_api_sequence".to_string(),
+            description: Some("Executes a multi-step API sequence test. You describe each step as an endpoint + key parameters + expected status. The tool auto-generates and runs a Python script that executes the sequence and checks state consistency between steps.".to_string()),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "focus_params": {
+                    "sequence_name": {
+                        "type": "string",
+                        "description": "A descriptive name for this sequence test (e.g., 'create_drop_create_dim_check')."
+                    },
+                    "steps": {
                         "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Optional: specific parameter names to focus on. If empty, tests all constrained parameters."
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "endpoint": {
+                                    "type": "string",
+                                    "description": "The API endpoint path (e.g., '/v2/vectordb/collections/create')."
+                                },
+                                "params": {
+                                    "type": "object",
+                                    "description": "Key parameters for this step (e.g., {\"collectionName\": \"test_col\", \"dimension\": 8})."
+                                },
+                                "expect": {
+                                    "type": "string",
+                                    "enum": ["success", "error", "any"],
+                                    "description": "Expected result: 'success' (code 200), 'error' (non-200 or error code), or 'any'."
+                                }
+                            },
+                            "required": ["endpoint", "params", "expect"]
+                        },
+                        "description": "Ordered list of API steps to execute."
+                    },
+                    "invariant": {
+                        "type": "string",
+                        "description": "The state invariant to check after all steps (e.g., 'dimension should equal original value after create-drop-create')."
                     }
                 },
-                "required": []
+                "required": ["sequence_name", "steps", "invariant"]
             }),
         },
     }
 }
 
-pub fn get_fuzz_api_sequence_tool() -> Tool {
+pub fn get_compare_endpoints_tool() -> Tool {
     Tool {
         r#type: "function".to_string(),
         function: Function {
-            name: "fuzz_api_sequence".to_string(),
-            description: Some("Generates multi-step API sequence test scripts. Tests state dependencies between API calls: missing steps, redundant operations, wrong order, and state transitions. Returns test scripts for each sequence type.".to_string()),
+            name: "compare_endpoints".to_string(),
+            description: Some("Compares two semantically equivalent operations to find behavioral inconsistencies. You describe two operations that SHOULD behave the same way, and the tool executes both and compares results.".to_string()),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "sequence_type": {
+                    "comparison_name": {
                         "type": "string",
-                        "enum": ["missing_step", "redundant_op", "wrong_order", "state_transition", "all"],
-                        "description": "Type of sequence to generate. Use 'all' for all types."
+                        "description": "A descriptive name for this comparison (e.g., 'rest_vs_sdk_create_index')."
+                    },
+                    "operation_a": {
+                        "type": "object",
+                        "properties": {
+                            "description": {
+                                "type": "string",
+                                "description": "Human-readable description of operation A."
+                            },
+                            "endpoint": {
+                                "type": "string",
+                                "description": "The API endpoint for operation A (e.g., '/v2/vectordb/indexes/create')."
+                            },
+                            "params": {
+                                "type": "object",
+                                "description": "Parameters for operation A."
+                            }
+                        },
+                        "required": ["description", "endpoint", "params"]
+                    },
+                    "operation_b": {
+                        "type": "object",
+                        "properties": {
+                            "description": {
+                                "type": "string",
+                                "description": "Human-readable description of operation B."
+                            },
+                            "endpoint": {
+                                "type": "string",
+                                "description": "The API endpoint for operation B (e.g., '/v2/vectordb/indexes/create')."
+                            },
+                            "params": {
+                                "type": "object",
+                                "description": "Parameters for operation B."
+                            }
+                        },
+                        "required": ["description", "endpoint", "params"]
+                    },
+                    "expected_equivalence": {
+                        "type": "string",
+                        "description": "Why these two operations should produce the same result (e.g., 'Both create an index with the same parameters, so both should succeed or both should fail')."
                     }
                 },
-                "required": []
+                "required": ["comparison_name", "operation_a", "operation_b", "expected_equivalence"]
             }),
         },
     }

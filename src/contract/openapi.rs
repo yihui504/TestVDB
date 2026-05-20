@@ -125,9 +125,7 @@ impl OpenApiParser {
                 ("PATCH", &item.patch),
             ] {
                 if let Some(op) = op {
-                    let name = op.operation_id.clone().unwrap_or_else(|| {
-                        format!("{}_{}", method.to_lowercase(), path.replace('/', "_").trim_matches('_'))
-                    });
+                    let name = op.operation_id.clone().unwrap_or_else(|| path.clone());
                     let category = op.tags.first().cloned().unwrap_or_else(|| "general".to_string());
                     endpoints.push(EndpointEntry {
                         name,
@@ -262,9 +260,7 @@ impl OpenApiParser {
                 ("PATCH", &item.patch),
             ] {
                 if let Some(op) = op {
-                    let endpoint_name = op.operation_id.clone().unwrap_or_else(|| {
-                        format!("{}_{}", method.to_lowercase(), path.replace('/', "_").trim_matches('_'))
-                    });
+                    let endpoint_name = op.operation_id.clone().unwrap_or_else(|| path.clone());
 
                     if let Some(body) = &op.request_body {
                         for (_content_type, media) in &body.content {

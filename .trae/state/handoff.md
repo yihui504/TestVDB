@@ -2,7 +2,7 @@
 
 ## 最后更新: 2026-05-19
 
-## 项目状态: 缺陷类型多样性增强 — 计划已制定，待执行
+## 项目状态: 缺陷类型多样性增强 — 计划已精炼，待执行
 
 ---
 
@@ -12,7 +12,7 @@
 
 | 文件 | 路径 | 状态 |
 |------|------|------|
-| Plan（当前） | `.trae/plans/diversity-enhancement-plan.md` | IN PROGRESS |
+| Plan（当前） | `.trae/plans/diversity-enhancement-plan.md` | IN PROGRESS (v3) |
 | Plan（已完成） | `.trae/plans/testvdb-review-improvement-plan.md` | COMPLETED |
 | Spec | `.trae/specs/deep-dive-review-previous-session-output.md` | ACTIVE |
 | Trace | `.trae/specs/deep-dive-trace-review-previous-session-output.md` | ACTIVE |
@@ -20,23 +20,32 @@
 
 ---
 
-## 当前任务：缺陷类型多样性增强（5步）
+## 当前任务：缺陷类型多样性增强（6步）
 
 | Step | 内容 | 状态 |
 |------|------|------|
-| 1 | Endpoint 规范化（方案B：ContractStore统一endpoint为URL路径格式） | ⬜ 未开始 |
+| 1 | Endpoint 修复（方案A：openapi.rs 1行改动） | ⬜ 未开始 |
 | 2 | 验证确定性生成器产出（≥4种DefectKind，每种≥1个缺陷） | ⬜ 未开始 |
-| 3 | infra.rs 错误处理修复（Err(_) => continue → warn日志） | ⬜ 未开始 |
-| 4 | LLM 编排器优化（状态序列探索 + 跨端点语义推理） | ⬜ 未开始 |
-| 5 | LLM 编排器端到端验证（增量产出 + 覆盖多样性） | ⬜ 未开始 |
+| 3 | LLM 批次1 — P1(消息截断) + L1(prompt重写) + L2(工具集替换) | ⬜ 未开始 |
+| 4 | LLM 批次2 — L3(信息孤岛) + L4(死代码启用) | ⬜ 未开始 |
+| 5 | LLM 批次3 — P2(收敛判断) + P3(沙箱复用) | ⬜ 未开始 |
+| 6 | LLM 端到端验证（增量缺陷 + 覆盖多样性） | ⬜ 未开始 |
 
 ### 根因诊断
 
-**问题：** metamorphic/state_gen/sequence_gen/res/combo/conc 六个生成器全部零产出
+**确定性生成器零产出根因：**
+OpenAPI 解析器将 `/v2/vectordb/entities/search` 转为 `post__v2_vectordb_entities_search`（下划线分隔），导致 `atc.endpoint.contains("entities/search")` 永远为 false。已确认 Milvus OpenAPI spec 无 operationId，fallback 分支一定会走。
 
-**根因：** OpenAPI 解析器将 `/v2/vectordb/entities/search` 转为 `post__v2_vectordb_entities_search`（下划线分隔），合同 JSON 的 api_endpoint 为 `search+create_collection`（加号分隔），导致生成器中 `atc.endpoint.contains("entities/search")` 永远为 false
+**LLM 编排器零增量根因（4层叠加）：**
+- L1: Prompt 重复 — system prompt 引导边界值探索，与确定性生成器同质
+- L2: 工具重复 — `fuzz_boundary_values`/`fuzz_api_sequence` 与确定性生成器功能重叠
+- L3: 信息孤岛 — 确定性生成器发现的缺陷不注入 LLM 上下文
+- L4: 死代码 — `build_behavioral_section` 标记 `#[allow(dead_code)]`，最有价值的测试模板未注入
 
-**修复方案：** 在 ContractStore 中增加规范化方法，统一 endpoint 为 URL 路径格式
+**LLM 编排器架构问题（3项）：**
+- P1: 消息历史无限增长 — 12轮 token 可能超过 DeepSeek 上下文窗口
+- P2: 无收敛判断 — 固定跑12轮，即使 LLM 已陷入重复也不提前终止
+- P3: 沙箱强制复用 — LLM 请求 fresh_sandbox=true 也被忽略
 
 ### 验收标准
 
@@ -45,8 +54,20 @@
 - 验证：`mine --target milvus --skip-verify`，v2.6.16
 
 **LLM 编排器：**
-- 验收 A：3 次运行中至少 2 次 LLM 产出 ≥ 1 个确定性生成器未发现的缺陷
+- 验收 A：1 次运行中 LLM 产出 ≥ 1 个确定性生成器未发现的缺陷
 - 验收 B：LLM 探索的 API 序列覆盖 ≥ 5 种不同状态转换模式
+
+### 新工具集设计
+
+| 工具 | 类型 | 描述 |
+|------|------|------|
+| `execute_test_script` | 保留 | LLM 自由探索，直接写 Python 脚本 |
+| `execute_api_sequence` | 新增 | 中层数据流：LLM 描述每步端点+参数+期望状态，工具自动生成脚本 |
+| `compare_endpoints` | 新增 | 语义等价对比：LLM 描述"两个操作语义上应该等价"，工具分别执行并对比 |
+| `submit_mre` | 保留 | 提交最小可复现示例 |
+| `get_coverage_report` | 保留 | 返回 API 覆盖率报告 |
+| ~~`fuzz_boundary_values`~~ | 移除 | 与确定性 boundary 生成器重复 |
+| ~~`fuzz_api_sequence`~~ | 移除 | 与确定性 sequence 生成器重复 |
 
 ---
 
@@ -73,52 +94,23 @@
 2. **Milvus认证头**：所有请求带`Authorization: Bearer root:Milvus`
 3. **PERMISSIVE_PARSING**：Go JSON默认忽略未知字段，不是缺陷
 4. **IDEMPOTENT_SUCCESS**：drop不存在资源返回成功是幂等行为，不是缺陷
-5. **Endpoint规范化**：ContractStore统一使用URL路径格式（如`/v2/vectordb/entities/search`），生成器用`contains()`匹配
-6. **LLM编排器角色**：从"边界值探索"改为"状态序列探索+跨端点语义推理"，与确定性生成器互补
+5. **Endpoint规范化**：方案A先行（openapi.rs 1行改动），不够再升级方案B
+6. **LLM编排器角色**：从"边界值探索"改为"状态序列探索+跨端点语义推理"
+7. **新工具粒度**：execute_api_sequence 用中层数据流，compare_endpoints 用语义等价对比
+8. **分批验证策略**：P1→L1+L2→L3+L4→P2+P3，每批验证后再继续
 
 ---
 
 ## Shadow Mode 验证结果（2026-05-19）
-
-### 验证配置
-- 目标：Milvus v2.6.16 (milvusdb/milvus:v2.6.16)
-- Mine命令：`testvdb.exe mine --target milvus --version 2.6.16 --contracts ./contracts --skip-verify --max-rounds 2 --shadow`
-- Batch命令：`testvdb.exe batch --target milvus`
 
 ### 结果摘要
 
 | 指标 | Batch（手写探针） | Mine（确定性生成器+LLM） |
 |------|------------------|------------------------|
 | 唯一缺陷数 | 24 | 96 |
-| 缺陷类型数 | 4（ILLEGAL_SUCCESS/IDEMPOTENT_SUCCESS/PERMISSIVE_PARSING/SEQUENCE_VIOLATION） | 2（ILLEGAL_SUCCESS 95, DIFFERENTIAL_MISMATCH 1） |
-| 端点覆盖 | ~15 精选高风险 | 45 全覆盖 |
-| LLM编排器增量 | — | 0（12轮探索无新发现） |
-
-### 核心结论
-1. **Mine广度占优（4×），Batch深度占优（4种类型 vs 2种）**
-2. **Mine零产出根因：endpoint格式不匹配，非Milvus行为正确**
-3. **LLM编排器未产出增量价值**
-4. **两种模式互补性显著，不建议Full Cutover**
-
-### 产出文件
-- `shadow_mode_results/shadow_mode_report.md` — 完整对比报告
-- `shadow_mode_results/mine_defects.json` — Mine模式96个缺陷数据
-- `shadow_mode_results/batch_baseline.json` — Batch模式24个缺陷基线
-- `shadow_mode_results/filtered_real_defects.md` — 筛选后的真实缺陷清单
-
----
-
-## v2.6.16 缺陷验证与提交记录（2026-05-19）
-
-| 缺陷 | 验证结果 | 提交状态 |
-|------|---------|---------|
-| 缺陷3（重复ID count=-1） | NOT A BUG — insertCount=1, by design (#49849) | 不提交 |
-| 缺陷4（create-drop-create维度丢失） | NOT REPRODUCED — 维度正确返回8 | 不提交 |
-| P0-B（32768维OOM） | CONFIRMED | #49928 |
-| P0-A（REST/SDK create_index不一致） | CONFIRMED | #49929 |
-| P1-A（nprobe=-1） | CONFIRMED | #49823补充评论 |
-| P1-B（collectionName=""） | NOT REPRODUCED | 不提交 |
-| searchParams校验缺失 | CONFIRMED | #49930 |
+| 缺陷类型数 | 4 | 2（ILLEGAL_SUCCESS 95, DIFFERENTIAL_MISMATCH 1） |
+| 端点覆盖 | ~15 | 45 |
+| LLM编排器增量 | — | 0 |
 
 ### GitHub Issue状态
 | # | 标题 | 状态 |
@@ -136,7 +128,6 @@
 - docker-compose: docker-compose.milvus.yml
 - 3容器: etcd + MinIO + milvus-standalone
 - 端口: 19530
-- Batch运行容器: testvdb-batch-milvus（已安装pymilvus）
 
 ### 编译状态
 - cargo test: 255 passed, 0 failed, 1 ignored
@@ -146,9 +137,10 @@
 
 ## 下次开工
 
-1. **Step 1**: Endpoint 规范化 — 修改 openapi.rs + store.rs + from_structured_contracts
+1. **Step 1**: Endpoint 修复 — openapi.rs 1行改动（path.clone()）
 2. **Step 2**: 验证确定性生成器产出（`mine --target milvus --skip-verify`）
-3. **Step 3**: infra.rs 错误处理修复
-4. **Step 4**: LLM 编排器优化（system prompt + 工具集）
-5. **Step 5**: LLM 编排器端到端验证
-6. 跟踪已提交 issue 状态（#49928/#49929/#49930 等待 triage）
+3. **Step 3**: LLM 批次1 — P1(消息截断) + L1(prompt) + L2(工具集)
+4. **Step 4**: LLM 批次2 — L3(信息孤岛) + L4(死代码启用)
+5. **Step 5**: LLM 批次3 — P2(收敛判断) + P3(沙箱复用)
+6. **Step 6**: 端到端验证
+7. 跟踪已提交 issue 状态
