@@ -2,7 +2,7 @@ use crate::agent::classifier::ClassificationDisposition;
 use crate::agent::executor::FAExecutor;
 use crate::agent::llm::{DeepSeekClient, Message};
 use crate::agent::oracle::{build_oracle_findings_message, Oracle};
-use crate::agent::tools::{get_execute_test_script_tool, get_submit_mre_tool, get_execute_stateful_test_tool, get_compare_endpoints_tool, get_coverage_report_tool};
+use crate::agent::tools::{get_execute_test_script_tool, get_submit_mre_tool, get_execute_stateful_test_tool, get_execute_concurrent_test_tool, get_execute_timing_test_tool, get_compare_endpoints_tool, get_coverage_report_tool};
 use crate::agent::vdbfuzz::coverage::{CoverageTracker, ApiEndpoint};
 use crate::contract::schema::StructuredContract;
 use crate::report::generator;
@@ -12,7 +12,7 @@ use tracing::{info, warn};
 
 fn build_system_prompt(contract_content: &str) -> String {
     format!(
-        "You are a security researcher performing CREATIVE defect discovery. Find defects that deterministic generators CANNOT find.\n        \n        === YOUR CAPABILITIES ===\n        1. STATE CONSISTENCY — verify count, visibility, data integrity after operations\n        2. CONCURRENT RACE CONDITIONS — parallel ops on same resources, verify no corruption\n        3. TIMING SENSITIVITY — flush/load/delete with immediate=true, exposing stale-read bugs\n        4. SEMANTIC EQUIVALENCE — compare REST vs SDK, or two API paths that behave identically\n        5. BOUNDARY DEEPENING — take a known boundary violation and test RELATED parameters\n        6. CROSS-ENDPOINT CHAINS — test sequences: create -> insert -> index -> search -> drop\n        \n        === TOOLS ===\n        execute_stateful_test(test_name, pattern_category, steps, invariant)\n        execute_concurrent_test(test_name, pattern_category, setup_steps, concurrent_actions, state_check)\n        execute_timing_test(test_name, pattern_category, steps, invariant)\n        compare_endpoints(comparison_name, operation_a, operation_b, expected_equivalence)\n        execute_test_script(code, fresh_sandbox?) — Run custom Python scripts\n        get_coverage_report() — Show tested vs untested parameters and pattern diversity\n        \n        === EXPLORATION STRATEGY (adaptive) ===\n        - Turns 1-4: STATE CONSISTENCY (insert->count, delete->count, flush->search visibility)\n        - Turns 5-8: CONCURRENT + TIMING (parallel operations, immediate=true for async bugs)\n        - Turns 9+: DEEP exploration — cross-endpoint chains, boundary deepening, semantic equivalence\n        - Schedule is GUIDANCE, not prison — switch if you find a promising pattern\n        - After any defect, probe 2 MORE related parameters for systemic weakness\n        \n        === RULES ===\n        1. DO NOT submit MRE before turn 3. Explore at least 3 different angles first.\n        2. Test interactions BETWEEN parameters and STATE after sequences.\n        3. You CAN test boundary values as verification — go DEEPER when you find one.\n        4. Every step in execute_stateful_test/execute_timing_test MUST include a state_check.\n        \n        === SEMANTIC INVARIANTS (violation = BUG) ===\n        - rowCount = insertCount - deleteCount\n        - After flush, inserted data must be searchable\n        - After drop+recreate, previous data gone (rowCount=0)\n        - Concurrent inserts: final count = sum of all inserts\n        - Concurrent upserts same ID: no duplicates\n        - Search distance ordering: L2 ascending, COSINE/IP descending\n        - Delete then immediate query: no stale reads\n        - Search with filters: only matching data returned\n        - Pagination: offset changes = disjoint result sets\n        \n        === PATTERN CATEGORIES ===\n        count_consistency, data_visibility, state_residual, idempotency, search_correctness,\n        partition_isolation, alias_state, index_state, concurrent_insert_count,\n        concurrent_upsert_duplicate, concurrent_delete_stale, concurrent_create_conflict,\n        flush_visibility, load_search_failure, delete_stale_read, index_immediate_use,\n        cross_endpoint_chain, semantic_equivalence, boundary_deepening\n        \n        === DEFECT TYPES ===\n        STATE_LOGIC_VIOLATION | SEQUENCE_VIOLATION | ILLEGAL_SUCCESS | DIFFERENTIAL_MISMATCH | POOR_DIAGNOSTICS\n        \n        === TARGET-SPECIFIC NOTES ===\n        - Milvus: check r.json().get('code')==0, Bearer root:Milvus auth\n        - Qdrant: check status_code==200, no auth\n        - Weaviate: check status_code==200, /v1/schema and /v1/objects paths\n        - PgVector: use psycopg2, connect to postgresql://postgres:postgres@host:5432/testvdb\n        \n        Contract:\n{}\n",
+        "You are a security researcher testing STATE CONSISTENCY, CONCURRENT RACES, and TIMING BUGS in a vector database.\n        \n        === YOUR MISSION ===\n        You ONLY test these three areas — nothing else:\n        1. STATE CONSISTENCY — verify rowCount, visibility, data integrity after sequences\n        2. CONCURRENT RACE CONDITIONS — parallel ops on same resources, verify no corruption\n        3. TIMING SENSITIVITY — flush/load/delete with immediate=true, exposing stale-read bugs\n        \n        Single-parameter boundary fuzzing (limit=-1, offset=0, nprobe=0) is ALREADY COVERED by deterministic generators.\n        The tools you have access to are DESIGNED for state/concurrent/timing testing — USE THEM.\n        \n        === TOOLS ===\n        execute_stateful_test(test_name, pattern_category, steps, invariant)\n        execute_concurrent_test(test_name, pattern_category, setup_steps, concurrent_actions, state_check)\n        execute_timing_test(test_name, pattern_category, steps, invariant)\n        compare_endpoints(comparison_name, operation_a, operation_b, expected_equivalence)\n        get_coverage_report() — Show tested vs untested parameters and pattern diversity\n        execute_test_script(code, fresh_sandbox?) — becomes available in later turns (auto-unlocked)\n        \n        === EXPLORATION STRATEGY (follow this order) ===\n        - Turns 1-4: use execute_stateful_test EXCLUSIVELY. Test: insert->count, delete->count, create->drop->recreate, flush->search.\n        - Turns 5-7: use execute_concurrent_test EXCLUSIVELY. Test: parallel inserts, concurrent upserts, mixed read/write races.\n        - Turns 8+: use execute_timing_test. Test: flush then immediate search, load then immediate query, immediate delete+query.\n        - After turn 8, you also have compare_endpoints and execute_test_script available.\n        \n        === RULES ===\n        1. EVERY step in execute_stateful_test/execute_timing_test MUST have a state_check.\n        2. Do NOT test single-parameter boundaries (limit, offset, nprobe values). These are useless — use the tools as designed.\n        3. If a tool call fails, analyze the error and try a DIFFERENT pattern — do not repeat the same approach.\n        4. submit_mre only available after turn 8. Before that, keep exploring new state patterns.\n        \n        === SEMANTIC INVARIANTS (violation = BUG) ===\n        - rowCount = insertCount - deleteCount\n        - After flush, inserted data must be searchable\n        - After drop+recreate, previous data gone (rowCount=0)\n        - Concurrent inserts: final count = sum of all inserts\n        - Concurrent upserts same ID: no duplicates\n        - Search distance ordering: L2 ascending, COSINE/IP descending\n        - Delete then immediate query: no stale reads\n        - Search with filters: only matching data returned\n        - Pagination: offset changes = disjoint result sets\n        \n        === PATTERN CATEGORIES ===\n        count_consistency, data_visibility, state_residual, idempotency, search_correctness,\n        partition_isolation, alias_state, index_state, concurrent_insert_count,\n        concurrent_upsert_duplicate, concurrent_delete_stale, concurrent_create_conflict,\n        flush_visibility, load_search_failure, delete_stale_read, index_immediate_use,\n        cross_endpoint_chain, semantic_equivalence\n        \n        === DEFECT TYPES ===\n        STATE_LOGIC_VIOLATION | SEQUENCE_VIOLATION | ILLEGAL_SUCCESS | DIFFERENTIAL_MISMATCH | POOR_DIAGNOSTICS\n        \n        === TARGET-SPECIFIC NOTES ===\n        - Milvus: check r.json().get('code')==0, Bearer root:Milvus auth\n        - Qdrant: check status_code==200, no auth\n        - Weaviate: check status_code==200, /v1/schema and /v1/objects paths\n        - PgVector: use psycopg2, connect to postgresql://postgres:postgres@host:5432/testvdb\n        \n        Contract:\n{}\n",
         contract_content
     )
 }
@@ -198,7 +198,13 @@ impl<'a> FAOrchestrator<'a> {
         crate::agent::classifier::ClassificationResult,
         Vec<CollectedDefect>,
     )> {
-        let tools = vec![get_execute_test_script_tool(), get_submit_mre_tool(), get_execute_stateful_test_tool(), get_compare_endpoints_tool(), get_coverage_report_tool()];
+        fn build_turn_tools(turn: usize) -> Vec<crate::agent::llm::Tool> {
+            if turn < 8 {
+                vec![get_execute_stateful_test_tool(), get_execute_concurrent_test_tool(), get_execute_timing_test_tool(), get_compare_endpoints_tool(), get_coverage_report_tool()]
+            } else {
+                vec![get_execute_test_script_tool(), get_submit_mre_tool(), get_execute_stateful_test_tool(), get_execute_concurrent_test_tool(), get_execute_timing_test_tool(), get_compare_endpoints_tool(), get_coverage_report_tool()]
+            }
+        }
         let system_prompt = self.custom_system_prompt.clone()
             .unwrap_or_else(|| build_system_prompt(&self.contract_content));
         let mut coverage_tracker = CoverageTracker::new();
@@ -477,7 +483,7 @@ impl<'a> FAOrchestrator<'a> {
 
             let response_msg = self
                 .llm_client
-                .send_chat_with_tools(messages.clone(), tools.clone())
+                .send_chat_with_tools(messages.clone(), build_turn_tools(turn))
                 .await?;
             messages.push(response_msg.clone());
 
@@ -504,6 +510,23 @@ impl<'a> FAOrchestrator<'a> {
                     let args: serde_json::Value =
                         serde_json::from_str(&tc.function.arguments).unwrap_or_default();
                     let code = args.get("code").and_then(|v| v.as_str()).unwrap_or("");
+
+                    // ── Boundary test rejection: redirect pure single-param tests ──
+                    let boundary_params = ["limit=-1", "limit=0", "offset=-1", "offset=0", "nprobe=-1", "nprobe=0", "shardsNum=null", "shardsNum=0", "shard_number=0", "replication_factor=-1", "ef=-1", "ef=0", "hnsw_ef=-1", "hnsw_ef=0", "Authorization=null"];
+                    let boundary_hits: Vec<_> = boundary_params.iter().filter(|p| code.contains(*p)).collect();
+                    let is_short_script = code.lines().count() < 12;
+                    if boundary_hits.len() >= 2 || (boundary_hits.len() == 1 && is_short_script) {
+                        info!("Rejecting boundary test (turn {}): found params {:?}", turn, boundary_hits);
+                        messages.push(Message::tool_response(
+                            &tc.id,
+                            format!(
+                                "REJECTED: This looks like a single-parameter boundary test (detected: {:?}).\n\
+                                 Boundary fuzzing is already covered by deterministic generators.\n\
+                                 Instead, use execute_stateful_test or execute_concurrent_test to test STATE after sequences, or execute_timing_test for timing bugs.\n\
+                                 You have access to these tools — use them now.", boundary_hits),
+                        ));
+                        continue;
+                    }
                     let requested_fresh = args.get("fresh_sandbox").and_then(|v| v.as_bool()).unwrap_or(true);
                     let fresh_sandbox = if executor.has_active_sandbox() {
                         if requested_fresh {
@@ -838,6 +861,161 @@ impl<'a> FAOrchestrator<'a> {
                     if let Some(sandbox) = result.sandbox {
                         executor.put_sandbox(sandbox);
                     }
+                }
+                "execute_stateful_test" => {
+                    let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    let test_name = args.get("test_name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                    let steps = args.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                    let invariant = args.get("invariant").and_then(|v| v.as_str()).unwrap_or("");
+
+                    let mut script = format!("# Stateful Test: {}\n", test_name);
+                    script.push_str("import requests, sys, uuid, time, json\n");
+                    script.push_str("BASE = '{{TESTVDB_DB_URL}}'\n");
+                    script.push_str("HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}\n");
+                    script.push_str("def api(path, body):\n");
+                    script.push_str("    r = requests.post(f'{BASE}{path}', headers=HEADERS, json=body)\n");
+                    script.push_str("    return r.json()\n\n");
+
+                    for (i, step) in steps.iter().enumerate() {
+                        let action = step.get("action").and_then(|v| v.as_str()).unwrap_or("/");
+                        let params = step.get("params").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        let expect_success = step.get("expect_success").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let params_str = serde_json::to_string(&params).unwrap_or_default();
+
+                        script.push_str(&format!("# Step {}: {}\n", i + 1, action));
+                        script.push_str(&format!("r{} = api('{}', {})\n", i + 1, action, params_str));
+                        if expect_success {
+                            script.push_str(&format!("if r{}.get('code') != 0: print('[DEFECT: STATE_LOGIC_VIOLATION] Step {} (action={}) expected success but got:', r{}); sys.exit(1)\n", i + 1, i + 1, action, i + 1));
+                        } else {
+                            script.push_str(&format!("if r{}.get('code') == 0: print('[DEFECT: STATE_LOGIC_VIOLATION] Step {} (action={}) expected error but succeeded'); sys.exit(1)\n", i + 1, i + 1, action));
+                        }
+                        if let Some(check) = step.get("state_check") {
+                            let method = check.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                            let expected = check.get("expected").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                            let expected_str = serde_json::to_string(&expected).unwrap_or_default();
+                            match method {
+                                "describe_collection" => {
+                                    script.push_str("desc = api('/v2/vectordb/collections/describe', {'collectionName': c})\n");
+                                    script.push_str(&format!("expected = {}\n", expected_str));
+                                    script.push_str("if desc.get('code') == 0 and 'rowCount' in expected and desc.get('data', {{}}).get('rowCount', -1) != expected['rowCount']:\n");
+                                    script.push_str("    print(f'[DEFECT: STATE_LOGIC_VIOLATION] rowCount mismatch: expected {expected[\"rowCount\"]}, got {desc[\"data\"][\"rowCount\"]}')\n");
+                                    script.push_str("    sys.exit(1)\n");
+                                }
+                                _ => {
+                                    script.push_str(&format!("# State check via {} ignored (unsupported method)\n", method));
+                                }
+                            }
+                        }
+                        script.push_str("time.sleep(0.3)\n\n");
+                    }
+                    if !invariant.is_empty() {
+                        script.push_str(&format!("# Final invariant: {}\n", invariant));
+                        script.push_str("print(f'Invariant checked')\n");
+                    }
+                    script.push_str("print('All stateful test steps passed.')\nsys.exit(0)\n");
+
+                    let fresh_sandbox = !executor.has_active_sandbox();
+                    let result = executor.execute_test(&script, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command).await?;
+                    messages.push(Message::tool_response(&tc.id, &result.output));
+                    if let Some(sandbox) = result.sandbox { executor.put_sandbox(sandbox); }
+                }
+                "execute_concurrent_test" => {
+                    let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    let test_name = args.get("test_name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                    let setup_steps = args.get("setup_steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                    let concurrent_actions = args.get("concurrent_actions").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+                    let mut script = format!("# Concurrent Test: {}\n", test_name);
+                    script.push_str("import requests, sys, uuid, time, json, threading\n");
+                    script.push_str("BASE = '{{TESTVDB_DB_URL}}'\n");
+                    script.push_str("HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}\n");
+                    script.push_str("def api(path, body):\n");
+                    script.push_str("    r = requests.post(f'{BASE}{path}', headers=HEADERS, json=body)\n");
+                    script.push_str("    return r.json()\n\n");
+                    script.push_str("results_lock = threading.Lock()\n");
+                    script.push_str("thread_results = []\n\n");
+
+                    for (i, step) in setup_steps.iter().enumerate() {
+                        let action = step.get("action").and_then(|v| v.as_str()).unwrap_or("/");
+                        let params = step.get("params").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        let params_str = serde_json::to_string(&params).unwrap_or_default();
+                        script.push_str(&format!("# Setup {}: {}\n", i + 1, action));
+                        script.push_str(&format!("r_setup_{} = api('{}', {})\n", i, action, params_str));
+                        script.push_str("time.sleep(0.3)\n\n");
+                    }
+
+                    script.push_str("def worker(action, params, label, repeat):\n");
+                    script.push_str("    for _ in range(repeat):\n");
+                    script.push_str("        r = api(action, params)\n");
+                    script.push_str("        with results_lock:\n");
+                    script.push_str("            thread_results.append((label, r.get('code')))\n");
+                    script.push_str("\nthreads = []\n");
+
+                    for (j, act) in concurrent_actions.iter().enumerate() {
+                        let label = act.get("label").and_then(|v| v.as_str()).unwrap_or("worker");
+                        let action = act.get("action").and_then(|v| v.as_str()).unwrap_or("/");
+                        let params = act.get("params").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        let repeat = act.get("repeat").and_then(|v| v.as_i64()).unwrap_or(3) as usize;
+                        let params_str = serde_json::to_string(&params).unwrap_or_default();
+                        script.push_str(&format!("t{} = threading.Thread(target=worker, args=('{}', {}, '{}', {}))\n", j, action, params_str, label, repeat));
+                        script.push_str(&format!("t{}.start()\n", j));
+                        script.push_str(&format!("threads.append(t{})\n", j));
+                    }
+
+                    script.push_str("for t in threads:\n    t.join()\n\n");
+                    script.push_str("codes = [c for (l, c) in thread_results]\n");
+                    script.push_str("if all(c == 0 for c in codes):\n");
+                    script.push_str("    print('All concurrent operations succeeded')\n");
+                    script.push_str("else:\n");
+                    script.push_str("    print(f'[DEFECT: STATE_LOGIC_VIOLATION] Some concurrent operations failed: {thread_results}')\n");
+                    script.push_str("    sys.exit(1)\n");
+                    script.push_str("sys.exit(0)\n");
+
+                    let fresh_sandbox = !executor.has_active_sandbox();
+                    let result = executor.execute_test(&script, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command).await?;
+                    messages.push(Message::tool_response(&tc.id, &result.output));
+                    if let Some(sandbox) = result.sandbox { executor.put_sandbox(sandbox); }
+                }
+                "execute_timing_test" => {
+                    let args: serde_json::Value = serde_json::from_str(&tc.function.arguments).unwrap_or_default();
+                    let test_name = args.get("test_name").and_then(|v| v.as_str()).unwrap_or("unnamed");
+                    let steps = args.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                    let invariant = args.get("invariant").and_then(|v| v.as_str()).unwrap_or("");
+
+                    let mut script = format!("# Timing Test: {}\n", test_name);
+                    script.push_str("import requests, sys, uuid, time, json\n");
+                    script.push_str("BASE = '{{TESTVDB_DB_URL}}'\n");
+                    script.push_str("HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}\n");
+                    script.push_str("def api(path, body):\n");
+                    script.push_str("    r = requests.post(f'{BASE}{path}', headers=HEADERS, json=body)\n");
+                    script.push_str("    return r.json()\n\n");
+
+                    for (i, step) in steps.iter().enumerate() {
+                        let action = step.get("action").and_then(|v| v.as_str()).unwrap_or("/");
+                        let params = step.get("params").cloned().unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                        let expect_success = step.get("expect_success").and_then(|v| v.as_bool()).unwrap_or(true);
+                        let immediate = step.get("immediate").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let params_str = serde_json::to_string(&params).unwrap_or_default();
+
+                        script.push_str(&format!("# Step {}: {} (immediate={})\n", i + 1, action, immediate));
+                        script.push_str(&format!("r{} = api('{}', {})\n", i + 1, action, params_str));
+                        if expect_success {
+                            script.push_str(&format!("if r{}.get('code') != 0: print('[DEFECT: STATE_LOGIC_VIOLATION] Timing step {} failed:', r{}); sys.exit(1)\n", i + 1, i + 1, i + 1));
+                        }
+                        if !immediate {
+                            script.push_str("time.sleep(0.3)\n");
+                        }
+                        script.push('\n');
+                    }
+                    if !invariant.is_empty() {
+                        script.push_str(&format!("# Final invariant: {}\n", invariant));
+                    }
+                    script.push_str("print('All timing test steps passed.')\nsys.exit(0)\n");
+
+                    let fresh_sandbox = !executor.has_active_sandbox();
+                    let result = executor.execute_test(&script, fresh_sandbox, &self.db_image, &self.pip_packages, self.db_port, &self.sidecars, &self.db_env, &self.db_command).await?;
+                    messages.push(Message::tool_response(&tc.id, &result.output));
+                    if let Some(sandbox) = result.sandbox { executor.put_sandbox(sandbox); }
                 }
                 "get_coverage_report" => {
                     let report = coverage_tracker.report();
