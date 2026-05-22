@@ -8,6 +8,8 @@ use tracing::info;
 
 pub struct ExecutionResult {
     pub output: String,
+    pub stdout: String,
+    pub stderr: String,
     pub db_url: String,
     pub found_defect: bool,
     pub classification: crate::agent::classifier::ClassificationResult,
@@ -206,6 +208,8 @@ impl FAExecutor {
                 self.state.record_script_error();
                 Ok(ExecutionResult {
                     output: format!("Sandbox execution failed: {}", e),
+                    stdout: String::new(),
+                    stderr: String::new(),
                     db_url: String::new(),
                     found_defect: false,
                     classification: crate::agent::classifier::ClassificationResult {
@@ -240,6 +244,8 @@ impl FAExecutor {
                 self.state.record_script_error();
                 Ok(ExecutionResult {
                     output: format!("Sandbox reuse execution failed: {}", e),
+                    stdout: String::new(),
+                    stderr: String::new(),
                     db_url: self.active_db_url.clone().unwrap_or_default(),
                     found_defect: false,
                     classification: crate::agent::classifier::ClassificationResult {
@@ -310,6 +316,8 @@ impl FAExecutor {
 
         Ok(ExecutionResult {
             output,
+            stdout: normalized_stdout,
+            stderr: normalized_stderr,
             db_url,
             found_defect,
             classification,

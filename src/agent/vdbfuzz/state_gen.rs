@@ -199,7 +199,8 @@ enum StateScriptKind {
 fn build_state_script(style: TargetStyle, kind: StateScriptKind) -> String {
     match style {
         TargetStyle::Milvus => build_milvus_state_script(kind),
-        TargetStyle::Qdrant => build_qdrant_state_script(kind),
+        TargetStyle::Qdrant | TargetStyle::Weaviate => build_qdrant_state_script(kind),
+        TargetStyle::PgVector => String::new(),
     }
 }
 

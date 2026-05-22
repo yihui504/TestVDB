@@ -1,0 +1,36 @@
+{
+  "api_endpoint": "sql",
+  "doc_url": "https://github.com/pgvector/pgvector",
+  "assertions": [
+    "[CREATE] vector dimension must be > 0",
+    "[CREATE] vector dimension must be <= 1048575",
+    "[CREATE] HNSW m must be >= 2",
+    "[CREATE] HNSW ef_construction must be >= 4",
+    "[CREATE] IVFFlat lists must be >= 1",
+    "[INSERT] inserted vector dimension must match column dimension",
+    "[INSERT] vector elements must be finite float numbers",
+    "[SEARCH] distance operator must match index type",
+    "[SEARCH] LIMIT must be >= 1",
+    "[BEHAVIOR:STATE] INSERT N rows → COUNT(*) must equal N",
+    "[BEHAVIOR:STATE] DELETE M of N rows → COUNT(*) must equal N-M",
+    "[INDEX] HNSW index on empty table must not crash"
+  ],
+  "type_constraints": [
+    {"param_name": "vector.dim", "expected_type": "positive integer", "violation_examples": []},
+    {"param_name": "hnsw.m", "expected_type": "integer", "violation_examples": []},
+    {"param_name": "hnsw.ef_construction", "expected_type": "integer", "violation_examples": []},
+    {"param_name": "ivfflat.lists", "expected_type": "integer", "violation_examples": []},
+    {"param_name": "distance_ops", "expected_type": "enum", "violation_examples": []}
+  ],
+  "range_constraints": [
+    {"param_name": "vector.dim", "description": "dimension must be 1-1048575", "min": 1.0, "max": 1048575.0, "violation_examples": []},
+    {"param_name": "hnsw.m", "description": "m must be >= 2", "min": 2.0, "max": null, "violation_examples": []},
+    {"param_name": "hnsw.ef_construction", "description": "ef_construction must be >= 4", "min": 4.0, "max": null, "violation_examples": []},
+    {"param_name": "ivfflat.lists", "description": "lists must be >= 1", "min": 1.0, "max": null, "violation_examples": []}
+  ],
+  "state_constraints": [
+    {"description": "CREATE EXTENSION vector must run before creating vector columns", "determinism": "deterministic", "setup_script_template": null}
+  ],
+  "state_invariants": [],
+  "behavioral_contracts": []
+}

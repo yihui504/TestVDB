@@ -616,3 +616,71 @@ requests.delete(f"{BASE}/collections/{collection_name}")
 
     mre
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn independent_probe_prefers_illegal_success() {
+        let result = IndependentProbeResult {
+            create_status: 200, create_body: "{}".to_string(),
+            upsert_status: 200, upsert_body: "{}".to_string(),
+            vector_status: 400, vector_body: "{\"status\":{\"error\":\"wrong vector size\"}}".to_string(),
+            limit_status: 200, limit_body: "{}".to_string(),
+            offset_status: 400, offset_body: "{\"status\":{\"error\":\"wrong offset\"}}".to_string(),
+            hnsw_ef_status: 400, hnsw_ef_body: "{\"status\":{\"error\":\"invalid hnsw_ef\"}}".to_string(),
+            ..Default::default()
+        };
+        let summary = summarize_qdrant_independent_probe(&result).expect("expected issue");
+        assert_eq!(summary.0, DefectType::IllegalSuccess);
+        assert!(summary.1.iter().any(|issue| issue.contains("limit=0 request succeeded")));
+    }
+
+    #[test]
+    fn unexpected_status_is_not_treated_as_poor_diagnostics() {
+        let result = IndependentProbeResult {
+            create_status: 200, create_body: "{}".to_string(),
+            upsert_status: 200, upsert_body: "{}".to_string(),
+            vector_status: 500, vector_body: "{\"status\":{\"error\":\"internal error\"}}".to_string(),
+            limit_status: 404, limit_body: "{\"status\":{\"error\":\"not found\"}}".to_string(),
+            offset_status: 405, offset_body: "{\"status\":{\"error\":\"method not allowed\"}}".to_string(),
+            hnsw_ef_status: 500, hnsw_ef_body: "{}".to_string(),
+            ..Default::default()
+        };
+        assert!(summarize_qdrant_independent_probe(&result).is_none());
+    }
+
+    #[test]
+    fn narrowed_limit_mre_accepts_positive_synonyms() {
+        let mre = build_qdrant_search_poor_diagnostics_mre(&[
+            "limit diagnostics do not clearly mention the limit constraint".to_string(),
+        ]);
+        assert!(mre.contains("\"limit\" not in r.text.lower()"));
+    }
+
+    #[test]
+    fn narrowed_mre_restricts_poor_diagnostics_to_expected_validation_failures() {
+        let mre = build_qdrant_search_poor_diagnostics_mre(&[
+            "limit diagnostics do not clearly mention the limit constraint".to_string(),
+            "offset diagnostics do not clearly mention the offset constraint".to_string(),
+        ]);
+        assert_eq!(mre.matches("[DEFECT: POOR_DIAGNOSTICS]").count(), 2);
+    }
+
+    #[test]
+    fn hnsw_ef_zero_triggers_illegal_success() {
+        let result = IndependentProbeResult {
+            create_status: 200, create_body: "{}".to_string(),
+            upsert_status: 200, upsert_body: "{}".to_string(),
+            vector_status: 400, vector_body: "{\"status\":{\"error\":\"wrong vector size\"}}".to_string(),
+            limit_status: 400, limit_body: "{\"status\":{\"error\":\"limit must be positive\"}}".to_string(),
+            offset_status: 400, offset_body: "{\"status\":{\"error\":\"offset must be non-negative\"}}".to_string(),
+            hnsw_ef_status: 200, hnsw_ef_body: "{\"result\":[]}".to_string(),
+            ..Default::default()
+        };
+        let summary = summarize_qdrant_independent_probe(&result).expect("expected issue");
+        assert_eq!(summary.0, DefectType::IllegalSuccess);
+        assert!(summary.1.iter().any(|issue| issue.contains("hnsw_ef=0")));
+    }
+}

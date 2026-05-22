@@ -1004,6 +1004,28 @@ print(f'large limit OK: {len(results)} <= 3'); sys.exit(0)"#.to_string(),
             }
         }
 
+        // ── Custom Qdrant Oracle checks ──
+        // 1. Wrong dimension upsert silently accepted
+        checks.push(qd_oracle_dim_mismatch());
+        // 2. hnsw ef=0 accepted
+        checks.push(qd_oracle_ef_zero());
+        // 3. score_threshold=0 vs no threshold consistency
+        checks.push(qd_oracle_score_threshold());
+        // 4. Points count consistency
+        checks.push(qd_oracle_points_count());
+        // 5. Search on empty collection
+        checks.push(qd_oracle_search_empty());
+        // 6. Create + immediate info
+        checks.push(qd_oracle_create_info());
+        // 7. Delete count consistency
+        checks.push(qd_oracle_delete_count());
+        // 8. Offset pagination disjointness
+        checks.push(qd_oracle_pagination());
+        // 9. Upsert same ID count consistency
+        checks.push(qd_oracle_upsert_duplicate());
+        // 10. async upsert (wait=false) silent data loss
+        checks.push(qd_oracle_async_data_loss());
+
         checks
     }
 
@@ -1520,5 +1542,247 @@ mod tests {
         assert_eq!(format_boundary(1.0), "1");
         assert_eq!(format_boundary(-1.0), "-1");
         assert_eq!(format_boundary(2.5), "2.5");
+    }
+}
+
+// ── Custom Oracle check scripts ──
+
+fn qd_oracle_dim_mismatch() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_dim_mismatch".into(),
+        check_type: crate::contract::schema::CheckType::ValueRange,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_dm_'+uuid.uuid4().hex[:8]
+r=requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+r2=requests.put(f'{BASE}/collections/{c}/points',json={"points":[{"id":1,"vector":[0.1,0.2,0.3]}]})
+if r2.status_code==200:
+    r3=requests.post(f'{BASE}/collections/{c}/points',json={"ids":[1],"with_vector":True})
+    pts=r3.json().get('result',[])
+    if len(pts)==0:
+        print('[DEFECT: ILLEGAL_SUCCESS] Wrong-dim upsert returned 200 but point silently discarded')
+        sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromAssertion,
+    }
+}
+
+fn qd_oracle_ef_zero() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_ef_zero".into(),
+        check_type: crate::contract::schema::CheckType::ValueRange,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_ef0_'+uuid.uuid4().hex[:8]
+r=requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"},"hnsw_config":{"ef":0}})
+if r.status_code in (200,201):
+    print('[DEFECT: ILLEGAL_SUCCESS] hnsw ef=0 accepted during collection creation')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromAssertion,
+    }
+}
+
+fn qd_oracle_score_threshold() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_score_threshold".into(),
+        check_type: crate::contract::schema::CheckType::ValueRange,
+        script: r#"import requests,uuid,time,sys,random
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_st_'+uuid.uuid4().hex[:8]
+random.seed(42)
+requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+for i in range(20):
+    requests.put(f'{BASE}/collections/{c}/points',json={"points":[{"id":i,"vector":[random.random(),random.random(),random.random(),random.random()]}]})
+time.sleep(1)
+r1=requests.post(f'{BASE}/collections/{c}/points/search',json={"vector":[0.5,0.5,0.5,0.5],"limit":10})
+r2=requests.post(f'{BASE}/collections/{c}/points/search',json={"vector":[0.5,0.5,0.5,0.5],"limit":10,"score_threshold":0.0})
+n1=len(r1.json().get('result',[]))
+n2=len(r2.json().get('result',[]))
+if n1!=n2:
+    print(f'[DEFECT: STATE_LOGIC_VIOLATION] score_threshold=0.0 changed results: {n1} vs {n2}')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromBehavior,
+    }
+}
+
+fn qd_oracle_points_count() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_points_count".into(),
+        check_type: crate::contract::schema::CheckType::CountConsistency,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_cnt_'+uuid.uuid4().hex[:8]
+requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+for i in range(10):
+    requests.put(f'{BASE}/collections/{c}/points',json={"points":[{"id":i,"vector":[0.1*i,0.2*i,0.3*i,0.4*i]}]})
+time.sleep(1)
+r=requests.get(f'{BASE}/collections/{c}')
+count=r.json().get('result',{}).get('points_count',-1)
+if count!=10:
+    print(f'[DEFECT: STATE_LOGIC_VIOLATION] Insert 10 points but count={count}')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromState,
+    }
+}
+
+fn qd_oracle_search_empty() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_search_empty".into(),
+        check_type: crate::contract::schema::CheckType::ExistenceCheck,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_empty_'+uuid.uuid4().hex[:8]
+requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+r=requests.post(f'{BASE}/collections/{c}/points/search',json={"vector":[0.5,0.5,0.5,0.5],"limit":10})
+if r.status_code!=200:
+    print(f'[DEFECT: RUNTIME_FAILURE] Search on empty collection failed: {r.status_code}')
+    sys.exit(1)
+pts=r.json().get('result',[])
+if len(pts)!=0:
+    print(f'[DEFECT: STATE_LOGIC_VIOLATION] Empty collection search returned {len(pts)} results')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromBehavior,
+    }
+}
+
+fn qd_oracle_create_info() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_create_info".into(),
+        check_type: crate::contract::schema::CheckType::ExistenceCheck,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_ci_'+uuid.uuid4().hex[:8]
+r=requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+if r.status_code not in (200,201):
+    print(f'[DEFECT: RUNTIME_FAILURE] Collection creation failed: {r.status_code}')
+    sys.exit(1)
+r2=requests.get(f'{BASE}/collections/{c}')
+if r2.status_code!=200:
+    print(f'[DEFECT: RUNTIME_FAILURE] Immediate info after create failed: {r2.status_code}')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromState,
+    }
+}
+
+fn qd_oracle_delete_count() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_delete_count".into(),
+        check_type: crate::contract::schema::CheckType::CountConsistency,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_del_'+uuid.uuid4().hex[:8]
+requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+for i in range(10):
+    requests.put(f'{BASE}/collections/{c}/points',json={"points":[{"id":i,"vector":[0.1*i,0.2*i,0.3*i,0.4*i]}]})
+time.sleep(0.5)
+requests.post(f'{BASE}/collections/{c}/points/delete',json={"points":[0,1,2]})
+time.sleep(0.5)
+r=requests.get(f'{BASE}/collections/{c}')
+count=r.json().get('result',{}).get('points_count',-1)
+if count!=7:
+    print(f'[DEFECT: STATE_LOGIC_VIOLATION] Insert 10, delete 3, count={count} (expected 7)')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromState,
+    }
+}
+
+fn qd_oracle_pagination() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_pagination".into(),
+        check_type: crate::contract::schema::CheckType::ValueRange,
+        script: r#"import requests,uuid,time,sys,random
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_page_'+uuid.uuid4().hex[:8]
+random.seed(123)
+requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+for i in range(20):
+    requests.put(f'{BASE}/collections/{c}/points',json={"points":[{"id":i,"vector":[random.random(),random.random(),random.random(),random.random()]}]})
+time.sleep(1)
+r1=requests.post(f'{BASE}/collections/{c}/points/search',json={"vector":[0.5,0.5,0.5,0.5],"limit":5,"offset":0})
+r2=requests.post(f'{BASE}/collections/{c}/points/search',json={"vector":[0.5,0.5,0.5,0.5],"limit":5,"offset":5})
+ids1={p['id'] for p in r1.json().get('result',[])}
+ids2={p['id'] for p in r2.json().get('result',[])}
+overlap=ids1&ids2
+if overlap:
+    print(f'[DEFECT: STATE_LOGIC_VIOLATION] Pagination overlap: {overlap} in both pages')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromBehavior,
+    }
+}
+
+fn qd_oracle_upsert_duplicate() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_upsert_duplicate".into(),
+        check_type: crate::contract::schema::CheckType::CountConsistency,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_dup_'+uuid.uuid4().hex[:8]
+requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+for i in range(3):
+    requests.put(f'{BASE}/collections/{c}/points',json={"points":[{"id":1,"vector":[0.1*i,0.2*i,0.3*i,0.4*i]}]})
+time.sleep(0.5)
+r=requests.get(f'{BASE}/collections/{c}')
+count=r.json().get('result',{}).get('points_count',-1)
+if count!=1:
+    print(f'[DEFECT: STATE_LOGIC_VIOLATION] Upsert same ID 3 times, count={count} (expected 1)')
+    sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromState,
+    }
+}
+
+fn qd_oracle_async_data_loss() -> InvariantCheck {
+    InvariantCheck {
+        name: "qd_async_data_loss".into(),
+        check_type: crate::contract::schema::CheckType::ValueRange,
+        script: r#"import requests,uuid,time,sys
+BASE='{{TESTVDB_DB_URL}}'
+c='oracle_async_'+uuid.uuid4().hex[:8]
+requests.put(f'{BASE}/collections/{c}',json={"vectors":{"size":4,"distance":"Cosine"}})
+time.sleep(0.3)
+r=requests.put(f'{BASE}/collections/{c}/points?wait=false',json={"points":[{"id":1,"vector":[0.1,0.2,0.3]}]})
+if r.status_code==200 and r.json().get('status')=='ok':
+    time.sleep(0.5)
+    r2=requests.post(f'{BASE}/collections/{c}/points',json={"ids":[1],"with_vector":True})
+    pts=r2.json().get('result',[])
+    if len(pts)==0:
+        print('[DEFECT: POOR_DIAGNOSTICS] Async upsert with wrong dim returned 200 but point silently discarded')
+        sys.exit(1)
+requests.delete(f'{BASE}/collections/{c}')
+sys.exit(0)
+"#.into(),
+        source: crate::agent::oracle::InvariantSource::DerivedFromAssertion,
     }
 }

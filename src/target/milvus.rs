@@ -175,6 +175,10 @@ impl TargetPlugin for MilvusPlugin {
         nets.push(SafetyNet { name: "resource_long_collection_name".into(), script: milvus_advanced::resource_long_collection_name(), redundant_with_mutation: false });
         nets.push(SafetyNet { name: "resource_zero_dimension".into(), script: milvus_advanced::resource_zero_dimension(), redundant_with_mutation: false });
 
+        nets.push(SafetyNet { name: "semantic_recall".into(), script: milvus_semantic_recall_probe(), redundant_with_mutation: true });
+        nets.push(SafetyNet { name: "semantic_filter_precision".into(), script: milvus_semantic_filter_precision_probe(), redundant_with_mutation: true });
+        nets.push(SafetyNet { name: "semantic_threshold_accuracy".into(), script: milvus_semantic_threshold_accuracy_probe(), redundant_with_mutation: true });
+
         nets.extend(milvus_advanced::milvus_param_combination_probes());
 
         nets
@@ -434,7 +438,7 @@ mod tests {
     fn test_milvus_safety_nets_count() {
         let plugin = MilvusPlugin;
         let nets = plugin.safety_nets();
-        assert_eq!(nets.len(), 205);
+        assert_eq!(nets.len(), 208);
     }
 
     #[test]
@@ -453,4 +457,75 @@ mod tests {
         let checks = plugin.derive_oracle_checks(&contract);
         assert!(!checks.is_empty());
     }
+}
+
+fn milvus_semantic_recall_probe() -> String {
+    r#"
+import requests, sys, uuid, time
+BASE = '{{TESTVDB_DB_URL}}'
+HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+c = 'sem_recall_' + uuid.uuid4().hex[:8]
+r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
+assert r.json().get('code')==0, f"Create failed: {r.json()}"
+time.sleep(1)
+target_vec = [0.5, 0.5, 0.5, 0.5]
+target_id = 42
+requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":[{"id":target_id,"vector":target_vec,"tag":"target"}]})
+for i in range(19):
+    requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":[{"id":100+i,"vector":[0.01*i,0.02*i,0.03*i,0.04*i],"tag":"noise"}]})
+time.sleep(1)
+r = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json={"collectionName":c,"data":[target_vec],"limit":5})
+results = r.json().get('data',[])
+found = any(d.get('id')==target_id for d in results)
+if not found:
+    print(f"[DEFECT: STATE_VIOLATION] Semantic recall failure: target id={target_id} not in top-5 results")
+    sys.exit(1)
+print("Semantic recall OK: target found in top-5")
+requests.post(f'{BASE}/v2/vectordb/collections/drop', headers=HEADERS, json={"collectionName":c})
+"#.to_string()
+}
+fn milvus_semantic_filter_precision_probe() -> String {
+    r#"
+import requests, sys, uuid, time
+BASE = '{{TESTVDB_DB_URL}}'
+HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+c = 'sem_filt_' + uuid.uuid4().hex[:8]
+r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
+assert r.json().get('code')==0
+time.sleep(1)
+for i in range(5):
+    requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":[{"id":i,"vector":[0.1*i,0.2*i,0.3*i,0.4*i],"color":"red" if i%2==0 else "blue"}]})
+time.sleep(1)
+r = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json={"collectionName":c,"data":[[0.5,0.5,0.5,0.5]],"limit":10,"filter":"color == \\"red\\""})
+results = r.json().get('data',[])
+wrong = [d for d in results if d.get('color')!='red']
+if wrong:
+    print(f"[DEFECT: STATE_VIOLATION] Filter precision failure: {len(wrong)} non-red items returned for color==red filter")
+    sys.exit(1)
+print(f"Filter precision OK: all {len(results)} results have color=red")
+requests.post(f'{BASE}/v2/vectordb/collections/drop', headers=HEADERS, json={"collectionName":c})
+"#.to_string()
+}
+fn milvus_semantic_threshold_accuracy_probe() -> String {
+    r#"
+import requests, sys, uuid, time
+BASE = '{{TESTVDB_DB_URL}}'
+HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+c = 'sem_thresh_' + uuid.uuid4().hex[:8]
+r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"L2","indexType":"AUTOINDEX"}]})
+assert r.json().get('code')==0
+time.sleep(1)
+for i in range(20):
+    requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":[{"id":i,"vector":[0.1*i,0.2*i,0.3*i,0.4*i]}]})
+time.sleep(1)
+r = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json={"collectionName":c,"data":[[0.5,0.5,0.5,0.5]],"limit":10})
+results = r.json().get('data',[])
+if results:
+    distances = [d.get('distance',999) for d in results]
+    if sorted(distances) != distances:
+        print(f"[DEFECT: STATE_VIOLATION] L2 distance ordering not ascending: {distances}")
+        sys.exit(1)
+print(f"Threshold/ordering OK: {len(results)} results in ascending L2 distance")
+requests.post(f'{BASE}/v2/vectordb/collections/drop', headers=HEADERS, json={"collectionName":c})
+"#.to_string()
 }

@@ -114,6 +114,17 @@ impl ExplorationState {
         self.tested_param_names().len()
     }
 
+    pub fn record_assertion(&mut self, key: &str) {
+        if !self.tested_param_names().contains(key) {
+            self.tested_params.push(ParamResult {
+                param_name: key.to_string(),
+                endpoint: "sequence_tool".to_string(),
+                result: TestResult::Pass,
+                defect_type: None,
+            });
+        }
+    }
+
     pub fn to_prompt_json(&self) -> String {
         serde_json::to_string_pretty(self).unwrap_or_else(|_| "{}".to_string())
     }

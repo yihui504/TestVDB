@@ -20,7 +20,7 @@ pub async fn execute_test_script(
     db_env: &[(String, String)],
     db_command: &[String],
 ) -> Result<(String, Sandbox, String)> {
-    info!("Agent invoked execute_test_script. Creating fresh sandbox...");
+    info!("Creating fresh sandbox for script execution...");
     let pip_refs: Vec<&str> = pip_packages.iter().map(|s| s.as_str()).collect();
     let sandbox = Sandbox::create_network_and_containers(db_image, &pip_refs, db_port, sidecars, db_env, db_command).await?;
     let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), db_port);
@@ -86,48 +86,194 @@ pub fn get_execute_test_script_tool() -> Tool {
     }
 }
 
-pub fn get_execute_api_sequence_tool() -> Tool {
+pub fn get_execute_stateful_test_tool() -> Tool {
     Tool {
         r#type: "function".to_string(),
         function: Function {
-            name: "execute_api_sequence".to_string(),
-            description: Some("Executes a multi-step API sequence test. You describe each step as an endpoint + key parameters + expected status. The tool auto-generates and runs a Python script that executes the sequence and checks state consistency between steps.".to_string()),
+            name: "execute_stateful_test".to_string(),
+            description: Some("STATEFUL MODEL TESTING. Tests multi-step API sequences with automatic state verification. Unlike execute_api_sequence (which only checks response codes), this tool verifies that the actual database state matches the expected model state after EACH operation. Use this to find STATE_LOGIC_VIOLATION bugs that deterministic generators cannot detect.".to_string()),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "sequence_name": {
+                    "test_name": {
                         "type": "string",
-                        "description": "A descriptive name for this sequence test (e.g., 'create_drop_create_dim_check')."
+                        "description": "A descriptive name for this stateful test."
+                    },
+                    "pattern_category": {
+                        "type": "string",
+                        "enum": ["count_consistency", "data_visibility", "state_residual", "idempotency", "search_correctness", "partition_isolation", "alias_state", "index_state"],
+                        "description": "The state interaction pattern being tested."
                     },
                     "steps": {
                         "type": "array",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "endpoint": {
+                                "action": {
                                     "type": "string",
                                     "description": "The API endpoint path (e.g., '/v2/vectordb/collections/create')."
                                 },
                                 "params": {
                                     "type": "object",
-                                    "description": "Key parameters for this step (e.g., {\"collectionName\": \"test_col\", \"dimension\": 8})."
+                                    "description": "Request parameters for this step."
                                 },
-                                "expect": {
-                                    "type": "string",
-                                    "enum": ["success", "error", "any"],
-                                    "description": "Expected result: 'success' (code 200), 'error' (non-200 or error code), or 'any'."
+                                "expect_success": {
+                                    "type": "boolean",
+                                    "description": "Whether this step should succeed."
+                                },
+                                "state_check": {
+                                    "type": "object",
+                                    "properties": {
+                                        "method": {
+                                            "type": "string",
+                                            "enum": ["describe_collection", "query_entities", "search_results", "list_collections", "get_index"],
+                                            "description": "The method to verify state after this step."
+                                        },
+                                        "expected": {
+                                            "type": "object",
+                                            "description": "Expected state values (e.g., {\"rowCount\": 100}, {\"exists\": false}, {\"resultCount\": 5}, {\"distancesAscending\": true})."
+                                        }
+                                    },
+                                    "required": ["method", "expected"],
+                                    "description": "REQUIRED. State verification to perform after this step. This is what makes stateful testing unique — without it, the tool degrades to a simple sequence test."
                                 }
                             },
-                            "required": ["endpoint", "params", "expect"]
+                            "required": ["action", "params", "expect_success", "state_check"]
                         },
-                        "description": "Ordered list of API steps to execute."
+                        "description": "Ordered list of steps to execute."
                     },
                     "invariant": {
                         "type": "string",
-                        "description": "The state invariant to check after all steps (e.g., 'dimension should equal original value after create-drop-create')."
+                        "description": "The final invariant to verify after all steps."
                     }
                 },
-                "required": ["sequence_name", "steps", "invariant"]
+                "required": ["test_name", "pattern_category", "steps"]
+            }),
+        },
+    }
+}
+
+pub fn get_execute_concurrent_test_tool() -> Tool {
+    Tool {
+        r#type: "function".to_string(),
+        function: Function {
+            name: "execute_concurrent_test".to_string(),
+            description: Some("CONCURRENT RACE CONDITION TESTING. Tests multiple threads performing operations simultaneously against the same database. Finds race conditions like: concurrent inserts causing rowCount mismatch, concurrent upserts on same ID creating duplicates, concurrent delete+query returning stale data. Uses Python threading within a single sandbox.".to_string()),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "test_name": {
+                        "type": "string",
+                        "description": "Descriptive name (e.g., 'concurrent_insert_rowcount')"
+                    },
+                    "pattern_category": {
+                        "type": "string",
+                        "enum": ["concurrent_insert_count", "concurrent_upsert_duplicate", "concurrent_delete_stale", "concurrent_create_conflict", "concurrent_mixed_ops"],
+                        "description": "The concurrency pattern being tested"
+                    },
+                    "setup_steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "description": "API endpoint"},
+                                "params": {"type": "object", "description": "Request parameters"},
+                                "expect_success": {"type": "boolean"}
+                            },
+                            "required": ["action", "params", "expect_success"]
+                        },
+                        "description": "Setup steps to run BEFORE concurrent operations (e.g., create collection, insert initial data)"
+                    },
+                    "concurrent_actions": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "Label for this thread (e.g., 'inserter_1')"},
+                                "action": {"type": "string", "description": "API endpoint"},
+                                "params": {"type": "object", "description": "Request parameters"},
+                                "repeat": {"type": "integer", "description": "Number of times to repeat this action in the thread (default: 1)"}
+                            },
+                            "required": ["label", "action", "params"]
+                        },
+                        "description": "Actions to execute concurrently in separate threads. All threads start simultaneously."
+                    },
+                    "thread_count": {
+                        "type": "integer",
+                        "description": "Number of concurrent threads (default: number of concurrent_actions)"
+                    },
+                    "state_check": {
+                        "type": "object",
+                        "properties": {
+                            "method": {
+                                "type": "string",
+                                "enum": ["describe_collection", "query_entities", "search_results", "list_collections"],
+                                "description": "Method to verify state after all threads complete"
+                            },
+                            "expected": {
+                                "type": "object",
+                                "description": "Expected state values after concurrent operations complete"
+                            }
+                        },
+                        "required": ["method", "expected"],
+                        "description": "REQUIRED. State verification after all concurrent threads complete."
+                    }
+                },
+                "required": ["test_name", "pattern_category", "setup_steps", "concurrent_actions", "state_check"]
+            }),
+        },
+    }
+}
+
+pub fn get_execute_timing_test_tool() -> Tool {
+    Tool {
+        r#type: "function".to_string(),
+        function: Function {
+            name: "execute_timing_test".to_string(),
+            description: Some("TIMING-SENSITIVE OPERATION TESTING. Tests operations that depend on timing, such as: flush→immediate search (data may not be visible), load→immediate search (may fail), delete→immediate query (may return stale data). Finds bugs where async operations report success but results are not immediately available.".to_string()),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "test_name": {
+                        "type": "string",
+                        "description": "Descriptive name (e.g., 'flush_then_immediate_search')"
+                    },
+                    "pattern_category": {
+                        "type": "string",
+                        "enum": ["flush_visibility", "load_search_failure", "delete_stale_read", "index_immediate_use", "compact_immediate_effect"],
+                        "description": "The timing pattern being tested"
+                    },
+                    "steps": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {"type": "string", "description": "API endpoint"},
+                                "params": {"type": "object", "description": "Request parameters"},
+                                "expect_success": {"type": "boolean", "description": "Whether this step should succeed"},
+                                "immediate": {"type": "boolean", "description": "If true, NO delay after this step (vs 0.5s default). Set on PREPARATORY steps (flush, load, delete) to test if the NEXT verification step works immediately. Default: false."},
+                                "state_check": {
+                                    "type": "object",
+                                    "properties": {
+                                        "method": {
+                                            "type": "string",
+                                            "enum": ["describe_collection", "query_entities", "search_results", "list_collections", "get_index"]
+                                        },
+                                        "expected": {"type": "object"}
+                                    },
+                                    "required": ["method", "expected"]
+                                }
+                            },
+                            "required": ["action", "params", "expect_success", "state_check"]
+                        },
+                        "description": "Ordered list of steps. Steps with immediate=true will have NO sleep before the next step."
+                    },
+                    "invariant": {
+                        "type": "string",
+                        "description": "Final invariant to verify after all steps"
+                    }
+                },
+                "required": ["test_name", "pattern_category", "steps"]
             }),
         },
     }
@@ -138,7 +284,7 @@ pub fn get_compare_endpoints_tool() -> Tool {
         r#type: "function".to_string(),
         function: Function {
             name: "compare_endpoints".to_string(),
-            description: Some("Compares two semantically equivalent operations to find behavioral inconsistencies. You describe two operations that SHOULD behave the same way, and the tool executes both and compares results.".to_string()),
+            description: Some("RECOMMENDED FOR TURNS 3-4. Compares two semantically equivalent operations to find behavioral inconsistencies. Just describe two operations that SHOULD behave the same, and the tool runs both and compares. Example: operation_a={endpoint:'/v2/vectordb/entities/delete', params:{collectionName:'test',filter:'id in [1]'}}, operation_b={endpoint:'/v2/vectordb/entities/delete', params:{collectionName:'test',expr:'id in [1]'}}".to_string()),
             parameters: json!({
                 "type": "object",
                 "properties": {

@@ -167,7 +167,8 @@ enum MetamorphicScriptKind {
 fn build_metamorphic_script(style: TargetStyle, kind: MetamorphicScriptKind) -> String {
     match style {
         TargetStyle::Milvus => build_milvus_metamorphic_script(kind),
-        TargetStyle::Qdrant => build_qdrant_metamorphic_script(kind),
+        TargetStyle::Qdrant | TargetStyle::Weaviate => build_qdrant_metamorphic_script(kind),
+        TargetStyle::PgVector => String::new(),
     }
 }
 
@@ -182,7 +183,8 @@ c = 'meta_' + uuid.uuid4().hex[:8]
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
 time.sleep(1)"#;
 
-    let insert_20 = r#"data = [{"id":i,"vector":[0.1*i,0.2*i,0.3*i,0.4*i]} for i in range(20)]
+    // Perturb vectors to break collinearity and avoid tie-breaking false positives (all Cosine=1.0).
+    let insert_20 = r#"data = [{"id":i,"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i]} for i in range(20)]
 r = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":data})
 if r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)
 time.sleep(1)"#;
@@ -190,6 +192,12 @@ time.sleep(1)"#;
     let load = r#"r = requests.post(f'{BASE}/v2/vectordb/collections/load', headers=HEADERS, json={"collectionName":c})
 if r.json().get('code') != 0: print(f'load failed: {r.text}'); sys.exit(0)
 time.sleep(2)"#;
+
+    // Perturbed data for ordering tests — breaks collinearity to avoid tie-breaking false positives.
+    let insert_perturbed_10_milvus = r#"data = [{"id":i,"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i]} for i in range(1,11)]
+r = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":data})
+if r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)
+time.sleep(1)"#;
 
     match kind {
         MetamorphicScriptKind::NprobeMonotonicity => format!(
@@ -285,10 +293,7 @@ time.sleep(2)"#;
              r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{\"collectionName\":c,\"schema\":{{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True}},{{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{{\"dim\":4}}}}]}},\"indexParams\":[{{\"fieldName\":\"vector\",\"metricType\":\"L2\",\"indexType\":\"FLAT\"}}]}})\n\
              if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)\n\
              time.sleep(1)\n\
-             data = [{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(1,11)]\n\
-             r = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c,\"data\":data}})\n\
-             if r.json().get('code') != 0: print(f'insert failed: {{r.text}}'); sys.exit(0)\n\
-             time.sleep(1)\n\
+             {insert_perturbed_10_milvus}\n\
              {load}\n\
              r = requests.post(f'{{BASE}}/v2/vectordb/entities/search', headers=HEADERS, json={{\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":10}})\n\
              if r.json().get('code') != 0: print(f'search failed: {{r.text}}'); sys.exit(0)\n\
@@ -296,7 +301,7 @@ time.sleep(2)"#;
              if not dists: print('no results'); sys.exit(0)\n\
              if any(dists[i] > dists[i+1] for i in range(len(dists)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] L2 not ascending: dists={{dists}}'); sys.exit(1)\n\
              print(f'FLAT L2 ordering verified: dists={{dists}}'); sys.exit(0)",
-            setup=setup, load=load,
+            setup=setup, load=load, insert_perturbed_10_milvus=insert_perturbed_10_milvus,
         ),
 
         MetamorphicScriptKind::FlatCosineOrdering => format!(
@@ -304,10 +309,7 @@ time.sleep(2)"#;
              r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{\"collectionName\":c,\"schema\":{{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True}},{{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{{\"dim\":4}}}}]}},\"indexParams\":[{{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"FLAT\"}}]}})\n\
              if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)\n\
              time.sleep(1)\n\
-             data = [{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(1,11)]\n\
-             r = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c,\"data\":data}})\n\
-             if r.json().get('code') != 0: print(f'insert failed: {{r.text}}'); sys.exit(0)\n\
-             time.sleep(1)\n\
+             {insert_perturbed_10_milvus}\n\
              {load}\n\
              r = requests.post(f'{{BASE}}/v2/vectordb/entities/search', headers=HEADERS, json={{\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":10}})\n\
              if r.json().get('code') != 0: print(f'search failed: {{r.text}}'); sys.exit(0)\n\
@@ -315,7 +317,7 @@ time.sleep(2)"#;
              if not dists: print('no results'); sys.exit(0)\n\
              if any(dists[i] < dists[i+1] for i in range(len(dists)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] COSINE not descending: dists={{dists}}'); sys.exit(1)\n\
              print(f'FLAT COSINE ordering verified: dists={{dists}}'); sys.exit(0)",
-            setup=setup, load=load,
+            setup=setup, load=load, insert_perturbed_10_milvus=insert_perturbed_10_milvus,
         ),
     }
 }
@@ -330,10 +332,15 @@ c = 'meta_' + uuid.uuid4().hex[:8]
 if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
 time.sleep(1)"#;
 
+    // Perturb vectors to break collinearity — avoids tie-breaking false positives (Cosine=1.0 for all).
+    let insert_perturbed = r#"r = requests.put(f'{BASE}/collections/{c}/points', json={"points":[{"id":i,"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i]} for i in range(20)]})"#;
+    let insert_perturbed_50 = r#"r = requests.put(f'{BASE}/collections/{c}/points', json={"points":[{"id":i,"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i]} for i in range(50)]})"#;
+    let insert_perturbed_10 = r#"r = requests.put(f'{BASE}/collections/{c}/points', json={"points":[{"id":i,"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i]} for i in range(1,11)]})"#;
+
     match kind {
         MetamorphicScriptKind::QueryConsistency => format!(
             "{setup}{create}\n\
-             r = requests.put(f'{{BASE}}/collections/{{c}}/points', json={{\"points\":[{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(20)]}})\n\
+             {insert_perturbed}\n\
              time.sleep(1)\n\
              r1 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":5}})\n\
              r2 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":5}})\n\
@@ -341,12 +348,12 @@ time.sleep(1)"#;
              res2 = [(p.get('id'),p.get('score')) for p in r2.json().get('result',[])]\n\
              if res1 != res2: print(f'[DEFECT: METAMORPHIC_VIOLATION] query consistency: {{res1}} vs {{res2}}'); sys.exit(1)\n\
              else: print(f'query consistency verified'); sys.exit(0)",
-            setup=setup, create=create,
+            setup=setup, create=create, insert_perturbed=insert_perturbed,
         ),
 
         MetamorphicScriptKind::LimitMonotonicity => format!(
             "{setup}{create}\n\
-             r = requests.put(f'{{BASE}}/collections/{{c}}/points', json={{\"points\":[{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(20)]}})\n\
+             {insert_perturbed}\n\
              time.sleep(1)\n\
              r1 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":3}})\n\
              r2 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10}})\n\
@@ -354,12 +361,12 @@ time.sleep(1)"#;
              top1_b = r2.json().get('result',[{{}}])[0].get('id') if r2.json().get('result') else None\n\
              if top1_a != top1_b: print(f'[DEFECT: METAMORPHIC_VIOLATION] limit top-1 mismatch: {{top1_a}} vs {{top1_b}}'); sys.exit(1)\n\
              else: print(f'limit monotonicity verified'); sys.exit(0)",
-            setup=setup, create=create,
+            setup=setup, create=create, insert_perturbed=insert_perturbed,
         ),
 
         MetamorphicScriptKind::NprobeMonotonicity => format!(
             "{setup}{create}\n\
-             r = requests.put(f'{{BASE}}/collections/{{c}}/points', json={{\"points\":[{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(50)]}})\n\
+             {insert_perturbed_50}\n\
              time.sleep(1)\n\
              r1 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10,\"params\":{{\"exact\":true}}}})\n\
              r2 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10,\"params\":{{\"exact\":false}}}})\n\
@@ -367,12 +374,12 @@ time.sleep(1)"#;
              top1_b = r2.json().get('result',[{{}}])[0].get('id') if r2.json().get('result') else None\n\
              if top1_a != top1_b: print(f'[DEFECT: METAMORPHIC_VIOLATION] exact vs approx top-1 mismatch: exact id={{top1_a}} vs approx id={{top1_b}}'); sys.exit(1)\n\
              else: print(f'nprobe monotonicity verified: top-1 id={{top1_a}} consistent'); sys.exit(0)",
-            setup=setup, create=create,
+            setup=setup, create=create, insert_perturbed_50=insert_perturbed_50,
         ),
 
         MetamorphicScriptKind::EfSearchMonotonicity => format!(
             "{setup}{create}\n\
-             r = requests.put(f'{{BASE}}/collections/{{c}}/points', json={{\"points\":[{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(50)]}})\n\
+             {insert_perturbed_50}\n\
              time.sleep(1)\n\
              r1 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10,\"params\":{{\"hnsw_ef\":8}}}})\n\
              r2 = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10,\"params\":{{\"hnsw_ef\":256}}}})\n\
@@ -380,7 +387,7 @@ time.sleep(1)"#;
              top1_b = r2.json().get('result',[{{}}])[0].get('id') if r2.json().get('result') else None\n\
              if top1_a != top1_b: print(f'[DEFECT: METAMORPHIC_VIOLATION] hnsw_ef top-1 mismatch: ef=8 id={{top1_a}} vs ef=256 id={{top1_b}}'); sys.exit(1)\n\
              else: print(f'ef_search monotonicity verified: top-1 id={{top1_a}} consistent'); sys.exit(0)",
-            setup=setup, create=create,
+            setup=setup, create=create, insert_perturbed_50=insert_perturbed_50,
         ),
 
         MetamorphicScriptKind::InsertMonotonicity => format!(
@@ -403,26 +410,26 @@ time.sleep(1)"#;
              r = requests.put(f'{{BASE}}/collections/{{c}}', json={{\"vectors\":{{\"size\":4,\"distance\":\"Euclid\"}}}})\n\
              if r.status_code not in (200, 201): print(f'setup failed: {{r.status_code}}'); sys.exit(0)\n\
              time.sleep(1)\n\
-             r = requests.put(f'{{BASE}}/collections/{{c}}/points', json={{\"points\":[{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(1,11)]}})\n\
+             {insert_perturbed_10}\n\
              time.sleep(1)\n\
              r = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10}})\n\
              scores = [p.get('score') for p in r.json().get('result',[])]\n\
              if not scores: print('no results'); sys.exit(0)\n\
              if any(scores[i] < scores[i+1] for i in range(len(scores)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] L2 not descending (score): scores={{scores}}'); sys.exit(1)\n\
              print(f'FLAT L2 ordering verified: scores={{scores}}'); sys.exit(0)",
-            setup=setup,
+            setup=setup, insert_perturbed_10=insert_perturbed_10,
         ),
 
         MetamorphicScriptKind::FlatCosineOrdering => format!(
             "{setup}{create}\n\
-             r = requests.put(f'{{BASE}}/collections/{{c}}/points', json={{\"points\":[{{\"id\":i,\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i]}} for i in range(1,11)]}})\n\
+             {insert_perturbed_10}\n\
              time.sleep(1)\n\
              r = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10}})\n\
              scores = [p.get('score') for p in r.json().get('result',[])]\n\
              if not scores: print('no results'); sys.exit(0)\n\
              if any(scores[i] < scores[i+1] for i in range(len(scores)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] COSINE not descending: scores={{scores}}'); sys.exit(1)\n\
              print(f'FLAT COSINE ordering verified: scores={{scores}}'); sys.exit(0)",
-            setup=setup, create=create,
+            setup=setup, create=create, insert_perturbed_10=insert_perturbed_10,
         ),
     }
 }

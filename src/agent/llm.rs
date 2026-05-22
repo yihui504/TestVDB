@@ -148,34 +148,46 @@ impl DeepSeekClient {
             }),
             tools: None,
             tool_choice: None,
-            temperature: 0.1, // Low temperature for deterministic structure
+            temperature: 0.1,
         };
 
-        let response = self
-            .client
-            .post(DEEPSEEK_API_URL)
-            .bearer_auth(&self.api_key)
-            .json(&req_body)
-            .send()
-            .await
-            .context("Failed to send request to DeepSeek API")?;
+        let mut last_err = None;
+        for attempt in 0..3 {
+            let response = self
+                .client
+                .post(DEEPSEEK_API_URL)
+                .bearer_auth(&self.api_key)
+                .json(&req_body)
+                .send()
+                .await
+                .context("Failed to send request to DeepSeek API")?;
 
-        if !response.status().is_success() {
+            if response.status().is_success() {
+                let chat_resp: ChatResponse = response
+                    .json()
+                    .await
+                    .context("Failed to deserialize DeepSeek response")?;
+
+                if let Some(choice) = chat_resp.choices.first() {
+                    return Ok(choice.message.content.clone().unwrap_or_default());
+                } else {
+                    bail!("No choices returned from DeepSeek API")
+                }
+            }
+
             let status = response.status();
             let err_text = response.text().await.unwrap_or_default();
-            bail!("DeepSeek API error ({}): {}", status, err_text);
-        }
+            last_err = Some(format!("DeepSeek API error ({}): {}", status, err_text));
 
-        let chat_resp: ChatResponse = response
-            .json()
-            .await
-            .context("Failed to deserialize DeepSeek response")?;
-
-        if let Some(choice) = chat_resp.choices.first() {
-            Ok(choice.message.content.clone().unwrap_or_default())
-        } else {
-            bail!("No choices returned from DeepSeek API")
+            if status.as_u16() == 503 && attempt < 2 {
+                let delay = std::time::Duration::from_secs(10 * (attempt as u64 + 1));
+                tracing::warn!("DeepSeek 503, retrying in {:?} (attempt {}/3)...", delay, attempt + 1);
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            bail!("{}", last_err.unwrap());
         }
+        bail!("{}", last_err.unwrap())
     }
 
     /// Sends a chat completion request to DeepSeek API with tools.
@@ -186,34 +198,46 @@ impl DeepSeekClient {
             response_format: None,
             tools: Some(tools),
             tool_choice: Some(ToolChoice::String("auto".to_string())),
-            temperature: 0.7, // Higher temperature for Agentic Exploration diversity
+            temperature: 0.7,
         };
 
-        let response = self
-            .client
-            .post(DEEPSEEK_API_URL)
-            .bearer_auth(&self.api_key)
-            .json(&req_body)
-            .send()
-            .await
-            .context("Failed to send request to DeepSeek API")?;
+        let mut last_err = None;
+        for attempt in 0..3 {
+            let response = self
+                .client
+                .post(DEEPSEEK_API_URL)
+                .bearer_auth(&self.api_key)
+                .json(&req_body)
+                .send()
+                .await
+                .context("Failed to send request to DeepSeek API")?;
 
-        if !response.status().is_success() {
+            if response.status().is_success() {
+                let chat_resp: ChatResponse = response
+                    .json()
+                    .await
+                    .context("Failed to deserialize DeepSeek response")?;
+
+                if let Some(choice) = chat_resp.choices.first() {
+                    return Ok(choice.message.clone());
+                } else {
+                    bail!("No choices returned from DeepSeek API")
+                }
+            }
+
             let status = response.status();
             let err_text = response.text().await.unwrap_or_default();
-            bail!("DeepSeek API error ({}): {}", status, err_text);
-        }
+            last_err = Some(format!("DeepSeek API error ({}): {}", status, err_text));
 
-        let chat_resp: ChatResponse = response
-            .json()
-            .await
-            .context("Failed to deserialize DeepSeek response")?;
-
-        if let Some(choice) = chat_resp.choices.first() {
-            Ok(choice.message.clone())
-        } else {
-            bail!("No choices returned from DeepSeek API")
+            if status.as_u16() == 503 && attempt < 2 {
+                let delay = std::time::Duration::from_secs(10 * (attempt as u64 + 1));
+                tracing::warn!("DeepSeek 503, retrying in {:?} (attempt {}/3)...", delay, attempt + 1);
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            bail!("{}", last_err.unwrap());
         }
+        bail!("{}", last_err.unwrap())
     }
 }
 

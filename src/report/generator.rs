@@ -80,6 +80,7 @@ pub struct BugReport {
     pub review_scope: String,
     pub root_cause_analysis: String,
     pub improvement_suggestions: String,
+    pub github_issue_body: Option<String>,
     pub submission_grade_review: SubmissionGradeReview,
 }
 
@@ -332,6 +333,7 @@ impl BugReport {
             review_scope,
             root_cause_analysis,
             improvement_suggestions,
+            github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::NeedsRewrite,
                 summary: String::new(),
@@ -511,10 +513,16 @@ impl BugReport {
             soft_gates,
             direct_fail_reasons,
             self.root_cause_analysis,
-            self.improvement_suggestions
+            self.improvement_suggestions,
         );
 
-        fs::write(path, markdown).context("Failed to write Markdown bug report to file")?;
+        if let Some(ref issue_body) = self.github_issue_body {
+            let full_markdown = format!("{}\n\n## GitHub Issue Body\n{}\n", markdown, issue_body);
+            fs::write(path, full_markdown).context("Failed to write Markdown bug report to file")?;
+        } else {
+            fs::write(path, markdown).context("Failed to write Markdown bug report to file")?;
+        }
+
         Ok(())
     }
 
@@ -610,6 +618,7 @@ mod tests {
             review_scope: "Independent replay covered the same narrowed request.".to_string(),
             root_cause_analysis: "Missing backend validation".to_string(),
             improvement_suggestions: "Add a check in the API gateway".to_string(),
+            github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::SubmissionGrade,
                 summary: "All hard gates are present.".to_string(),
@@ -649,6 +658,7 @@ mod tests {
             review_scope: "Independent replay covered the same narrowed request.".to_string(),
             root_cause_analysis: "Missing backend validation".to_string(),
             improvement_suggestions: "Add a check in the API gateway".to_string(),
+            github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::SubmissionGrade,
                 summary: "All hard gates are present.".to_string(),
@@ -695,6 +705,7 @@ mod tests {
             review_scope: "Independent replay covered the same narrowed request.".to_string(),
             root_cause_analysis: "Bug is here".to_string(),
             improvement_suggestions: "Fix it".to_string(),
+            github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::SubmissionGrade,
                 summary: "All hard gates are present.".to_string(),
@@ -796,6 +807,7 @@ mod tests {
             review_scope: BugReport::default_review_scope(),
             root_cause_analysis: "The error omits offset.".to_string(),
             improvement_suggestions: "Mention offset in the error.".to_string(),
+            github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::NeedsRewrite,
                 summary: String::new(),

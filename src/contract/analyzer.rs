@@ -2,6 +2,7 @@ use crate::contract::store::{AnnotatedRangeConstraint, AnnotatedTypeConstraint, 
 use crate::contract::schema::{RangeConstraint, TypeConstraint};
 use crate::contract::store::{Confidence, ConstraintSource};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchDefect {
@@ -14,6 +15,34 @@ pub struct BatchDefect {
     pub endpoint: Option<String>,
     pub param_name: Option<String>,
 }
+
+/// A clustered root cause: multiple defect instances collapsed into one actionable finding.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DefectCluster {
+    pub root_cause: String,
+    pub defect_kind: DefectKind,
+    pub count: usize,
+    /// The strongest example from this cluster (clearest reproduction).
+    pub exemplar: BatchDefect,
+    /// Whether this cluster is likely a known benign pattern.
+    pub likely_benign: bool,
+    pub benign_rationale: String,
+}
+
+/// Known benign patterns: defect signals that are expected/design behavior, not real bugs.
+/// (endpoint_substring, param_substring_or_empty, rationale)
+const BENIGN_PATTERNS: &[(&str, &str, &str)] = &[
+    // Qdrant/Milvus search silently drops unknown JSON keys — BUT only for non-search-params.
+    // Real defects on search endpoint (hnsw_ef, score_threshold, limit, offset) must NOT be flagged.
+    ("search", "", "Search endpoint silently ignores unrecognized JSON keys — expected design. HOWEVER, hnsw_ef=0, score_threshold out-of-range, and similar param violations on recognized keys are REAL defects."),
+    ("list", "", "list/describe endpoints returning success for nonexistent resources is standard REST idempotency."),
+];
+
+/// Parameters that, when violated on the search endpoint, indicate a REAL defect (not benign param injection).
+const SEARCH_REAL_DEFECT_PARAMS: &[&str] = &[
+    "hnsw_ef", "score_threshold", "limit", "offset", "exact",
+    "size", "vectors.size", "distance", "shard_number", "replication_factor",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,8 +120,146 @@ impl ResultAnalyzer {
         observations
     }
 
+    /// Collapse raw defects into root-cause clusters, marking known benign patterns.
+    pub fn cluster_defects(defects: &[BatchDefect]) -> Vec<DefectCluster> {
+        // Group by (kind, endpoint, param_name) — same endpoint + same param = same root cause.
+        let mut groups: HashMap<(DefectKind, String, String), Vec<&BatchDefect>> = HashMap::new();
+        for d in defects {
+            let kind = DefectKind::from_defect_line(&d.defect_line);
+            let (endpoint, param_name) = if let (Some(ep), Some(pn)) = (&d.endpoint, &d.param_name) {
+                (ep.clone(), pn.clone())
+            } else if d.test_prefix == "boundary" && !d.script.is_empty() {
+                Self::parse_from_script(&d.script)
+            } else {
+                Self::extract_context(&d.test_name, &d.test_prefix)
+            };
+            // Normalize endpoint: strip host/port, keep path
+            let short_ep = endpoint
+                .split('/')
+                .filter(|s| !s.is_empty())
+                .last()
+                .unwrap_or(&endpoint)
+                .to_string();
+            groups.entry((kind, short_ep, param_name)).or_default().push(d);
+        }
+
+        let mut clusters: Vec<DefectCluster> = Vec::new();
+        for ((kind, ep, param), instances) in &groups {
+            let count = instances.len();
+            let exemplar = (*instances.first().unwrap()).clone();
+
+            // Check if this is a known benign pattern — but override for recognized real-defect params.
+            let benign_match = BENIGN_PATTERNS.iter().find(|(p, _, _)| ep.contains(p));
+            let likely_benign = if let Some((_, _, _)) = benign_match {
+                // If param is a known REAL defect param on search endpoint, override benign.
+                !SEARCH_REAL_DEFECT_PARAMS.iter().any(|rp| param.contains(rp))
+            } else {
+                false
+            };
+            let benign_rationale = if likely_benign {
+                benign_match.map(|(_, _, r)| r.to_string()).unwrap_or_default()
+            } else {
+                String::new()
+            };
+
+            let root_cause = if count == 1 {
+                format!("[{:?}] {} — single instance", kind, exemplar.defect_line)
+            } else {
+                format!(
+                    "[{:?}] {} distinct test names on endpoint '{}' param '{}' share same root cause",
+                    kind, count, ep, param
+                )
+            };
+
+            clusters.push(DefectCluster {
+                root_cause,
+                defect_kind: *kind,
+                count,
+                exemplar,
+                likely_benign,
+                benign_rationale,
+            });
+        }
+
+        // Sort: non-benign first, then by count descending
+        clusters.sort_by(|a, b| {
+            b.likely_benign
+                .cmp(&a.likely_benign)
+                .then_with(|| b.count.cmp(&a.count))
+        });
+
+        clusters
+    }
+
+    /// Parse endpoint and param from the Python script content when structured fields are absent.
+    fn parse_from_script(script: &str) -> (String, String) {
+        let s = script.to_lowercase();
+        let endpoint = if s.contains("/points/search") {
+            "search"
+        } else if s.contains("/points/scroll") {
+            "scroll"
+        } else if s.contains("/points/recommend") {
+            "recommend"
+        } else if s.contains("/points/count") {
+            "count"
+        } else if s.contains("/points") && (s.contains("upsert") || s.contains("put")) && !s.contains("/collections") {
+            "upsert"
+        } else if s.contains("/points") && s.contains("delete") {
+            "delete"
+        } else if s.contains("/collections") && (s.contains("put") || s.contains("create")) && !s.contains("/points") {
+            "create_collection"
+        } else if s.contains("/collections") && s.contains("delete") {
+            "delete_collection"
+        } else if s.contains("/collections") {
+            "collections"
+        } else {
+            "unknown"
+        };
+
+        let param = if script.contains("hnsw_ef") {
+            "hnsw_ef"
+        } else if script.contains("score_threshold") {
+            "score_threshold"
+        } else if script.contains("\"limit\"") || script.contains("'limit'") {
+            "limit"
+        } else if script.contains("\"offset\"") || script.contains("'offset'") {
+            "offset"
+        } else if script.contains("vectors.size") || script.contains("\"size\""){
+            "vectors.size"
+        } else if script.contains("shard_number") {
+            "shard_number"
+        } else if script.contains("replication_factor") {
+            "replication_factor"
+        } else if script.contains("oversampling") {
+            "oversampling"
+        } else if script.contains("exact") {
+            "exact"
+        } else if script.contains("\"size") || script.contains("'size") {
+            "size"
+        } else if script.contains("distance") {
+            "distance"
+        } else if script.contains("dimension") || script.contains("\"dim\"") || script.contains("elementTypeParams") {
+            "dim"
+        } else if script.contains("count") {
+            "count"
+        } else if script.contains("payload") {
+            "payload"
+        } else if script.contains("size") {
+            "size"
+        } else if script.contains("collection_name") || script.contains("collectionName") {
+            "collectionName"
+        } else {
+            "unknown"
+        };
+        (format!("/{}", endpoint), param.to_string())
+    }
+
     fn extract_context(test_name: &str, prefix: &str) -> (String, String) {
         match prefix {
+            "boundary" => {
+                // Boundary tests don't populate endpoint/param_name; fall through to script parsing
+                ("/unknown".to_string(), "unknown".to_string())
+            }
             "mutation" => {
                 let parts: Vec<&str> = test_name.split('_').collect();
                 let param = parts.get(2).unwrap_or(&"unknown").to_string();
@@ -361,5 +528,55 @@ mod tests {
         assert_eq!(ResultAnalyzer::extract_dim_from_description("32768-dim collection created"), Some(32768));
         assert_eq!(ResultAnalyzer::extract_dim_from_description("0-dim collection created"), Some(0));
         assert_eq!(ResultAnalyzer::extract_dim_from_description("no dimension info"), None);
+    }
+
+    #[test]
+    fn test_parse_from_script_boundary_search_offset() {
+        let script = r#"body["offset"] = 0; r = requests.post(f'{BASE}/collections/{c}/points/search', json=body)"#;
+        let (ep, param) = ResultAnalyzer::parse_from_script(script);
+        assert_eq!(ep, "/search");
+        assert_eq!(param, "offset");
+    }
+
+    #[test]
+    fn test_parse_from_script_boundary_create_size() {
+        let script = r#"r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":0,"distance":"Cosine"}})"#;
+        let (ep, param) = ResultAnalyzer::parse_from_script(script);
+        assert_eq!(ep, "/create_collection");
+        assert_eq!(param, "vectors.size");
+    }
+
+    #[test]
+    fn test_cluster_defects_collapses_same_root_cause() {
+        let defects = vec![
+            BatchDefect {
+                test_name: "offset_below_min".to_string(),
+                test_prefix: "boundary".to_string(),
+                defect_line: "[DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted".to_string(),
+                script: String::new(), stdout: String::new(), stderr: String::new(),
+                endpoint: Some("search".to_string()), param_name: Some("offset".to_string()),
+            },
+            BatchDefect {
+                test_name: "offset_zero".to_string(),
+                test_prefix: "boundary".to_string(),
+                defect_line: "[DEFECT: ILLEGAL_SUCCESS] offset=0 accepted".to_string(),
+                script: String::new(), stdout: String::new(), stderr: String::new(),
+                endpoint: Some("search".to_string()), param_name: Some("offset".to_string()),
+            },
+            BatchDefect {
+                test_name: "limit_below_min".to_string(),
+                test_prefix: "boundary".to_string(),
+                defect_line: "[DEFECT: ILLEGAL_SUCCESS] limit below min accepted".to_string(),
+                script: String::new(), stdout: String::new(), stderr: String::new(),
+                endpoint: Some("search".to_string()), param_name: Some("limit".to_string()),
+            },
+        ];
+        let clusters = ResultAnalyzer::cluster_defects(&defects);
+        // offset cluster (2 instances) + limit cluster (1 instance) = 2 clusters
+        assert_eq!(clusters.len(), 2);
+        let offset_cluster = clusters.iter().find(|c| c.exemplar.param_name.as_deref() == Some("offset")).unwrap();
+        assert_eq!(offset_cluster.count, 2);
+        let limit_cluster = clusters.iter().find(|c| c.exemplar.param_name.as_deref() == Some("limit")).unwrap();
+        assert_eq!(limit_cluster.count, 1);
     }
 }

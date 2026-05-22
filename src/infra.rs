@@ -1,5 +1,5 @@
 use crate::contract::analyzer::BatchDefect;
-use crate::target::{MilvusPlugin, QdrantPlugin, TargetRegistry};
+use crate::target::TargetRegistry;
 use anyhow::Context;
 use std::process::Command as StdCommand;
 use tracing::{info, warn};
@@ -40,7 +40,7 @@ pub fn ensure_runner_container(runner_name: &str, net_name: &str, pip_packages: 
         StdCommand::new("docker")
             .args(["run", "-d", "--name", runner_name, "--network", net_name, "python:3.9-slim", "tail", "-f", "/dev/null"])
             .output()?;
-        let mut pip_cmd = vec!["exec".to_string(), runner_name.to_string(), "pip".to_string(), "install".to_string(), "--no-cache-dir".to_string()];
+        let mut pip_cmd = vec!["exec".to_string(), runner_name.to_string(), "pip".to_string(), "install".to_string(), "--no-cache-dir".to_string(), "-i".to_string(), "https://pypi.tuna.tsinghua.edu.cn/simple".to_string()];
         for pkg in pip_packages {
             pip_cmd.push(pkg.clone());
         }
@@ -154,9 +154,9 @@ pub async fn run_generic_batch(
     prefix: &str,
     cases: &[(String, String, Option<String>, Option<String>)],
 ) -> anyhow::Result<Vec<BatchDefect>> {
-    let mut registry = TargetRegistry::new();
-    registry.register(Box::new(QdrantPlugin));
-    registry.register(Box::new(MilvusPlugin));
+    let registry = TargetRegistry::new_with_all();
+
+
     let plugin = registry
         .get(target)
         .ok_or_else(|| anyhow::anyhow!("Unsupported target: {}", target))?;
@@ -219,9 +219,9 @@ pub async fn run_generic_batch_with_sandbox(
     cases: &[(String, String, Option<String>, Option<String>)],
     sandbox: &crate::sandbox::manager::Sandbox,
 ) -> anyhow::Result<Vec<BatchDefect>> {
-    let mut registry = TargetRegistry::new();
-    registry.register(Box::new(QdrantPlugin));
-    registry.register(Box::new(MilvusPlugin));
+    let registry = TargetRegistry::new_with_all();
+
+
     let plugin = registry
         .get(target)
         .ok_or_else(|| anyhow::anyhow!("Unsupported target: {}", target))?;

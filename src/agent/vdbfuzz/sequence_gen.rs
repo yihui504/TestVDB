@@ -297,7 +297,8 @@ enum SeqKind {
 fn build_seq_script(style: TargetStyle, kind: SeqKind) -> String {
     match style {
         TargetStyle::Milvus => build_milvus_seq_script(kind),
-        TargetStyle::Qdrant => build_qdrant_seq_script(kind),
+        TargetStyle::Qdrant | TargetStyle::Weaviate => build_qdrant_seq_script(kind),
+        TargetStyle::PgVector => String::new(),
     }
 }
 

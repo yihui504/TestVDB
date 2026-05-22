@@ -20,8 +20,8 @@ pub async fn run_script_in_fresh_sandbox(
     let rebound_script = script_code
         .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
         .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
-        .replace("{TESTVDB_DB_URL}", &db_url)
-        .replace("{{TESTVDB_DB_URL}}", &db_url);
+        .replace("{{TESTVDB_DB_URL}}", &db_url)
+        .replace("{TESTVDB_DB_URL}", &db_url);
     let output = sandbox.exec_script(&rebound_script, &[("TESTVDB_DB_URL", &db_url)]).await?;
     let normalized_stdout = normalize_observed_output(&output.stdout);
     let normalized_stderr = normalize_observed_output(&output.stderr);

@@ -130,7 +130,7 @@ impl Sandbox {
 
         if !pip_packages.is_empty() {
             info!("Installing pip packages in Runner...");
-            let mut pip_cmd = vec!["exec", &runner_container_id, "pip", "install", "--no-cache-dir"];
+            let mut pip_cmd = vec!["exec", &runner_container_id, "pip", "install", "--no-cache-dir", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple"];
             pip_cmd.extend(pip_packages);
             let out = Command::new("docker").args(&pip_cmd).output().await?;
             if !out.status.success() { 
@@ -239,7 +239,7 @@ impl Sandbox {
         }
         let container_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !pip_packages.is_empty() {
-            let mut pip_cmd = vec!["exec", &container_id, "pip", "install", "--no-cache-dir"];
+            let mut pip_cmd = vec!["exec", &container_id, "pip", "install", "--no-cache-dir", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple"];
             pip_cmd.extend(pip_packages);
             let out = Command::new("docker").args(&pip_cmd).output().await?;
             if !out.status.success() {
@@ -300,7 +300,7 @@ impl Sandbox {
             anyhow::bail!("Failed to write script to container: {}", String::from_utf8_lossy(&write_output.stderr));
         }
 
-        self.exec_command_with_env(&["python", script_path], env_vars).await
+        self.exec_command_with_env(&["python", "-u", script_path], env_vars).await
     }
 }
 

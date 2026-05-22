@@ -6,3 +6,5 @@ run_log*.txt
 *.pyc
 volumes/
 *.log
+mine_*_log.txt
+github_token.txt

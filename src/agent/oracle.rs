@@ -30,6 +30,8 @@ pub struct OracleFinding {
     pub violated: bool,
     pub evidence: String,
     pub defect_type: Option<DefectType>,
+    #[serde(default)]
+    pub script: String,
 }
 
 pub struct Oracle {
@@ -149,6 +151,7 @@ impl Oracle {
                         violated: false,
                         evidence: format!("Execution error: {}", e),
                         defect_type: None,
+                        script: check.script.clone(),
                     });
                 }
             }
@@ -179,6 +182,7 @@ impl Oracle {
                 violated: false,
                 evidence: format!("Script error (not a defect): {}", &stderr[..stderr.len().min(200)]),
                 defect_type: None,
+                script: check.script.clone(),
             };
         }
 
@@ -194,6 +198,7 @@ impl Oracle {
                 violated: true,
                 evidence,
                 defect_type: Some(defect_type),
+                script: check.script.clone(),
             };
         }
 
@@ -207,6 +212,7 @@ impl Oracle {
                 violated: true,
                 evidence: format!("Non-zero exit code ({}) without explicit defect marker. stdout: {} stderr: {}", exit_code, stdout.chars().take(200).collect::<String>(), stderr.chars().take(200).collect::<String>()),
                 defect_type: Some(DefectType::PoorDiagnostics),
+                script: check.script.clone(),
             };
         }
 
@@ -219,6 +225,7 @@ impl Oracle {
                 stdout.chars().take(300).collect()
             },
             defect_type: None,
+            script: check.script.clone(),
         }
     }
 
@@ -366,12 +373,14 @@ mod tests {
                 violated: true,
                 evidence: "count=0 but expected 5".to_string(),
                 defect_type: Some(DefectType::StateLogicViolation),
+                script: String::new(),
             },
             OracleFinding {
                 invariant_name: "limit_check".to_string(),
                 violated: false,
                 evidence: "passed".to_string(),
                 defect_type: None,
+                script: String::new(),
             },
         ];
         let msg = build_oracle_findings_message(&findings);

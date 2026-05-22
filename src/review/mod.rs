@@ -6,6 +6,8 @@ use crate::sandbox::manager::Sandbox;
 
 pub mod milvus;
 pub mod qdrant;
+pub mod weaviate;
+pub mod pgvector;
 
 pub type ReviewResult = Value;
 

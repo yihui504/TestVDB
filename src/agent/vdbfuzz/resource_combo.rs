@@ -85,6 +85,7 @@ c = 'oracle_res_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{{BASE}}/collections/{{c}}', json={{"vectors":{{"size":{large_dim},"distance":"Cosine"}}}})
 if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] {large_dim}-dim collection created (may cause OOM)'); sys.exit(1)
 else: print(f'properly rejected {large_dim}-dim: {{r.status_code}}'); sys.exit(0)"#),
+            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
         };
         ResourceTestCase {
             name: format!("resource_large_dimension_{}", large_dim),
@@ -109,6 +110,7 @@ c = 'oracle_res_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":0,"distance":"Cosine"}})
 if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] 0-dim collection created'); sys.exit(1)
 else: print(f'properly rejected 0-dim: {r.status_code}'); sys.exit(0)"#.to_string(),
+            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
         };
         ResourceTestCase {
             name: "resource_zero_dimension".to_string(),
@@ -133,6 +135,7 @@ c = 'a' * 256
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":4,"distance":"Cosine"}})
 if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] 256-char collection name accepted'); sys.exit(1)
 else: print(f'properly rejected 256-char name: {r.status_code}'); sys.exit(0)"#.to_string(),
+            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
         };
         ResourceTestCase {
             name: "resource_long_collection_name".to_string(),
@@ -164,6 +167,14 @@ impl ComboTestGenerator {
             TargetStyle::Milvus => (
                 vec!["L2".to_string(), "COSINE".to_string(), "IP".to_string()],
                 vec!["IVF_FLAT".to_string(), "HNSW".to_string(), "FLAT".to_string(), "AUTOINDEX".to_string()],
+            ),
+            TargetStyle::Weaviate => (
+                vec!["cosine".to_string(), "dot".to_string(), "l2".to_string()],
+                vec!["hnsw".to_string()],
+            ),
+            TargetStyle::PgVector => (
+                vec!["vector_l2_ops".to_string(), "vector_cosine_ops".to_string(), "vector_ip_ops".to_string()],
+                vec!["hnsw".to_string(), "ivfflat".to_string()],
             ),
         };
 
@@ -242,6 +253,7 @@ time.sleep(1)
 r = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{"vector":vec_data,"limit":3}})
 if r.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] search failed for dim={dim} distance={metric}: {{r.text}}'); sys.exit(1)
 else: print(f'param combo verified: dim={dim} distance={metric}'); sys.exit(0)"#),
+            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
         };
         Some(ComboTestCase {
             name,

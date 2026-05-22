@@ -1,0 +1,12 @@
+{
+  "api_endpoint": "milvus",
+  "doc_url": "https://milvus.io/api-reference/restful/v2.4.x/v2/Vector%20(v2)/CreateCollection.md",
+  "assertions": [
+    "[milvus] parameter validation for search"
+  ],
+  "type_constraints": [],
+  "range_constraints": [],
+  "state_constraints": [],
+  "state_invariants": [],
+  "behavioral_contracts": []
+}

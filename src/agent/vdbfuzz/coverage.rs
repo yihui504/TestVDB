@@ -95,6 +95,74 @@ impl CoverageTracker {
     }
 }
 
+const PATTERN_CATEGORIES: [&str; 21] = [
+    "count_consistency",
+    "data_visibility",
+    "state_residual",
+    "idempotency",
+    "search_correctness",
+    "partition_isolation",
+    "alias_state",
+    "index_state",
+    "concurrent_insert_count",
+    "concurrent_upsert_duplicate",
+    "concurrent_delete_stale",
+    "concurrent_create_conflict",
+    "concurrent_mixed_ops",
+    "flush_visibility",
+    "load_search_failure",
+    "delete_stale_read",
+    "index_immediate_use",
+    "compact_immediate_effect",
+    "cross_endpoint_chain",
+    "semantic_equivalence",
+    "boundary_deepening",
+];
+
+#[derive(Debug, Clone, Default)]
+pub struct PatternTracker {
+    explored: HashSet<String>,
+}
+
+impl PatternTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record_pattern(&mut self, pattern: &str) {
+        if PATTERN_CATEGORIES.contains(&pattern) {
+            self.explored.insert(pattern.to_string());
+        }
+    }
+
+    pub fn explored_patterns(&self) -> Vec<&str> {
+        PATTERN_CATEGORIES
+            .iter()
+            .filter(|p| self.explored.contains(**p))
+            .copied()
+            .collect()
+    }
+
+    pub fn unexplored_patterns(&self) -> Vec<&str> {
+        PATTERN_CATEGORIES
+            .iter()
+            .filter(|p| !self.explored.contains(**p))
+            .copied()
+            .collect()
+    }
+
+    pub fn pattern_diversity_report(&self) -> String {
+        let explored = self.explored_patterns();
+        let unexplored = self.unexplored_patterns();
+        format!(
+            "Pattern Diversity: {}/21 patterns explored\nExplored: {}\nUNEXPLORED: {}",
+            explored.len(),
+            explored.join(", "),
+            unexplored.join(", "),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +183,35 @@ mod tests {
         let unvisited = tracker.unvisited_params();
         assert!(unvisited.iter().any(|(_e, p)| p == "offset"));
         assert!(unvisited.iter().any(|(_e, p)| p == "score_threshold"));
+    }
+
+    #[test]
+    fn test_pattern_tracker() {
+        let mut tracker = PatternTracker::new();
+        assert!(tracker.explored_patterns().is_empty());
+        assert_eq!(tracker.unexplored_patterns().len(), 21);
+
+        tracker.record_pattern("count_consistency");
+        tracker.record_pattern("data_visibility");
+        tracker.record_pattern("concurrent_insert_count");
+        tracker.record_pattern("unknown_pattern");
+
+        assert_eq!(tracker.explored_patterns().len(), 3);
+        assert_eq!(tracker.unexplored_patterns().len(), 18);
+        assert!(tracker.explored_patterns().contains(&"count_consistency"));
+        assert!(!tracker.explored_patterns().contains(&"unknown_pattern"));
+
+        let report = tracker.pattern_diversity_report();
+        assert!(report.contains("Pattern Diversity: 3/21 patterns explored"));
+        assert!(report.contains("Explored: count_consistency, data_visibility, concurrent_insert_count"));
+        assert!(report.contains("UNEXPLORED:"));
+    }
+
+    #[test]
+    fn test_pattern_tracker_duplicate() {
+        let mut tracker = PatternTracker::new();
+        tracker.record_pattern("idempotency");
+        tracker.record_pattern("idempotency");
+        assert_eq!(tracker.explored_patterns().len(), 1);
     }
 }

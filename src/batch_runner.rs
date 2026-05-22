@@ -1,6 +1,15 @@
 use crate::infra;
-use crate::target::{MilvusPlugin, QdrantPlugin, TargetRegistry};
+use crate::target::TargetRegistry;
 use tracing::{info, warn};
+
+/// Resolve `{{TESTVDB_DB_URL}}` template in probe scripts.
+fn resolve_db_url(script: &str, db_url: &str) -> String {
+    script
+        .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
+        .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
+        .replace("{TESTVDB_DB_URL}", db_url)
+        .replace("{{TESTVDB_DB_URL}}", db_url)
+}
 
 pub async fn run_batch(
     target: &str,
@@ -9,9 +18,7 @@ pub async fn run_batch(
     db_port: u16,
     non_redundant_only: bool,
 ) -> anyhow::Result<()> {
-    let mut registry = TargetRegistry::new();
-    registry.register(Box::new(QdrantPlugin));
-    registry.register(Box::new(MilvusPlugin));
+    let registry = TargetRegistry::new_with_all();
     let plugin = registry.get(target)
         .ok_or_else(|| anyhow::anyhow!("Unsupported target: {}. Available: {:?}", target, registry.available_targets()))?;
 
@@ -46,11 +53,7 @@ pub async fn run_batch(
     info!("Running {} safety net probes...", nets.len());
 
     for (i, net) in nets.iter().enumerate() {
-        let script = net.script
-            .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
-            .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
-            .replace("{TESTVDB_DB_URL}", &db_url)
-            .replace("{{TESTVDB_DB_URL}}", &db_url);
+        let script = resolve_db_url(&net.script, &db_url);
 
         match infra::execute_probe_script(&runner_name, &script) {
             Ok((stdout, stderr, has_defect, exit_ok)) => {
@@ -133,9 +136,7 @@ pub async fn run_batch(
 }
 
 pub async fn run_batch_simple(target: &str) -> anyhow::Result<usize> {
-    let mut registry = TargetRegistry::new();
-    registry.register(Box::new(QdrantPlugin));
-    registry.register(Box::new(MilvusPlugin));
+    let registry = TargetRegistry::new_with_all();
     let plugin = registry.get(target)
         .ok_or_else(|| anyhow::anyhow!("Unsupported target: {}", target))?;
 
@@ -154,11 +155,7 @@ pub async fn run_batch_simple(target: &str) -> anyhow::Result<usize> {
     let mut defects = 0usize;
 
     for net in nets.iter() {
-        let script = net.script
-            .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
-            .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
-            .replace("{TESTVDB_DB_URL}", &db_url)
-            .replace("{{TESTVDB_DB_URL}}", &db_url);
+        let script = resolve_db_url(&net.script, &db_url);
 
         match infra::execute_probe_script(&runner_name, &script) {
             Ok((_, _, has_defect, _)) => {

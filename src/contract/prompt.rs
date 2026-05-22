@@ -254,6 +254,12 @@ impl PromptGenerator {
             TargetStyle::Milvus => {
                 "Milvus (check r.json().get('code')==0, Bearer root:Milvus auth, /v2/vectordb/ paths)"
             }
+            TargetStyle::Weaviate => {
+                "Weaviate (check status_code==200, no auth by default, /v1/schema and /v1/objects REST paths)"
+            }
+            TargetStyle::PgVector => {
+                "PgVector (SQL via psycopg2, connect to postgresql://postgres:postgres@host:5432/testvdb, CREATE EXTENSION vector, use cursor.execute() not HTTP requests)"
+            }
         };
 
         let strategy_counts = count_strategies(scenarios);

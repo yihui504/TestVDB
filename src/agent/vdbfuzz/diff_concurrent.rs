@@ -104,6 +104,8 @@ impl DiffTestGenerator {
                     cases.push(Self::generate_qdrant_diff_delete());
                 }
             }
+            TargetStyle::Weaviate => { /* same as Qdrant - handled below */ }
+            TargetStyle::PgVector => {},
         }
 
         cases.dedup_by(|a, b| a.name == b.name);
@@ -577,6 +579,8 @@ impl ConcurrentTestGenerator {
                     cases.push(Self::generate_qdrant_concurrent_create_delete());
                 }
             }
+            TargetStyle::Weaviate => { /* same as Qdrant - handled below */ }
+            TargetStyle::PgVector => {},
         }
 
         cases.dedup_by(|a, b| a.name == b.name);

@@ -108,5 +108,17 @@ pub enum Commands {
         /// Max feedback loop rounds (default: 5)
         #[arg(long, default_value_t = 5)]
         max_rounds: usize,
+
+        /// Skip deterministic generators, go straight to LLM orchestrator (fast iteration mode)
+        #[arg(long, default_value_t = false)]
+        skip_generators: bool,
+
+        /// Max LLM orchestrator turns (default: 12, use 6 for fast iteration)
+        #[arg(long, default_value_t = 12)]
+        llm_turns: usize,
+
+        /// Skip safety net probes in LLM orchestrator (saves ~25min, use for fast iteration)
+        #[arg(long, default_value_t = false)]
+        skip_safety_nets: bool,
     },
 }

@@ -228,7 +228,8 @@ fn build_mutation_script(
 ) -> String {
     match style {
         TargetStyle::Milvus => build_milvus_mutation_script(endpoint, mutation_line, label, needs_setup),
-        TargetStyle::Qdrant => build_qdrant_mutation_script(endpoint, mutation_line, label, needs_setup),
+        TargetStyle::Qdrant | TargetStyle::Weaviate => build_qdrant_mutation_script(endpoint, mutation_line, label, needs_setup),
+        TargetStyle::PgVector => String::new(),
     }
 }
 

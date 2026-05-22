@@ -13,25 +13,15 @@ use anyhow::Result;
 use serde::Deserialize;
 use tracing::{info, warn};
 
-pub async fn knowledge_exploration_loop(
-    llm_client: &DeepSeekClient,
-    sandbox: &Sandbox,
+/// Build the system prompt for the Knowledge Agent that extracts constraints from docs + source.
+fn knowledge_agent_system_prompt(
     target_name: &str,
     target_repo_url: &str,
     endpoint_name: &str,
     endpoint_api_path: &str,
     endpoint_docs_url: &str,
-    max_turns: usize,
-) -> Result<StructuredContract> {
-    let tools = vec![
-        get_clone_repo_tool(),
-        get_read_file_tool(),
-        get_search_code_tool(),
-        get_crawl_url_tool(),
-        get_submit_contract_tool(),
-    ];
-
-    let system_prompt = format!(
+) -> String {
+    format!(
         "You are an expert Security Knowledge Agent for the '{}' database.\n\
         Target Repo: {}\n\
         Repo is at /workspace.\n\n\
@@ -61,6 +51,30 @@ pub async fn knowledge_exploration_loop(
         Crawl docs + grep 1-2 times, then call submit_contract. Submit by turn 3.",
         target_name, target_repo_url,
         endpoint_name, endpoint_api_path, endpoint_docs_url
+    )
+}
+
+pub async fn knowledge_exploration_loop(
+    llm_client: &DeepSeekClient,
+    sandbox: &Sandbox,
+    target_name: &str,
+    target_repo_url: &str,
+    endpoint_name: &str,
+    endpoint_api_path: &str,
+    endpoint_docs_url: &str,
+    max_turns: usize,
+) -> Result<StructuredContract> {
+    let tools = vec![
+        get_clone_repo_tool(),
+        get_read_file_tool(),
+        get_search_code_tool(),
+        get_crawl_url_tool(),
+        get_submit_contract_tool(),
+    ];
+
+    let system_prompt = knowledge_agent_system_prompt(
+        target_name, target_repo_url,
+        endpoint_name, endpoint_api_path, endpoint_docs_url,
     );
 
     let mut messages = vec![

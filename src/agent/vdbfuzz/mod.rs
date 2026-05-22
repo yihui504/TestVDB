@@ -7,3 +7,4 @@ pub mod resource_combo;
 pub mod sequence;
 pub mod sequence_gen;
 pub mod state_gen;
+pub mod semantic;

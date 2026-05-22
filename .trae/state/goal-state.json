@@ -1,0 +1,23 @@
+{
+  "goal": "Phase 2: 让 LLM 编排器产出确定性生成器无法发现的增量 Bug 类型",
+  "strong_goal": "3 个新工具 + Prompt 重设计。验收：≥3 个增量 Bug 类型 + GitHub Issue。降级：≥1 个增量 Bug 类型。",
+  "status": "active",
+  "turns_used": 5,
+  "max_turns": 20,
+  "created_at": "2026-05-22T00:50:00+08:00",
+  "last_turn_at": "2026-05-22T14:45:00+08:00",
+  "last_verdict": "continue",
+  "last_reason": "V33-V41 实战验证完成。3 个新工具已实现+硬性约束+Prompt重设计+turn_hint。但 Milvus v2.6.16 在状态交互/并发/时序维度上没有增量 Bug。LLM 仍倾向参数边界测试。timing_test 从未被 LLM 使用。",
+  "consecutive_judge_failures": 0,
+  "checklist": [
+    {"id": 1, "item": "Step 10: execute_stateful_test 实现 + P0/P1/P2 修复", "status": "done", "evidence": "tools.rs + orchestrator.rs，cargo build 通过"},
+    {"id": 2, "item": "Step 11: execute_concurrent_test 实现", "status": "done", "evidence": "tools.rs + orchestrator.rs，cargo build 通过"},
+    {"id": 3, "item": "Step 12: execute_timing_test 实现", "status": "done", "evidence": "tools.rs + orchestrator.rs，cargo build 通过"},
+    {"id": 4, "item": "Step 13: Prompt 重设计 + 硬性约束 + 语义不变量 + turn_hint", "status": "done", "evidence": "orchestrator.rs build_system_prompt 重写 + Turn 限制 + turn_hint 注入"},
+    {"id": 5, "item": "V33-V41 实战验证", "status": "done", "evidence": "9 次验证运行。硬性约束生效（LLM 被迫使用 concurrent_test）。但未产出增量 Bug。"},
+    {"id": 6, "item": "timing_test 被 LLM 使用", "status": "pending", "evidence": "V33-V41 中 timing_test 从未被 LLM 使用。Turn 7-8 LLM 总是选择其他工具。"},
+    {"id": 7, "item": "≥1 个增量 Bug 类型", "status": "pending", "evidence": "所有发现的 Bug 均为参数边界类型（nprobe=0, shardsNum=null, collectionName type），确定性生成器已覆盖。"},
+    {"id": 8, "item": "≥3 个增量 Bug 类型 + GitHub Issue", "status": "pending", "evidence": null},
+    {"id": 9, "item": "换目标系统验证（Qdrant）", "status": "pending", "evidence": null}
+  ]
+}

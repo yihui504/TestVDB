@@ -1,6 +1,7 @@
 use crate::agent::classifier::{ClassificationDisposition, analyze_execution_result};
 use crate::agent::sandbox_runner::{run_script_in_fresh_sandbox, refresh_candidate_evidence_with_mre, run_additional_reproduction};
 use crate::report::generator::{BugReport, CandidateDefect, CandidateStatus};
+use crate::report::llm_analysis::{analyze_defect_with_llm, generate_verification_variant, optimize_defect_report};
 use crate::sandbox::manager::SidecarSpec;
 use crate::target::TargetPlugin;
 use crate::review::IndependentReviewer;
@@ -20,13 +21,14 @@ pub async fn verify_candidate_defect(
     db_command: &[String],
 ) -> anyhow::Result<VerificationOutcome> {
     let defect_type = candidate.defect_type.clone();
+    let mut effective_script = script_code.to_string();
 
     for phase in ["repro_1", "repro_2"] {
         let run = run_script_in_fresh_sandbox(
             db_image,
             pip_packages,
             db_port,
-            script_code,
+            &effective_script,
             phase,
             sidecars,
             db_env,
@@ -38,6 +40,29 @@ pub async fn verify_candidate_defect(
         if repro_classification.disposition != ClassificationDisposition::CandidateDefect
             || repro_classification.defect_type.as_ref() != Some(&defect_type)
         {
+            if phase == "repro_1" {
+                info!("repro_1 failed deterministic classification. Invoking LLM root cause analysis...");
+                let defect_type_str = format!("{:?}", defect_type);
+                let llm_analysis = analyze_defect_with_llm(
+                    &run.stdout, &run.stderr, &defect_type_str, &effective_script,
+                ).await;
+
+                if llm_analysis.is_real_defect {
+                    info!("LLM confirms real defect (confidence={:.2}): {}", llm_analysis.confidence, llm_analysis.root_cause);
+                    if let Some(fixed) = &llm_analysis.fixed_script {
+                        info!("LLM provided fixed script. Retrying repro_1 with fixed script...");
+                        effective_script = fixed.clone();
+                        candidate.mre_code = fixed.clone();
+                        continue;
+                    }
+                    candidate.reproduction_runs.push(run);
+                    warn!("LLM confirmed defect but no fixed script available. Proceeding with original classification.");
+                    break;
+                } else {
+                    info!("LLM does NOT confirm real defect: {}", llm_analysis.root_cause);
+                }
+            }
+
             candidate.status = CandidateStatus::Rejected;
             candidate.downgrade_reason = Some(format!(
                 "{} failed verification: {}",
@@ -53,10 +78,50 @@ pub async fn verify_candidate_defect(
             return Ok(VerificationOutcome::Rejected(candidate.downgrade_reason.clone().unwrap_or_default()));
         }
 
+        if phase == "repro_1" && run.stderr.to_lowercase().contains("traceback") {
+            info!("repro_1 passed but stderr contains Traceback. Invoking LLM analysis to fix script...");
+            let defect_type_str = format!("{:?}", defect_type);
+            let llm_analysis = analyze_defect_with_llm(
+                &run.stdout, &run.stderr, &defect_type_str, &effective_script,
+            ).await;
+
+            if llm_analysis.is_real_defect {
+                if let Some(fixed) = &llm_analysis.fixed_script {
+                    info!("LLM provided fixed script (removed post-defect crash). Using for repro_2...");
+                    effective_script = fixed.clone();
+                    candidate.mre_code = fixed.clone();
+                } else {
+                    info!("LLM confirmed defect but no fixed script. Continuing with original MRE.");
+                }
+            } else {
+                info!("LLM analysis of Traceback: {}", llm_analysis.root_cause);
+            }
+        }
+
         candidate.reproduction_runs.push(run);
     }
 
     candidate.status = CandidateStatus::ReproducedTwice;
+
+    info!("Generating LLM verification variant for enhanced reproducibility check...");
+    let defect_type_str = format!("{:?}", candidate.defect_type);
+    let evidence_excerpt = candidate.initial_run.classifier_evidence_excerpt.clone();
+    if let Ok(variant) = generate_verification_variant(
+        &candidate.mre_code, &defect_type_str, &evidence_excerpt,
+    ).await {
+        info!("LLM generated verification variant: {}", variant.variant_description);
+        let variant_run = run_script_in_fresh_sandbox(
+            db_image, pip_packages, db_port, &variant.variant_script,
+            "variant_1", sidecars, db_env, db_command,
+        ).await?;
+        let variant_classification = analyze_execution_result(&variant_run.stdout, &variant_run.stderr);
+        if variant_classification.disposition == ClassificationDisposition::CandidateDefect {
+            info!("Variant verification CONFIRMED the defect with different parameters!");
+            candidate.reproduction_runs.push(variant_run);
+        } else {
+            info!("Variant verification did not confirm defect (may be different manifestation). Continuing with original reproducibility.");
+        }
+    }
 
     let reviewer_opt: Option<Box<dyn IndependentReviewer>> = plugin.create_reviewer();
     if let Some(reviewer) = reviewer_opt {
@@ -157,7 +222,24 @@ pub async fn verify_candidate_defect(
         }
     }
 
-    let report = BugReport::from_verified_candidate(candidate)?;
+    let mut report = BugReport::from_verified_candidate(candidate)?;
+
+    info!("Optimizing defect report with LLM...");
+    let defect_type_str = format!("{:?}", report.defect_type);
+    let evidence_excerpt = report.runtime_evidence.chars().take(2000).collect::<String>();
+    if let Ok(optimized) = optimize_defect_report(
+        &defect_type_str,
+        &report.surviving_assertions,
+        &report.mre_code,
+        &evidence_excerpt,
+    ).await {
+        info!("LLM optimized report title: {}", optimized.title);
+        report.title = optimized.title;
+        report.root_cause_analysis = optimized.root_cause_analysis;
+        report.improvement_suggestions = optimized.improvement_suggestions;
+        report.github_issue_body = Some(optimized.github_issue_body);
+    }
+
     report.validate()?;
     info!(
         "Submission-grade review verdict: {:?}. Summary: {}",
@@ -187,5 +269,18 @@ pub fn formal_report_output_path(
         crate::report::generator::SubmissionGradeVerdict::NeedsRewrite => {
             format!("{}_report_needs_rewrite.md", target)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn needs_rewrite_reports_use_different_output_path() {
+        let s = crate::report::generator::SubmissionGradeVerdict::SubmissionGrade;
+        let r = crate::report::generator::SubmissionGradeVerdict::NeedsRewrite;
+        assert_eq!(formal_report_output_path("qdrant", &s), "qdrant_bug_report.md");
+        assert_eq!(formal_report_output_path("qdrant", &r), "qdrant_report_needs_rewrite.md");
     }
 }

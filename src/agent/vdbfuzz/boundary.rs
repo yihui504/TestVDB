@@ -222,6 +222,12 @@ impl BoundaryValueGenerator {
                     milvus_generate_probe(ep_type, param, value, label)
                 }
             }
+            TargetStyle::Weaviate => {
+                // Deterministic generators use Qdrant API paths; Weaviate probes are in SafetyNets + semantic.rs
+                // Return empty script for now — SafetyNets handle Weaviate
+                String::new()
+            }
+            TargetStyle::PgVector => String::new(),
         };
 
         FuzzTestCase {
@@ -244,6 +250,8 @@ impl BoundaryValueGenerator {
         let script = match style {
             TargetStyle::Qdrant => qdrant_float_probe(param, value_expr, label),
             TargetStyle::Milvus => crate::agent::probe_milvus::milvus_search_probe(param, value_expr, label),
+            TargetStyle::Weaviate => String::new(), // SafetyNets handle Weaviate
+            TargetStyle::PgVector => String::new(),
         };
 
         FuzzTestCase {
@@ -263,6 +271,8 @@ impl BoundaryValueGenerator {
             TargetStyle::Milvus => {
                 milvus_missing_required_probe(param, endpoint)
             }
+            TargetStyle::Weaviate => String::new(), // SafetyNets handle Weaviate
+            TargetStyle::PgVector => String::new(),
         };
 
         FuzzTestCase {
@@ -282,6 +292,8 @@ impl BoundaryValueGenerator {
             TargetStyle::Milvus => {
                 milvus_invalid_enum_probe(param, endpoint)
             }
+            TargetStyle::Weaviate => String::new(), // SafetyNets handle Weaviate
+            TargetStyle::PgVector => String::new(),
         };
 
         FuzzTestCase {

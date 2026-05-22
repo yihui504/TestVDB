@@ -1,0 +1,39 @@
+{
+  "api_endpoint": "schema+objects",
+  "doc_url": "https://weaviate.io/developers/weaviate",
+  "assertions": [
+    "[SCHEMA] class must be non-empty and follow naming rules",
+    "[SCHEMA] vectorIndexConfig.distance must be one of: cosine, dot, l2, hamming",
+    "[SCHEMA] vectorIndexConfig.ef must be -1 or >= 0",
+    "[SCHEMA] vectorIndexConfig.maxConnections must be >= 4",
+    "[SCHEMA] vectorIndexConfig.dynamicEfMin must be >= 2",
+    "[OBJECTS] object vector dimension must match collection dimension",
+    "[SEARCH] nearVector dimension must match collection dimension",
+    "[SEARCH] limit must be > 0",
+    "[SEARCH] offset must be >= 0",
+    "[BEHAVIOR:STATE] insert N objects → objectCount must equal N",
+    "[BEHAVIOR:STATE] delete M of N objects → objectCount must equal N-M",
+    "[BEHAVIOR:SEMANTIC] search results must have scores in descending order for cosine"
+  ],
+  "type_constraints": [
+    {"param_name": "class", "expected_type": "string", "violation_examples": []},
+    {"param_name": "vectorIndexConfig.distance", "expected_type": "enum", "violation_examples": []},
+    {"param_name": "vectorIndexConfig.ef", "expected_type": "integer", "violation_examples": []},
+    {"param_name": "vectorIndexConfig.maxConnections", "expected_type": "integer", "violation_examples": []},
+    {"param_name": "objects.vector", "expected_type": "float array", "violation_examples": []},
+    {"param_name": "search.limit", "expected_type": "integer", "violation_examples": []},
+    {"param_name": "search.offset", "expected_type": "integer", "violation_examples": []}
+  ],
+  "range_constraints": [
+    {"param_name": "vectorIndexConfig.ef", "description": "ef must be -1 or >= 0", "min": -1.0, "max": null, "violation_examples": []},
+    {"param_name": "vectorIndexConfig.maxConnections", "description": "maxConnections must be >= 4", "min": 4.0, "max": null, "violation_examples": []},
+    {"param_name": "search.limit", "description": "limit must be > 0", "min": 1.0, "max": null, "violation_examples": []},
+    {"param_name": "search.offset", "description": "offset must be >= 0", "min": 0.0, "max": null, "violation_examples": []}
+  ],
+  "state_constraints": [
+    {"description": "collection must exist before inserting objects", "determinism": "deterministic", "setup_script_template": null},
+    {"description": "collection must exist before search", "determinism": "deterministic", "setup_script_template": null}
+  ],
+  "state_invariants": [],
+  "behavioral_contracts": []
+}
