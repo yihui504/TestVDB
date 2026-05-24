@@ -1,0 +1,218 @@
+warning: in the working copy of 'src/agent/classifier.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/agent/orchestrator.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/agent/sandbox_runner.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/agent/tools.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/agent/vdbfuzz/boundary.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/agent/vdbfuzz/semantic.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/report/generator.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/report/mod.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/report/verification.rs', LF will be replaced by CRLF the next time Git touches it
+[1mdiff --git a/src/agent/classifier.rs b/src/agent/classifier.rs[m
+[1mindex 323eeba..b66cc21 100644[m
+[1m--- a/src/agent/classifier.rs[m
+[1m+++ b/src/agent/classifier.rs[m
+[36m@@ -34,6 +34,7 @@[m [mconst INFRA_ERROR_SIGNALS: &[&str] = &[[m
+ fn defect_signal_to_type(signal: &str) -> Option<DefectType> {[m
+     match signal {[m
+         "illegal_success" => Some(DefectType::IllegalSuccess),[m
+[32m+[m[32m        "param_ignored" => Some(DefectType::ParamIgnored),[m
+         "poor_diagnostics" => Some(DefectType::PoorDiagnostics),[m
+         "data_corruption" => Some(DefectType::DataCorruption),[m
+         "performance_regression" => Some(DefectType::PerformanceRegression),[m
+[36m@@ -101,6 +102,7 @@[m [mpub fn normalize_observed_output(text: &str) -> String {[m
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)][m
+ pub enum DefectType {[m
+     IllegalSuccess,[m
+[32m+[m[32m    ParamIgnored,[m
+     PoorDiagnostics,[m
+     RuntimeFailure,[m
+     StateLogicViolation,[m
+[36m@@ -138,7 +140,7 @@[m [mpub fn detect_defect_type(stdout: &str, stderr: &str) -> Option<DefectType> {[m
+ [m
+     // Check [defect: <type>] tags via the shared signal→type mapping.[m
+     let known_signals = [[m
+[31m-        "illegal_success", "poor_diagnostics", "data_corruption",[m
+[32m+[m[32m        "illegal_success", "param_ignored", "poor_diagnostics", "data_corruption",[m
+         "performance_regression", "state_logic_violation", "silent_failure",[m
+         "async_inconsistency", "metamorphic_violation", "differential_mismatch",[m
+         "sequence_violation",[m
+[1mdiff --git a/src/agent/orchestrator.rs b/src/agent/orchestrator.rs[m
+[1mindex 25fc49a..15611eb 100644[m
+[1m--- a/src/agent/orchestrator.rs[m
+[1m+++ b/src/agent/orchestrator.rs[m
+[36m@@ -385,6 +385,7 @@[m [mimpl<'a> FAOrchestrator<'a> {[m
+                                     stderr: String::new(),[m
+                                     classifier_reason: result.classification.reason.clone(),[m
+                                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),[m
+[32m+[m[32m                                    exit_success: false,[m
+                                 },[m
+                                 classification: result.classification,[m
+                             });[m
+[36m@@ -428,6 +429,7 @@[m [mimpl<'a> FAOrchestrator<'a> {[m
+                                     stderr: String::new(),[m
+                                     classifier_reason: result.classification.reason.clone(),[m
+                                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),[m
+[32m+[m[32m                                    exit_success: false,[m
+                                 },[m
+                                 classification: result.classification,[m
+                             });[m
+[36m@@ -678,13 +680,14 @@[m [mimpl<'a> FAOrchestrator<'a> {[m
+                     for (name, script, result) in self.execute_safety_nets(&mut executor, &batch_nets, first_probe).await? {[m
+                         if result.found_defect {[m
+                             let initial_run = generator::RunEvidence {[m
+[31m-                                phase: "safety_net".to_string(),[m
+[31m-                                db_url: result.db_url.clone(),[m
+[31m-                                stdout: String::new(),[m
+[31m-                                stderr: String::new(),[m
+[31m-                                classifier_reason: result.classification.reason.clone(),[m
+[31m-                                classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),[m
+[31m-                            };[m
+[32m+[m[32m                            phase: "safety_net".to_string(),[m
+[32m+[m[32m                            db_url: result.db_url.clone(),[m
+[32m+[m[32m                            stdout: String::new(),[m
+[32m+[m[32m                            stderr: String::new(),[m
+[32m+[m[32m                            classifier_reason: result.classification.reason.clone(),[m
+[32m+[m[32m                            classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),[m
+[32m+[m[32m                            exit_success: false,[m
+[32m+[m[32m                        };[m
+                             if self.multi_defect {[m
+                                 collected_defects.push(CollectedDefect {[m
+                                     script,[m
+[36m@@ -717,6 +720,7 @@[m [mimpl<'a> FAOrchestrator<'a> {[m
+                             stderr: String::new(),[m
+                             classifier_reason: oracle_classification.reason.clone(),[m
+                             classifier_evidence_excerpt: oracle_classification.evidence_excerpt.clone(),[m
+[32m+[m[32m                            exit_success: false,[m
+                         };[m
+                         if let Some(ret) = collect_or_return(self.multi_defect, &mut collected_defects, code, initial_run, oracle_classification) {[m
+                             return Ok(ret);[m
+[36m@@ -748,6 +752,7 @@[m [mimpl<'a> FAOrchestrator<'a> {[m
+                         stderr: String::new(),[m
+                         classifier_reason: classification.reason.clone(),[m
+                         classifier_evidence_excerpt: classification.evidence_excerpt.clone(),[m
+[32m+[m[32m                        exit_success: false,[m
+                     };[m
+                     if let Some(ret) = collect_or_return(self.multi_defect, &mut collected_defects, code, initial_run, classification) {[m
+                         return Ok(ret);[m
+[36m@@ -1040,6 +1045,7 @@[m [mimpl<'a> FAOrchestrator<'a> {[m
+                 stderr: String::new(),[m
+                 classifier_reason: result.classification.reason.clone(),[m
+                 classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),[m
+[32m+[m[32m                exit_success: false,[m
+             };[m
+             return Ok((code, initial_run, result.classification, collected_defects));[m
+         }[m
+[36m@@ -1056,6 +1062,7 @@[m [mimpl<'a> FAOrchestrator<'a> {[m
+                     stderr: String::new(),[m
+                     classifier_reason: result.classification.reason.clone(),[m
+                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),[m
+[32m+[m[32m                    exit_success: false,[m
+                 };[m
+                 return Ok((script, initial_run, result.classification, collected_defects));[m
+             }[m
+[1mdiff --git a/src/agent/sandbox_runner.rs b/src/agent/sandbox_runner.rs[m
+[1mindex 1022626..8415c94 100644[m
+[1m--- a/src/agent/sandbox_runner.rs[m
+[1m+++ b/src/agent/sandbox_runner.rs[m
+[36m@@ -34,6 +34,7 @@[m [mpub async fn run_script_in_fresh_sandbox([m
+         stderr: normalized_stderr,[m
+         classifier_reason: classification.reason,[m
+         classifier_evidence_excerpt: classification.evidence_excerpt,[m
+[32m+[m[32m        exit_success: output.success,[m
+     })[m
+ }[m
+ [m
+[1mdiff --git a/src/agent/tools.rs b/src/agent/tools.rs[m
+[1mindex 99cdf25..f4a57d1 100644[m
+[1m--- a/src/agent/tools.rs[m
+[1m+++ b/src/agent/tools.rs[m
+[36m@@ -369,7 +369,7 @@[m [mpub fn get_submit_mre_tool() -> Tool {[m
+                     },[m
+                     "defect_type": {[m
+                         "type": "string",[m
+[31m-                        "description": "The classification: IllegalSuccess, TYPE_VIOLATION, RANGE_VIOLATION, STATE_VIOLATION, ServerCrash, Timeout."[m
+[32m+[m[32m                        "description": "The classification: IllegalSuccess, ParamIgnored, TYPE_VIOLATION, RANGE_VIOLATION, STATE_VIOLATION, ServerCrash, Timeout."[m
+                     },[m
+                     "surviving_assertions": {[m
+                         "type": "array",[m
+[1mdiff --git a/src/agent/vdbfuzz/boundary.rs b/src/agent/vdbfuzz/boundary.rs[m
+[1mindex 9bde845..ab583a3 100644[m
+[1m--- a/src/agent/vdbfuzz/boundary.rs[m
+[1m+++ b/src/agent/vdbfuzz/boundary.rs[m
+[36m@@ -1,4 +1,4 @@[m
+[31m-use crate::agent::probe::{generate_probe, EndpointType};[m
+[32m+[m[32muse crate::agent::probe::{generate_probe, EndpointType, ProbeTemplate};[m
+ use crate::contract::schema::{RangeConstraint, StructuredContract, TypeConstraint};[m
+ use crate::contract::store::ContractStore;[m
+ use crate::target::TargetStyle;[m
+[36m@@ -11,6 +11,8 @@[m [mpub struct FuzzTestCase {[m
+     pub expected_rejection: bool,[m
+     pub defect_marker: String,[m
+     pub coverage_entry: Option<(String, String, String)>,[m
+[32m+[m[32m    #[serde(default)][m
+[32m+[m[32m    pub semantic_assertion: Option<String>,[m
+ }[m
+ [m
+ pub struct BoundaryValueGenerator;[m
+[36m@@ -236,6 +238,7 @@[m [mimpl BoundaryValueGenerator {[m
+             expected_rejection,[m
+             defect_marker: "ILLEGAL_SUCCESS".to_string(),[m
+             coverage_entry: Some((endpoint.to_string(), param.to_string(), value.to_string())),[m
+[32m+[m[32m            semantic_assertion: None,[m
+         }[m
+     }[m
+ [m
+[36m@@ -260,6 +263,7 @@[m [mimpl BoundaryValueGenerator {[m
+             expected_rejection: true,[m
+             defect_marker: "ILLEGAL_SUCCESS".to_string(),[m
+             coverage_entry: Some((endpoint.to_string(), param.to_string(), value_expr.to_string())),[m
+[32m+[m[32m            semantic_assertion: None,[m
+         }[m
+     }[m
+ [m
+[36m@@ -281,6 +285,7 @@[m [mimpl BoundaryValueGenerator {[m
+             expected_rejection: true,[m
+             defect_marker: "ILLEGAL_SUCCESS".to_string(),[m
+             coverage_entry: Some((endpoint.to_string(), param.to_string(), "<remove>".to_string())),[m
+[32m+[m[32m            semantic_assertion: None,[m
+         }[m
+     }[m
+ [m
+[36m@@ -302,6 +307,7 @@[m [mimpl BoundaryValueGenerator {[m
+             expected_rejection: true,[m
+             defect_marker: "ILLEGAL_SUCCESS".to_string(),[m
+             coverage_entry: Some((endpoint.to_string(), param.to_string(), "INVALID_ENUM_VALUE_42".to_string())),[m
+[32m+[m[32m            semantic_assertion: None,[m
+         }[m
+     }[m
+ }[m
+[36m@@ -312,14 +318,16 @@[m [mfn is_milvus_search_param(param_name: &str) -> bool {[m
+ }[m
+ [m
+ fn milvus_generate_probe(ep_type: EndpointType, param: &str, value: &str, label: &str) -> String {[m
+[32m+[m[32m    let template = crate::agent::probe::MilvusProbeTemplate;[m
+     match ep_type {[m
+[31m-        EndpointType::Search => crate::agent::probe_milvus::milvus_search_probe(param, value, label),[m
+[31m-        EndpointType::Create => crate::agent::probe_milvus::milvus_create_probe(param, value, label),[m
+[31m-        EndpointType::Upsert => crate::agent::probe_milvus::milvus_insert_probe(param, value, label),[m
+[32m+[m[32m        EndpointType::Search => template.search_probe(param, value, label),[m
+[32m+[m[32m        EndpointType::Create => template.create_probe(param, value, label),[m
+[32m+[m[32m        EndpointType::Upsert => template.upsert_probe(param, value, label),[m
+         EndpointType::Delete | EndpointType::Scroll => {[m
+[31m-            crate::agent::probe_milvus::milvus_query_probe(param, value, label)[m
+[32m+[m[32m            template.delete_probe(param, value, label)[m
+         }[m
+[31m-        EndpointType::Recommend => crate::agent::probe_milvus::milvus_search_probe(param, value, label),[m
+[32m+[m[32m        EndpointType::Recommend => template.recommend_probe(param, value, label),[m
+[32m+[m[32m        EndpointType::Config => template.search_probe(param, value, label),[m
+     }[m
+ }[m
+ [m
+[1mdiff --git a/src/agent/vdbfuzz/semantic.rs b/src/agent/vdbfuzz/semantic.rs[m
+[1mindex 80e402d..21c5689 100644[m
+[1m--- a/src/agent/vdbfuzz/semantic.rs[m
+[1m+++ b/src/agent/vdbfuzz/semantic.rs[m
+[36m@@ -29,6 +29,7 @@[m [mimpl ConcurrentStateGenerator {[m
+             expected_rejection: false,[m
+             defect_marker: "STATE_LOGIC_VIOLATION".into(),[m
+             coverage_entry: Some(("insert".into(), 

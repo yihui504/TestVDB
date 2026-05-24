@@ -1,3 +1,4 @@
+use chrono::Utc;
 use crate::agent::classifier::ClassificationDisposition;
 use crate::agent::llm::DeepSeekClient;
 use crate::agent::orchestrator::FAOrchestrator;
@@ -104,6 +105,7 @@ pub async fn run_mine(
     skip_generators: bool,
     llm_turns: usize,
     skip_safety_nets: bool,
+    strategy_threshold: usize,
 ) -> anyhow::Result<()> {
     info!("Starting contract-driven bug mining for target: {} version: {}", target, version);
 
@@ -171,7 +173,7 @@ pub async fn run_mine(
             info!("Round {}: ContractStore snapshot: {} type_constraints, {} range_constraints, {} observed_behaviors",
                 round, store.type_constraints.len(), store.range_constraints.len(), store.observed_behaviors.len());
 
-            let round_defects = feedback_loop::run_deterministic_round(target, &store, style, feedback_sandbox.as_ref()).await;
+            let round_defects = feedback_loop::run_deterministic_round(target, &store, style, strategy_threshold, feedback_sandbox.as_ref()).await;
             let defect_count = round_defects.len();
             info!("Round {}: found {} total defects", round, defect_count);
 
@@ -367,6 +369,22 @@ pub async fn run_mine(
             }
             Err(e) => warn!("Shadow batch run failed: {}", e),
         }
+    }
+
+    // ── H2: Structured results storage ──
+    {
+        let ts = Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        let results_dir = format!("results/{}/{}/{}", target, version, ts);
+        std::fs::create_dir_all(&results_dir)?;
+        let defects_json = serde_json::to_string_pretty(&all_batch_defects)?;
+        std::fs::write(format!("{}/defects.json", results_dir), &defects_json)?;
+        let summary = format!(
+            "# {} {} Mine Results\n\n- Deterministic defects: {}\n- LLM defects: {}\n- Strategies: {:?}\n",
+            target, version, all_batch_defects.len(), mine_defect_count,
+            defect_counts.iter().map(|(s,c)| format!("{}={}", s, c)).collect::<Vec<_>>()
+        );
+        std::fs::write(format!("{}/summary.md", results_dir), &summary)?;
+        info!("Results saved to {}", results_dir);
     }
 
     Ok(())

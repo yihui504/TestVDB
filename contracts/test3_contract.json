@@ -1,0 +1,10 @@
+{
+  "api_endpoint": "unknown",
+  "doc_url": "https://example.com",
+  "assertions": [],
+  "type_constraints": [],
+  "range_constraints": [],
+  "state_constraints": [],
+  "state_invariants": [],
+  "behavioral_contracts": []
+}

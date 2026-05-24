@@ -19,7 +19,7 @@ pub async fn execute_test_script(
     sidecars: &[SidecarSpec],
     db_env: &[(String, String)],
     db_command: &[String],
-) -> Result<(String, Sandbox, String)> {
+) -> Result<(String, Sandbox, String, bool)> {
     info!("Creating fresh sandbox for script execution...");
     let pip_refs: Vec<&str> = pip_packages.iter().map(|s| s.as_str()).collect();
     let sandbox = Sandbox::create_network_and_containers(db_image, &pip_refs, db_port, sidecars, db_env, db_command).await?;
@@ -37,14 +37,14 @@ pub async fn execute_test_script(
     result_str.push_str("\nSTDERR:\n");
     result_str.push_str(&normalized_stderr);
     
-    Ok((result_str, sandbox, db_url))
+    Ok((result_str, sandbox, db_url, output.success))
 }
 
 pub async fn execute_test_in_sandbox(
     code: &str,
     sandbox: &Sandbox,
     db_port: u16,
-) -> Result<(String, String)> {
+) -> Result<(String, String, bool)> {
     info!("Reusing existing sandbox for script execution...");
     let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap_or(&"localhost".to_string()), db_port);
     let script_code = code.replace("{{TESTVDB_DB_URL}}", &db_url);
@@ -59,7 +59,7 @@ pub async fn execute_test_in_sandbox(
     result_str.push_str("\nSTDERR:\n");
     result_str.push_str(&normalized_stderr);
     
-    Ok((result_str, db_url))
+    Ok((result_str, db_url, output.success))
 }
 
 pub fn get_execute_test_script_tool() -> Tool {

@@ -14,6 +14,8 @@ pub struct BatchDefect {
     pub stderr: String,
     pub endpoint: Option<String>,
     pub param_name: Option<String>,
+    #[serde(default)]
+    pub exit_success: bool,
 }
 
 /// A clustered root cause: multiple defect instances collapsed into one actionable finding.
@@ -413,6 +415,7 @@ mod tests {
             stderr: String::new(),
             endpoint: None,
             param_name: None,
+            exit_success: false,
         }];
         let obs = ResultAnalyzer::analyze(&defects);
         assert_eq!(obs.len(), 1);
@@ -432,6 +435,7 @@ mod tests {
             stderr: String::new(),
             endpoint: Some("/collections/test/points/search".to_string()),
             param_name: Some("limit".to_string()),
+            exit_success: false,
         }];
         let obs = ResultAnalyzer::analyze(&defects);
         assert_eq!(obs[0].endpoint, "/collections/test/points/search");
@@ -449,6 +453,7 @@ mod tests {
             stderr: String::new(),
             endpoint: None,
             param_name: None,
+            exit_success: false,
         }];
         let obs = ResultAnalyzer::analyze(&defects);
         assert_eq!(obs.len(), 1);
@@ -467,6 +472,7 @@ mod tests {
             stderr: String::new(),
             endpoint: None,
             param_name: None,
+            exit_success: false,
         }];
         let obs = ResultAnalyzer::analyze(&defects);
         assert_eq!(obs.len(), 1);
@@ -485,6 +491,7 @@ mod tests {
             stderr: String::new(),
             endpoint: None,
             param_name: None,
+            exit_success: false,
         }];
         let new_count = ResultAnalyzer::assimilate_batch(&mut store, &defects);
         assert_eq!(new_count, 1);
@@ -507,6 +514,7 @@ mod tests {
             stderr: String::new(),
             endpoint: None,
             param_name: None,
+            exit_success: false,
         }];
         ResultAnalyzer::assimilate_batch(&mut store, &defects);
         let new_count = ResultAnalyzer::assimilate_batch(&mut store, &defects);
@@ -555,6 +563,7 @@ mod tests {
                 defect_line: "[DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted".to_string(),
                 script: String::new(), stdout: String::new(), stderr: String::new(),
                 endpoint: Some("search".to_string()), param_name: Some("offset".to_string()),
+                exit_success: false,
             },
             BatchDefect {
                 test_name: "offset_zero".to_string(),
@@ -562,6 +571,7 @@ mod tests {
                 defect_line: "[DEFECT: ILLEGAL_SUCCESS] offset=0 accepted".to_string(),
                 script: String::new(), stdout: String::new(), stderr: String::new(),
                 endpoint: Some("search".to_string()), param_name: Some("offset".to_string()),
+                exit_success: false,
             },
             BatchDefect {
                 test_name: "limit_below_min".to_string(),
@@ -569,6 +579,7 @@ mod tests {
                 defect_line: "[DEFECT: ILLEGAL_SUCCESS] limit below min accepted".to_string(),
                 script: String::new(), stdout: String::new(), stderr: String::new(),
                 endpoint: Some("search".to_string()), param_name: Some("limit".to_string()),
+                exit_success: false,
             },
         ];
         let clusters = ResultAnalyzer::cluster_defects(&defects);

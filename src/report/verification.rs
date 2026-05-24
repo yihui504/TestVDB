@@ -43,19 +43,25 @@ pub async fn verify_candidate_defect(
 
         match effect {
             ParamEffect::ConfirmedIgnored => {
-                candidate.status = CandidateStatus::Rejected;
-                candidate.downgrade_reason = Some(
-                    "SemanticGate: parameter was silently ignored by the server (ConfirmedIgnored). Not a real defect.".to_string(),
-                );
-                let candidate_path = format!("{}_candidate_defect.md", target);
-                BugReport::export_candidate_to_markdown(candidate, &candidate_path)?;
-                warn!(
-                    "Candidate rejected by SemanticGate (ConfirmedIgnored). Saved to {}",
-                    candidate_path
-                );
-                return Ok(VerificationOutcome::Rejected(
-                    candidate.downgrade_reason.clone().unwrap_or_default(),
-                ));
+                if defect_type == crate::agent::classifier::DefectType::ParamIgnored {
+                    info!(
+                        "SemanticGate: ConfirmedIgnored for ParamIgnored defect. Parameter was silently ignored as expected. Annotating as confirmed."
+                    );
+                } else {
+                    candidate.status = CandidateStatus::Rejected;
+                    candidate.downgrade_reason = Some(
+                        "SemanticGate: parameter was silently ignored by the server (ConfirmedIgnored). Not a real defect.".to_string(),
+                    );
+                    let candidate_path = format!("{}_candidate_defect.md", target);
+                    BugReport::export_candidate_to_markdown(candidate, &candidate_path)?;
+                    warn!(
+                        "Candidate rejected by SemanticGate (ConfirmedIgnored). Saved to {}",
+                        candidate_path
+                    );
+                    return Ok(VerificationOutcome::Rejected(
+                        candidate.downgrade_reason.clone().unwrap_or_default(),
+                    ));
+                }
             }
             ParamEffect::ActuallyApplied => {
                 info!(

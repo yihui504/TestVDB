@@ -47,7 +47,7 @@ impl SemanticGateProvider for QdrantSemanticGate {
         db_env: &[(String, String)],
         db_command: &[String],
     ) -> ParamEffect {
-        if defect_type != &DefectType::IllegalSuccess {
+        if defect_type != &DefectType::IllegalSuccess && defect_type != &DefectType::ParamIgnored {
             return ParamEffect::Ambiguous;
         }
 

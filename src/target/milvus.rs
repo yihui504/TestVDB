@@ -1,5 +1,6 @@
 use super::{SafetyNet, TargetPlugin, TargetStyle};
 use crate::agent::oracle::{InvariantCheck, InvariantSource};
+use crate::agent::probe::{ProbeTemplate, MilvusProbeTemplate};
 use crate::agent::probe_milvus as milvus_probe;
 use crate::agent::probe_milvus_advanced as milvus_advanced;
 use crate::contract::schema::{CheckType, StructuredContract};
@@ -28,6 +29,14 @@ impl TargetPlugin for MilvusPlugin {
 
     fn db_port(&self) -> u16 {
         19530
+    }
+
+    fn default_repo_url(&self) -> Option<&str> {
+        Some("https://github.com/milvus-io/milvus")
+    }
+
+    fn default_docs_url(&self) -> Option<&str> {
+        Some("https://milvus.io/docs/")
     }
 
     fn safety_nets(&self) -> Vec<SafetyNet> {
@@ -411,6 +420,10 @@ impl TargetPlugin for MilvusPlugin {
 
     fn doc_citation_url(&self) -> String {
         "https://milvus.io/api-reference/restful/v2.4.x/v2/Vector%20(v2)/CreateCollection.md".to_string()
+    }
+
+    fn probe_template(&self) -> &dyn ProbeTemplate {
+        &MilvusProbeTemplate
     }
 }
 

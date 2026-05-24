@@ -37,6 +37,29 @@ pub fn extract_toc(html: &str) -> Vec<String> {
     links
 }
 
+/// Extracts links from the main content area (article/main/.content), complementing `extract_toc`
+/// which only picks up nav/sidebar links. Used for BFS crawl expansion.
+pub fn extract_content_links(html: &str) -> Vec<String> {
+    let document = Html::parse_document(html);
+    let content_selector =
+        Selector::parse("main a[href], article a[href], .content a[href], .document a[href]")
+            .unwrap();
+
+    let mut links = Vec::new();
+    for link in document.select(&content_selector) {
+        if let Some(href) = link.value().attr("href") {
+            if !href.starts_with('#')
+                && !href.starts_with("javascript:")
+                && !href.starts_with("mailto:")
+            {
+                links.push(href.to_string());
+            }
+        }
+    }
+    links.dedup();
+    links
+}
+
 /// Cleans the HTML content by stripping scripts, styles, navs, and footers,
 /// then converts the core content into Markdown.
 pub fn clean_content(html: &str) -> String {

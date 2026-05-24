@@ -1,7 +1,7 @@
 services:
   qdrant:
     container_name: qdrant-standalone
-    image: qdrant/qdrant:v1.13.4
+    image: qdrant/qdrant:v1.18.1
     volumes:
       - ./volumes/qdrant:/qdrant/storage
     ports:

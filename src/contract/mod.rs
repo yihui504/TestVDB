@@ -164,6 +164,22 @@ pub fn parse_constraints_from_assertions(assertions: &[String]) -> (Vec<RangeCon
                     violation_examples: vec![],
                 });
             }
+        } else if a.contains("one of:") || a.contains("one of ") {
+            // "param must be one of: a, b, c" or "param must be a, b, or c"
+            if let Some(param) = extract_param_name(&prefix_stripped) {
+                let values: String = if let Some(idx) = a.find("one of:") {
+                    a[idx + 7..].trim().to_string()
+                } else if let Some(idx) = a.find("one of ") {
+                    a[idx + 7..].trim().to_string()
+                } else {
+                    String::new()
+                };
+                type_constraints.push(TypeConstraint {
+                    param_name: param,
+                    expected_type: format!("enum({})", values),
+                    violation_examples: vec![],
+                });
+            }
         } else if a.contains("must be >") || a.contains("must be greater") {
             let min_val = extract_numeric_constraint(&prefix_stripped, ">");
             if let Some(param) = extract_param_name(&prefix_stripped) {

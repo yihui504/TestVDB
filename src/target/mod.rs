@@ -1,4 +1,5 @@
 use crate::agent::oracle::InvariantCheck;
+use crate::agent::probe::ProbeTemplate;
 use crate::contract::schema::StructuredContract;
 use crate::review::IndependentReviewer;
 use crate::sandbox::manager::SidecarSpec;
@@ -51,9 +52,14 @@ pub trait TargetPlugin: Send + Sync {
     fn derive_oracle_checks(&self, contract: &StructuredContract) -> Vec<InvariantCheck>;
     fn target_style(&self) -> TargetStyle;
     fn doc_citation_url(&self) -> String;
+    fn probe_template(&self) -> &dyn ProbeTemplate;
     fn db_sidecars(&self) -> Vec<SidecarSpec> { Vec::new() }
     fn db_env(&self) -> Vec<(String, String)> { Vec::new() }
     fn db_command(&self) -> Vec<String> { Vec::new() }
+    /// Default source repository URL for Knowledge Agent auto-trigger.
+    fn default_repo_url(&self) -> Option<&str> { None }
+    /// Default documentation URL for Knowledge Agent auto-trigger.
+    fn default_docs_url(&self) -> Option<&str> { None }
 }
 
 pub struct TargetRegistry {

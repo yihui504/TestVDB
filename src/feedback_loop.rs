@@ -45,11 +45,20 @@ pub async fn run_deterministic_round(
     target: &str,
     store: &ContractStore,
     style: TargetStyle,
+    strategy_threshold: usize,
     feedback_sandbox: Option<&Sandbox>,
 ) -> Vec<BatchDefect> {
+    let constraint_count = store.type_constraints.len() + store.range_constraints.len();
+    let skip_low_yield = strategy_threshold > 0 && constraint_count < strategy_threshold;
+    if skip_low_yield {
+        info!(
+            "Strategy threshold: constraints={} < threshold={}, skipping low-yield strategies (state/meta/seq/res/combo/conc)",
+            constraint_count, strategy_threshold
+        );
+    }
     let mut all_defects = Vec::new();
 
-    // ── Core generators ──
+    // ── Core generators (always run) ──
     run_one_generator(target, "boundary", "Boundary",
         BoundaryValueGenerator::from_store(store, style),
         feedback_sandbox,
@@ -64,42 +73,7 @@ pub async fn run_deterministic_round(
         &mut all_defects,
     ).await;
 
-    run_one_generator(target, "state", "State",
-        StateTestGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), Some(c.endpoint.clone()), None),
-        &mut all_defects,
-    ).await;
-
-    run_one_generator(target, "meta", "Metamorphic",
-        MetamorphicTestGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
-
-    run_one_generator(target, "seq", "Sequence",
-        SequenceTestGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
-
-    run_one_generator(target, "res", "Resource",
-        ResourceTestGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
-
-    run_one_generator(target, "combo", "Combo",
-        ComboTestGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
-
-    // ── Differential & concurrent ──
+    // ── Differential (always run) ──
     run_one_generator(target, "diff", "Differential",
         DiffTestGenerator::from_store(store, style),
         feedback_sandbox,
@@ -107,34 +81,71 @@ pub async fn run_deterministic_round(
         &mut all_defects,
     ).await;
 
-    run_one_generator(target, "conc", "Concurrent",
-        ConcurrentTestGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
+    // ── Low-yield generators (skip when constraints below threshold) ──
+    if !skip_low_yield {
+        run_one_generator(target, "state", "State",
+            StateTestGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), Some(c.endpoint.clone()), None),
+            &mut all_defects,
+        ).await;
 
-    // ── Semantic / state / resource generators ──
-    run_one_generator(target, "conc_state", "ConcurrentState",
-        ConcurrentStateGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
+        run_one_generator(target, "meta", "Metamorphic",
+            MetamorphicTestGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
 
-    run_one_generator(target, "semantic", "SemanticDrift",
-        SemanticDriftGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
+        run_one_generator(target, "seq", "Sequence",
+            SequenceTestGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
 
-    run_one_generator(target, "resource", "ResourceBoundary",
-        ResourceBoundaryGenerator::from_store(store, style),
-        feedback_sandbox,
-        |c| (c.name.clone(), c.script.clone(), None, None),
-        &mut all_defects,
-    ).await;
+        run_one_generator(target, "res", "Resource",
+            ResourceTestGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
+
+        run_one_generator(target, "combo", "Combo",
+            ComboTestGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
+
+        run_one_generator(target, "conc", "Concurrent",
+            ConcurrentTestGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
+
+        run_one_generator(target, "conc_state", "ConcurrentState",
+            ConcurrentStateGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
+
+        run_one_generator(target, "semantic", "SemanticDrift",
+            SemanticDriftGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
+
+        run_one_generator(target, "resource_b", "ResourceBoundary",
+            ResourceBoundaryGenerator::from_store(store, style),
+            feedback_sandbox,
+            |c| (c.name.clone(), c.script.clone(), None, None),
+            &mut all_defects,
+        ).await;
+    }
 
     all_defects
 }

@@ -1,8 +1,8 @@
 # TestVDB 交接信息
 
-## 最后更新: 2026-05-21 14:50
+## 最后更新: 2026-05-23
 
-## 项目状态: ⚠️ Step 10-13 代码完成，V33-V41 实战验证未产出增量 Bug
+## 项目状态: 🔄 Phase 2（缺陷多样性增强）已收尾，Phase A（Qdrant 全流程验证）为下一优先级
 
 ---
 
@@ -12,99 +12,125 @@
 
 | 文件 | 路径 | 状态 |
 |------|------|------|
-| Plan（当前） | `.trae/plans/diversity-enhancement-plan.md` | IN PROGRESS (v7) — Step 10-13 代码完成，Step 14 待验证 |
-| Plan（Step 10 详细） | `.trae/plans/step10-stateful-model-testing.md` | COMPLETED |
-| Spec | `.trae/specs/deep-interview-llm-orchestrator-v2.md` | ACTIVE — Phase 2 Deep Interview 完成（模糊度 13.3%） |
+| Plan（主计划） | `PLAN.md` | ACTIVE — Phase A 为当前优先级 |
+| Plan（多样性增强） | `.trae/plans/diversity-enhancement-plan.md` | COMPLETED — Step 1-13 完成，Step 14 降级 |
+| Spec | `.trae/specs/deep-interview-llm-orchestrator-v2.md` | COMPLETED |
 | Handoff | `.trae/state/handoff.md` | 本文件 |
 
 ---
 
-## 当前任务：缺陷类型多样性增强（14步）
+## 项目整体进展
 
-| Step | 内容 | 状态 |
+### Phase 0: Milvus Shadow Mode ✅ 完成
+- Milvus v2.6.16 Shadow Mode 验证完成（Mine 96 缺陷 vs Batch 24 缺陷）
+- 5 个 GitHub Issue 已提交到 milvus-io/milvus（3 个 Open, 1 个 Closed, 1 个待确认）
+- 筛选出 5 个 P0 + 7 个 P1 + 2 个 P2 待提交缺陷
+
+### Phase 2: 缺陷多样性增强 ✅ 收尾（降级完成）
+- Step 1-13 代码全部完成
+- 3 个新工具实现：execute_stateful_test / execute_concurrent_test / execute_timing_test
+- 硬性约束 + Prompt 重设计 + 语义不变量 + turn_hint 注入
+- V33-V41 实战验证（9 次运行）：未产出增量 Bug
+- **根因**：Milvus v2.6.16 在状态/并发/时序维度上基本正确
+- **结论**：工具能力就绪，需换目标系统验证
+
+### Phase A: Qdrant 全流程验证 ⏳ 待启动（下一优先级）
+- A1: 多页面递归爬取 — 未开始
+- A2: OpenAPI spec 自动发现 — 未开始（Qdrant 已有 qdrant_openapi.json）
+- A3: 分阶段 LLM 合同提取 — 未开始
+- A4: 合同交叉验证 — 未开始
+- A5: Knowledge Agent 默认启用 — 未开始（QdrantPlugin 已实现 default_repo_url/default_docs_url）
+- A6: Qdrant Shadow Mode — 已尝试一次，0 缺陷（合同不足导致策略跳过）
+- A7: 探针模板抽象化 — 未开始
+
+### Phase B: Weaviate 探针修复 ❌ 未开始
+### Phase C: PGVector 基础覆盖 ❌ 未开始
+### Phase D: 横向对比与论文数据 ❌ 未开始
+
+---
+
+## 代码架构总览
+
+### 模块结构（src/）
+| 模块 | 文件数 | 功能 | 成熟度 |
+|------|--------|------|--------|
+| agent/ | 14 | LLM 编排器、执行器、分类器、Oracle、探针、vdbfuzz | ★★★★ |
+| contract/ | 5 | 合同加载/解析/Schema/Store/Prompt 生成 | ★★★★ |
+| crawler/ | 2 | Reqwest + Chromium 双引擎爬虫 | ★★★ |
+| target/ | 5 | 四库 TargetPlugin 适配层 | ★★★ |
+| review/ | 5 | 独立审查器（Milvus/Qdrant/Weaviate/PGVector） | ★★★ |
+| report/ | 3 | 报告生成/LLM 分析/验证 | ★★★ |
+| sandbox/ | 2 | Docker 沙箱管理 | ★★★★ |
+| vdbfuzz/ | 10 | 9 种确定性测试生成器 | ★★★★ |
+
+### CLI 命令
+| 命令 | 功能 | 状态 |
 |------|------|------|
-| 1-9 | 前期工作 | ✅ 全部完成 |
-| **10** | **有状态模型测试（execute_stateful_test）** | **✅ 代码完成 + V31/V32 验证** |
-| **11** | **并发竞态测试（execute_concurrent_test）** | **✅ 代码完成** |
-| **12** | **时序依赖测试（execute_timing_test）** | **✅ 代码完成** |
-| **13** | **Prompt 重设计 + 硬性约束 + 语义不变量 + turn_hint** | **✅ 代码完成** |
-| 14 | 实战验证 — 产出增量 Bug | ⚠️ V33-V41 未产出增量 Bug |
+| `extract` | 爬取文档 → 提取合同 | 基本可用，仅爬单页 |
+| `test` | 单次 LLM 编排测试 | 可用 |
+| `batch` | 批量 SafetyNet 探针 | 可用（Milvus 成熟，Qdrant 可用，Weaviate 11/11 ERROR） |
+| `mine` | 合同驱动缺陷挖掘 + 反馈循环 + LLM 编排 | 可用 |
+
+### TargetPlugin 适配层成熟度
+| 目标 | SafetyNet 数 | 探针通过率 | 合同质量 | 问题 |
+|------|-------------|-----------|---------|------|
+| Milvus | 65+ | 79.5% | ★★★★★ (5455行 OpenAPI) | 成熟 |
+| Qdrant | 40+ | 未知 | ★★ (合同不足，策略被跳过) | 需要合同扩展 |
+| Weaviate | ~11 | 0% (全 ERROR) | ★ (39行) | API 路径/认证不匹配 |
+| PGVector | ~10 | 未知 | ★ (36行) | 无 OpenAPI，需 SQL 路径 |
 
 ---
 
-## V33-V41 实战验证总结（9 次运行）
+## Qdrant 首次 Mine 运行结果
 
-### 工具使用情况
-- `execute_stateful_test`：✅ LLM 在 Turn 1-3 使用
-- `execute_concurrent_test`：✅ LLM 在 Turn 4-6 使用（硬性约束生效）
-- `execute_timing_test`：❌ 从未被 LLM 使用（Turn 7-8 LLM 选择其他工具或运行提前结束）
-- `execute_test_script`：Turn 9+ 可用，LLM 偶尔使用
-
-### 缺陷发现
-- 所有缺陷均为参数边界类型（nprobe=0, shardsNum=null, collectionName type, Authorization null）
-- 确定性生成器已覆盖这些类型
-- **未产出增量 Bug**
-
-### 根因分析
-1. **Milvus v2.6.16 基本状态一致性正确** — insert→rowCount, delete→rowCount, upsert→rowCount 都符合预期
-2. **LLM（DeepSeek）倾向参数边界测试** — 即使 Prompt 明确禁止，LLM 仍测试 shardsNum=null, Authorization=null 等
-3. **timing_test 从未被使用** — 可能因为 Turn 7-8 时 LLM 已被 Safety Net 或收敛检测提前终止
-4. **并发测试未触发竞态** — 2 线程 × 5 实体可能不足以触发 Milvus 竞态条件
-
-### Step 13 代码改动清单
-1. **硬性约束**（orchestrator.rs）：
-   - Turn 1-3: 只能用 execute_stateful_test 或 compare_endpoints
-   - Turn 4-6: 只能用 execute_concurrent_test
-   - Turn 7-8: 只能用 execute_timing_test
-   - Turn 9+: 任意工具，execute_test_script 从 Turn 10 可用
-2. **Prompt 重设计**（orchestrator.rs build_system_prompt）：
-   - 语义不变量列表（9 条）
-   - 优先端点列表（10 个核心向量操作端点）
-   - 具体测试场景模板（3 个 Turn 阶段）
-   - 已知 Bug 模式提示（5 种）
-   - CRITICAL 禁止测试参数边界
-3. **turn_hint 注入**（orchestrator.rs）：每轮根据 Turn 编号注入强制提示
-4. **timing test 修复**：
-   - immediate=true 时 sleep(0)（真正无延迟）
-   - Prompt 示例中 immediate 放在 flush 步骤而非 search 步骤
-5. **concurrent test Prompt**：repeat=10（增加竞态窗口）
+**运行时间**: 2026-05-23 09:48
+**结果**: 0 缺陷（所有策略 = 0）
+**根因**: 合同约束数 < strategy_threshold(100)，state/meta/seq/res/combo/conc 策略被自动跳过
+**待解决**: 需要先完成 A1-A3（爬取+合同提取），扩展合同后再跑 Mine
 
 ---
 
-## 关键技术决策
+## 已提交 GitHub Issue 跟踪
 
-1. **Endpoint规范化**：方案A已实施（openapi.rs 1行改动），效果显著
-2. **LLM编排器角色**：从"边界值探索"改为"状态序列探索+跨端点语义推理"
-3. **新工具集**：execute_stateful_test + execute_concurrent_test + execute_timing_test + compare_endpoints
-4. **硬性约束**：代码层面强制 Turn 分配（非仅 Prompt 建议）
-5. **语义不变量**：9 条核心不变量（rowCount, flush 可见性, 并发一致性等）
-6. **timing test immediate 语义**：immediate=true → sleep(0)，放在 preparatory 步骤（flush/load/delete）
+| Issue | 标题 | 状态 | 优先级 |
+|-------|------|------|--------|
+| #49823 | nprobe=0 被接受 | Open, triage/accepted, milestone 2.6.18 | P1 |
+| #49824 | 重复集合名返回成功 | Closed by author | P0 |
+| #49844 | filter=null/missing 被接受 | Open, triage/accepted, milestone 3.0 | P1 |
+| #49889 | dbName="" 被接受 | Open | P1 |
+| #49890 | Request-Timeout 接受非integer | Open | P1 |
+
+### 待提交缺陷（filtered_real_defects.md）
+- P0: 5 个（32768维OOM、REST/SDK不一致、重复ID count=-1、create-drop-create维度丢失、超大维度无上限）
+- P1: 7 个（nprobe=-1、负数TTL、超大插入、未知参数静默接受、空collectionName等）
+- P2: 2 个（空ID数组、NaN/Inf向量）
 
 ---
 
-## 待解决问题
+## 核心瓶颈（来自 PLAN.md）
 
-1. **timing_test 未被 LLM 使用** — 需要更强的引导或不同的 LLM
-2. **LLM 倾向参数边界测试** — DeepSeek 对"不要测试参数边界"指令遵守度低
-3. **Milvus v2.6.16 状态一致性正确** — 需要换目标系统或增加负载
-4. **降级评估**：
-   - 工具能力就绪 ✅
-   - ≥1 个增量 Bug 类型 ❌（Milvus v2.6.16 在状态交互/并发/时序维度上没有 Bug）
-   - 建议：在 Qdrant 或 Milvus 更早版本上验证
+| 链路 | 评分 | 根因 |
+|------|------|------|
+| 爬取→合同 | 3/10 | 只爬 TOC 第一页；无 JS 渲染；严重依赖预写资产 |
+| LLM 合同提取 | 5/10 | 单次调用；无验证回路；Knowledge Agent 很少触发 |
+| Harness 工程 | 6/10 | Docker CLI 依赖；无缓存；多库探针兼容差 |
+
+**关键发现**: Milvus 的 96 个缺陷产出主要依赖预写的 OpenAPI spec（5455 行）和行为模板（1225 行），而非实时爬取+LLM 提取。其他三库缺乏此类资产，整个测试链条从第一环断裂。
 
 ---
 
 ## 环境信息
 
-### Milvus Docker
-- docker-compose: docker-compose.milvus.yml
-- 3容器: etcd + MinIO + milvus-standalone
-- 端口: 19530
-- 正确版本标签: v2.6.16
+### 编译
+- Rust edition: 2024
+- Cargo build: 成功（0 error, 4 warning 预存）
+- 构建目录: C:/t（.cargo/config.toml 配置）
 
-### 编译状态
-- cargo build: 成功（0 error, 4 warning 预存）
-- pip 清华镜像源: 已配置
+### Docker
+- Milvus: docker-compose.milvus.yml (etcd + MinIO + milvus-standalone, 端口 19530)
+- Qdrant: docker-compose.qdrant.yml (端口 6333)
+- Weaviate: docker-compose.weaviate.yml
+- PGVector: docker-compose.pgvector.yml
 
 ### DeepSeek API Key
 - 位置: C:\Users\11428\Desktop\mftui\deepseekapikey.txt
@@ -112,16 +138,17 @@
 
 ---
 
-## 已提交 Issue 跟踪
-- #49823: nprobe=0 被接受 — Open, triage/accepted, milestone 2.6.18
-- #49824: 重复集合名返回成功 — Closed by author
-- #49844: filter=null/missing 被接受 — Open, triage/accepted, milestone 3.0
-- #49889: dbName="" 被接受 — Open
-- #49890: Request-Timeout 接受非integer — Open
+## 下一步行动（优先级排序）
+
+1. **A1: 多页面递归爬取** — 修改 contract_loader.rs 的 run_extract()，实现 BFS 递归爬取
+2. **A2: OpenAPI 自动发现** — 爬取后自动检测 /openapi.json 等路径
+3. **A3: 分阶段 LLM 合同提取** — 两阶段调用提高准确率
+4. **A6: Qdrant Shadow Mode** — 合同扩展后重跑 Mine + Batch
+5. **A7: 探针模板抽象化** — ProbeTemplate trait 统一探针逻辑
 
 ---
 
-## Milvus 已知并发/竞态 Bug（Phase 2 目标参考）
+## Milvus 已知并发/竞态 Bug（参考）
 - #47913: Flush 后数据 3 分钟不可见（v2.6.11）
 - #47635: Load 后 Search 失败（v2.3.x）
 - #42723: 并发读写 Panic（v2.6.x）

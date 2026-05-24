@@ -1,5 +1,7 @@
 use crate::target::SafetyNet;
 
+use crate::agent::probe::ProbeTemplate;
+
 const MILVUS_AUTH_HEADER: &str = "'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'";
 
 fn milvus_create_collection_script(name_var: &str, dim: &str, metric: &str, index_type: &str) -> String {
@@ -1031,25 +1033,28 @@ pub struct MilvusSimpleSafetyNet {
 
 impl MilvusSimpleSafetyNet {
     pub fn to_search_safety_net(&self) -> SafetyNet {
+        let template = crate::agent::probe::MilvusProbeTemplate;
         SafetyNet {
             name: self.name.clone(),
-            script: milvus_search_probe(&self.param, &self.value, &self.label),
+            script: template.search_probe(&self.param, &self.value, &self.label),
             redundant_with_mutation: self.redundant_with_mutation,
         }
     }
 
     pub fn to_search_params_safety_net(&self) -> SafetyNet {
+        let template = crate::agent::probe::MilvusProbeTemplate;
         SafetyNet {
             name: self.name.clone(),
-            script: milvus_search_params_probe(&self.param, &self.value, &self.label),
+            script: template.search_params_probe(&self.param, &self.value, &self.label),
             redundant_with_mutation: self.redundant_with_mutation,
         }
     }
 
     pub fn to_create_safety_net(&self) -> SafetyNet {
+        let template = crate::agent::probe::MilvusProbeTemplate;
         SafetyNet {
             name: self.name.clone(),
-            script: milvus_create_probe(&self.param, &self.value, &self.label),
+            script: template.create_probe(&self.param, &self.value, &self.label),
             redundant_with_mutation: self.redundant_with_mutation,
         }
     }

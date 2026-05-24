@@ -1,12 +1,12 @@
 use super::{SafetyNet, TargetPlugin, TargetStyle};
 use crate::agent::oracle::{InvariantCheck, InvariantSource};
 use crate::agent::probe::{
-    classify_endpoint_type, count_consistency_check, create_probe, delete_probe,
-    duplicate_collection_check, empty_vector_search_check, format_boundary,
-    inf_vector_search_check, invalid_distance_check, is_search_param, nan_vector_check,
-    recommend_probe, scroll_probe, search_nonexistent_collection, search_params_probe,
+    classify_endpoint_type, count_consistency_check, create_probe,
+    duplicate_collection_check, empty_vector_search_check, format_boundary, generate_probe,
+    inf_vector_search_check, invalid_distance_check, nan_vector_check,
+    search_nonexistent_collection, search_params_probe,
     search_probe, search_string_probe, upsert_inf_vector_check, upsert_nan_vector_check,
-    upsert_probe, EndpointType, SimpleSafetyNet,
+    EndpointType, SimpleSafetyNet, ProbeTemplate, QdrantProbeTemplate,
 };
 use crate::contract::schema::{BehaviorCategory, CheckType, StructuredContract};
 use crate::review::qdrant::QdrantIndependentReviewer;
@@ -34,6 +34,14 @@ impl TargetPlugin for QdrantPlugin {
 
     fn db_port(&self) -> u16 {
         6333
+    }
+
+    fn default_repo_url(&self) -> Option<&str> {
+        Some("https://github.com/qdrant/qdrant")
+    }
+
+    fn default_docs_url(&self) -> Option<&str> {
+        Some("https://qdrant.tech/documentation/")
     }
 
     fn safety_nets(&self) -> Vec<SafetyNet> {
@@ -1036,6 +1044,10 @@ print(f'large limit OK: {len(results)} <= 3'); sys.exit(0)"#.to_string(),
     fn doc_citation_url(&self) -> String {
         "https://qdrant.github.io/qdrant/redoc/index.html".to_string()
     }
+
+    fn probe_template(&self) -> &dyn ProbeTemplate {
+        &QdrantProbeTemplate
+    }
 }
 
 fn check_key(check: &InvariantCheck) -> String {
@@ -1057,18 +1069,7 @@ impl OracleCheckDeriver {
                     let label = format!("{}={}", rc.param_name, format_boundary(boundary));
                     let et = classify_endpoint_type(&rc.param_name, &contract.api_endpoint);
 
-                    let script = if is_search_param(&rc.param_name) {
-                        search_params_probe(&rc.param_name, &format_boundary(boundary), &label)
-                    } else {
-                        match et {
-                            EndpointType::Search => search_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Create => create_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Upsert => upsert_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Delete => delete_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Scroll => scroll_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Recommend => recommend_probe(&rc.param_name, &format_boundary(boundary), &label),
-                        }
-                    };
+                    let script = generate_probe(et, &rc.param_name, &format_boundary(boundary), &label);
 
                     checks.push(InvariantCheck {
                         name: format!("oracle_range_{}_below_min", rc.param_name),
@@ -1083,18 +1084,7 @@ impl OracleCheckDeriver {
                     let label = format!("{}={}", rc.param_name, format_boundary(boundary));
                     let et = classify_endpoint_type(&rc.param_name, &contract.api_endpoint);
 
-                    let script = if is_search_param(&rc.param_name) {
-                        search_params_probe(&rc.param_name, &format_boundary(boundary), &label)
-                    } else {
-                        match et {
-                            EndpointType::Search => search_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Create => create_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Upsert => upsert_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Delete => delete_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Scroll => scroll_probe(&rc.param_name, &format_boundary(boundary), &label),
-                            EndpointType::Recommend => recommend_probe(&rc.param_name, &format_boundary(boundary), &label),
-                        }
-                    };
+                    let script = generate_probe(et, &rc.param_name, &format_boundary(boundary), &label);
 
                     checks.push(InvariantCheck {
                         name: format!("oracle_range_{}_above_max", rc.param_name),

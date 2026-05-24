@@ -385,7 +385,7 @@ impl<'a> FAOrchestrator<'a> {
                                     stderr: String::new(),
                                     classifier_reason: result.classification.reason.clone(),
                                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
-                                    exit_success: false,
+                                    exit_success: result.exit_success,
                                 },
                                 classification: result.classification,
                             });
@@ -429,7 +429,7 @@ impl<'a> FAOrchestrator<'a> {
                                     stderr: String::new(),
                                     classifier_reason: result.classification.reason.clone(),
                                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
-                                    exit_success: false,
+                                    exit_success: result.exit_success,
                                 },
                                 classification: result.classification,
                             });
@@ -686,7 +686,7 @@ impl<'a> FAOrchestrator<'a> {
                             stderr: String::new(),
                             classifier_reason: result.classification.reason.clone(),
                             classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
-                            exit_success: false,
+                            exit_success: result.exit_success,
                         };
                             if self.multi_defect {
                                 collected_defects.push(CollectedDefect {
@@ -720,7 +720,7 @@ impl<'a> FAOrchestrator<'a> {
                             stderr: String::new(),
                             classifier_reason: oracle_classification.reason.clone(),
                             classifier_evidence_excerpt: oracle_classification.evidence_excerpt.clone(),
-                            exit_success: false,
+                            exit_success: result.exit_success,
                         };
                         if let Some(ret) = collect_or_return(self.multi_defect, &mut collected_defects, code, initial_run, oracle_classification) {
                             return Ok(ret);
@@ -752,7 +752,7 @@ impl<'a> FAOrchestrator<'a> {
                         stderr: String::new(),
                         classifier_reason: classification.reason.clone(),
                         classifier_evidence_excerpt: classification.evidence_excerpt.clone(),
-                        exit_success: false,
+                        exit_success: result.exit_success,
                     };
                     if let Some(ret) = collect_or_return(self.multi_defect, &mut collected_defects, code, initial_run, classification) {
                         return Ok(ret);
@@ -1045,7 +1045,7 @@ impl<'a> FAOrchestrator<'a> {
                 stderr: String::new(),
                 classifier_reason: result.classification.reason.clone(),
                 classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
-                exit_success: false,
+                exit_success: result.exit_success,
             };
             return Ok((code, initial_run, result.classification, collected_defects));
         }
@@ -1062,7 +1062,7 @@ impl<'a> FAOrchestrator<'a> {
                     stderr: String::new(),
                     classifier_reason: result.classification.reason.clone(),
                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
-                    exit_success: false,
+                    exit_success: result.exit_success,
                 };
                 return Ok((script, initial_run, result.classification, collected_defects));
             }

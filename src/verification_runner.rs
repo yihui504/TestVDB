@@ -97,7 +97,7 @@ pub async fn verify_batch_defects(
             stderr: bd.stderr.clone(),
             classifier_reason: bd.defect_line.clone(),
             classifier_evidence_excerpt: bd.defect_line.clone(),
-            exit_success: false,
+            exit_success: bd.exit_success,
         };
 
         let mut candidate = CandidateDefect {

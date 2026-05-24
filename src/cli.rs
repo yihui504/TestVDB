@@ -63,13 +63,17 @@ pub enum Commands {
         #[arg(long)]
         db_host: Option<String>,
 
-        /// DB port inside the Docker network
-        #[arg(long, default_value_t = 19530)]
+        /// DB port inside the Docker network (0 = auto-detect from target plugin)
+        #[arg(long, default_value_t = 0)]
         db_port: u16,
 
         /// Only run non-redundant probes
         #[arg(long, default_value_t = false)]
         non_redundant_only: bool,
+
+        /// Keep Docker images and Python packages between runs (skip cleanup)
+        #[arg(long, default_value_t = false)]
+        cache_images: bool,
     },
     /// Contract-driven bug mining: extract contracts → generate prompts → LLM tests → find bugs
     Mine {
@@ -120,5 +124,13 @@ pub enum Commands {
         /// Skip safety net probes in LLM orchestrator (saves ~25min, use for fast iteration)
         #[arg(long, default_value_t = false)]
         skip_safety_nets: bool,
+
+        /// Skip low-yield strategies (state/meta/seq/res/combo/conc) when constraints < this threshold (default: 100, 0 = run all)
+        #[arg(long, default_value_t = 100)]
+        strategy_threshold: usize,
+
+        /// Keep Docker images and Python packages between runs (skip cleanup)
+        #[arg(long, default_value_t = false)]
+        cache_images: bool,
     },
 }

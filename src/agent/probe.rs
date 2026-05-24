@@ -634,6 +634,18 @@ mod tests {
             assert_eq!(parsed.json_path, rest, "json_path mismatch for {}", tc);
         }
     }
+
+    #[test]
+    fn test_parse_param_name_non_prefix_dotted() {
+        use crate::contract::store::parse_param_name;
+        let parsed = parse_param_name("hnsw_config.ef_construct");
+        assert_eq!(parsed.endpoint, "hnsw_config");
+        assert_eq!(parsed.json_path, "ef_construct");
+
+        let parsed2 = parse_param_name("optimizers_config.indexing_threshold");
+        assert_eq!(parsed2.endpoint, "optimizers_config");
+        assert_eq!(parsed2.json_path, "indexing_threshold");
+    }
 }
 
 pub trait ProbeTemplate {

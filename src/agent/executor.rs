@@ -14,6 +14,7 @@ pub struct ExecutionResult {
     pub found_defect: bool,
     pub classification: crate::agent::classifier::ClassificationResult,
     pub sandbox: Option<Sandbox>,
+    pub exit_success: bool,
 }
 
 pub struct ErrorStateMachine {
@@ -196,10 +197,10 @@ impl FAExecutor {
 
         info!("Creating fresh sandbox (fresh_sandbox={})...", fresh_sandbox);
         match execute_test_script(code, db_image, pip_packages, db_port, sidecars, db_env, db_command).await {
-            Ok((output, sandbox, db_url)) => {
+            Ok((output, sandbox, db_url, exit_success)) => {
                 self.active_sandbox = Some(sandbox);
                 self.active_db_url = Some(db_url.clone());
-                let mut result = self.process_result(code, output, db_url)?;
+                let mut result = self.process_result(code, output, db_url, exit_success)?;
                 result.sandbox = self.active_sandbox.take();
                 info!("Sandbox placed in ExecutionResult, active_sandbox now={}", self.active_sandbox.is_some());
                 Ok(result)
@@ -220,6 +221,7 @@ impl FAExecutor {
                         sub_type: None,
                     },
                     sandbox: None,
+                    exit_success: false,
                 })
             }
         }
@@ -232,9 +234,9 @@ impl FAExecutor {
         db_port: u16,
     ) -> anyhow::Result<ExecutionResult> {
         match execute_test_in_sandbox(code, sandbox, db_port).await {
-            Ok((output, db_url)) => {
+            Ok((output, db_url, exit_success)) => {
                 self.active_db_url = Some(db_url.clone());
-                let mut result = self.process_result(code, output, db_url);
+                let mut result = self.process_result(code, output, db_url, exit_success);
                 if let Ok(ref mut r) = result {
                     r.sandbox = None;
                 }
@@ -256,6 +258,7 @@ impl FAExecutor {
                         sub_type: None,
                     },
                     sandbox: None,
+                    exit_success: false,
                 })
             }
         }
@@ -266,6 +269,7 @@ impl FAExecutor {
         code: &str,
         output: String,
         db_url: String,
+        exit_success: bool,
     ) -> anyhow::Result<ExecutionResult> {
         let found_defect = output.contains("[DEFECT:")
             || output.contains("ILLEGAL_SUCCESS")
@@ -322,6 +326,7 @@ impl FAExecutor {
             found_defect,
             classification,
             sandbox: None,
+            exit_success,
         })
     }
 

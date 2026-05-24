@@ -180,7 +180,7 @@ pub async fn run_generic_batch(
             .replace("{{TESTVDB_DB_URL}}", &db_url);
 
         match execute_probe_script(&runner_name, &resolved) {
-            Ok((stdout, stderr, has_defect, _)) => {
+            Ok((stdout, stderr, has_defect, exit_success)) => {
                 if has_defect {
                     let defect_line = stdout
                         .lines()
@@ -199,6 +199,7 @@ pub async fn run_generic_batch(
                         stderr,
                         endpoint: endpoint.clone(),
                         param_name: param_name.clone(),
+                        exit_success,
                     });
                 } else {
                     info!("[{} {}/{}] {} => passed", prefix, i + 1, cases.len(), name);
@@ -244,7 +245,7 @@ pub async fn run_generic_batch_with_sandbox(
             .replace("{{TESTVDB_DB_URL}}", &db_url);
 
         match execute_probe_script(&runner_name, &resolved) {
-            Ok((stdout, stderr, has_defect, _)) => {
+            Ok((stdout, stderr, has_defect, exit_success)) => {
                 if has_defect {
                     let defect_line = stdout
                         .lines()
@@ -263,6 +264,7 @@ pub async fn run_generic_batch_with_sandbox(
                         stderr,
                         endpoint: endpoint.clone(),
                         param_name: param_name.clone(),
+                        exit_success,
                     });
                 } else {
                     info!("[{} {}/{}] {} => passed", prefix, i + 1, cases.len(), name);

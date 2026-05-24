@@ -36,15 +36,22 @@ pub async fn run_batch(
     };
     info!("Using Docker network: {}", net_name);
 
+    let actual_port = if db_port == 0 { plugin.db_port() } else { db_port };
     let hostname = match db_host {
         Some(h) => h.clone(),
         None => format!("{}-standalone", target),
     };
-    let db_url = format!("http://{}:{}", hostname, db_port);
+    let db_url = format!("http://{}:{}", hostname, actual_port);
     info!("DB URL inside Docker: {}", db_url);
 
     let runner_name = format!("testvdb-batch-{}", target);
     infra::ensure_runner_container(&runner_name, &net_name, &pip_packages)?;
+
+    // ── H4: Smoke test ──
+    match run_smoke_test(&runner_name, target, &db_url) {
+        Ok(()) => info!("Smoke test passed: {} is reachable", target),
+        Err(e) => warn!("Smoke test failed for {}: {}. Probes may fail.", target, e),
+    }
 
     let mut passed = 0usize;
     let mut defects = Vec::new();
@@ -170,4 +177,37 @@ pub async fn run_batch_simple(target: &str) -> anyhow::Result<usize> {
     infra::cleanup_runner(&runner_name);
 
     Ok(defects)
+}
+
+// ── Smoke test: verify DB connectivity before running probes ──
+fn run_smoke_test(runner_name: &str, target: &str, db_url: &str) -> anyhow::Result<()> {
+    let script = match target {
+        "milvus" => format!(
+            "import requests; r=requests.post('{}/v2/vectordb/collections/list',headers={{'Authorization':'Bearer root:Milvus','Content-Type':'application/json'}},json={{}}); assert r.json().get('code')==0,f'Milvus list failed: {{r.text}}'; print('milvus ok')",
+            db_url
+        ),
+        "qdrant" => format!(
+            "import requests; r=requests.get('{}/collections'); assert r.status_code==200,f'Qdrant GET collections failed: {{r.status_code}}'; print('qdrant ok')",
+            db_url
+        ),
+        "weaviate" => format!(
+            "import requests; r=requests.get('{}/v1/schema'); assert r.status_code==200,f'Weaviate GET schema failed: {{r.status_code}}'; print('weaviate ok')",
+            db_url
+        ),
+        "pgvector" => format!(
+            "import psycopg2; conn=psycopg2.connect('postgresql://postgres:postgres@{}:5432/testvdb'); cur=conn.cursor(); cur.execute('SELECT 1'); print('pgvector ok')",
+            db_url.trim_start_matches("http://").split(':').next().unwrap_or("localhost")
+        ),
+        _ => anyhow::bail!("Unknown target for smoke test: {}", target),
+    };
+    match infra::execute_probe_script(runner_name, &script) {
+        Ok((stdout, _, _, exit_ok)) if exit_ok => {
+            info!("Smoke test output: {}", stdout.trim());
+            Ok(())
+        }
+        Ok((stdout, stderr, _, _)) => {
+            anyhow::bail!("Smoke test failed: stdout={}, stderr={}", stdout.trim(), stderr.trim())
+        }
+        Err(e) => anyhow::bail!("Smoke test execution error: {}", e),
+    }
 }

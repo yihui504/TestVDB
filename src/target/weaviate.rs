@@ -1,5 +1,6 @@
 use super::{SafetyNet, TargetPlugin, TargetStyle};
 use crate::agent::oracle::InvariantCheck;
+use crate::agent::probe::{ProbeTemplate, NoopProbeTemplate};
 use crate::contract::schema::StructuredContract;
 use crate::review::IndependentReviewer;
 use crate::review::weaviate::WeaviateIndependentReviewer;
@@ -25,6 +26,14 @@ impl TargetPlugin for WeaviatePlugin {
 
     fn db_port(&self) -> u16 {
         8080
+    }
+
+    fn default_repo_url(&self) -> Option<&str> {
+        Some("https://github.com/weaviate/weaviate")
+    }
+
+    fn default_docs_url(&self) -> Option<&str> {
+        Some("https://weaviate.io/developers/weaviate")
     }
 
     fn safety_nets(&self) -> Vec<SafetyNet> {
@@ -179,6 +188,10 @@ impl TargetPlugin for WeaviatePlugin {
 
     fn doc_citation_url(&self) -> String {
         "https://weaviate.io/developers/weaviate".to_string()
+    }
+
+    fn probe_template(&self) -> &dyn ProbeTemplate {
+        &NoopProbeTemplate
     }
 
     fn db_env(&self) -> Vec<(String, String)> {

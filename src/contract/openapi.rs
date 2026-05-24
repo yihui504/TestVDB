@@ -644,6 +644,53 @@ mod tests {
     }
 
     #[test]
+    fn test_qdrant_openapi_augmentation_diag() {
+        let contract_path = std::path::Path::new("contracts/qdrant_contract.json");
+        if !contract_path.exists() {
+            eprintln!("SKIP: qdrant_contract.json not found");
+            return;
+        }
+
+        let contract_content =
+            std::fs::read_to_string(contract_path).expect("Failed to read");
+        let mut contract: crate::contract::schema::StructuredContract =
+            serde_json::from_str(&contract_content).expect("Failed to parse");
+
+        println!("=== Before ===");
+        println!("type_constraints: {}", contract.type_constraints.len());
+        println!("range_constraints: {}", contract.range_constraints.len());
+
+        crate::contract_loader::augment_contract(&mut contract, "qdrant");
+
+        println!("\n=== After ===");
+        println!("type_constraints: {}", contract.type_constraints.len());
+        println!("range_constraints: {}", contract.range_constraints.len());
+
+        let unique_t: std::collections::HashSet<_> = contract
+            .type_constraints
+            .iter()
+            .map(|tc| tc.param_name.clone())
+            .collect();
+        let unique_r: std::collections::HashSet<_> = contract
+            .range_constraints
+            .iter()
+            .map(|rc| rc.param_name.clone())
+            .collect();
+        println!("Unique types: {}", unique_t.len());
+        println!("Unique ranges: {}", unique_r.len());
+
+        assert!(contract.type_constraints.len() >= 30);
+        assert!(contract.range_constraints.len() >= 10);
+
+        // Persist augmented contract (overwrite qdrant_contract.json)
+        let json = serde_json::to_string_pretty(&contract)
+            .expect("Failed to serialize augmented contract");
+        std::fs::write(contract_path, &json)
+            .expect("Failed to write augmented contract");
+        println!("Wrote augmented contract to {:?}", contract_path);
+    }
+
+    #[test]
     fn test_milvus_openapi_extraction_rate() {
         let openapi_path = std::path::Path::new("contracts/milvus_openapi.json");
         if !openapi_path.exists() {
