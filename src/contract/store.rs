@@ -464,6 +464,26 @@ impl ContractStore {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedParamName {
+    pub endpoint: String,
+    pub json_path: String,
+}
+
+pub fn parse_param_name(param_name: &str) -> ParsedParamName {
+    if let Some(dot_pos) = param_name.find('.') {
+        ParsedParamName {
+            endpoint: param_name[..dot_pos].to_string(),
+            json_path: param_name[dot_pos + 1..].to_string(),
+        }
+    } else {
+        ParsedParamName {
+            endpoint: String::new(),
+            json_path: param_name.to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -723,5 +743,26 @@ mod tests {
         assert!(metric_vals.contains(&"L2".to_string()));
         assert!(metric_vals.contains(&"COSINE".to_string()));
         assert!(metric_vals.contains(&"IP".to_string()));
+    }
+
+    #[test]
+    fn test_parse_param_name_with_endpoint() {
+        let parsed = parse_param_name("create_collection.optimizers_config.indexing_threshold");
+        assert_eq!(parsed.endpoint, "create_collection");
+        assert_eq!(parsed.json_path, "optimizers_config.indexing_threshold");
+    }
+
+    #[test]
+    fn test_parse_param_name_without_endpoint() {
+        let parsed = parse_param_name("limit");
+        assert_eq!(parsed.endpoint, "");
+        assert_eq!(parsed.json_path, "limit");
+    }
+
+    #[test]
+    fn test_parse_param_name_single_dot() {
+        let parsed = parse_param_name("search_points.limit");
+        assert_eq!(parsed.endpoint, "search_points");
+        assert_eq!(parsed.json_path, "limit");
     }
 }
