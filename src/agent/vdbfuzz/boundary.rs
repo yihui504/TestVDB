@@ -1,4 +1,4 @@
-use crate::agent::probe::{generate_probe, EndpointType};
+use crate::agent::probe::{generate_probe, EndpointType, ProbeTemplate};
 use crate::contract::schema::{RangeConstraint, StructuredContract, TypeConstraint};
 use crate::contract::store::ContractStore;
 use crate::target::TargetStyle;
@@ -11,6 +11,8 @@ pub struct FuzzTestCase {
     pub expected_rejection: bool,
     pub defect_marker: String,
     pub coverage_entry: Option<(String, String, String)>,
+    #[serde(default)]
+    pub semantic_assertion: Option<String>,
 }
 
 pub struct BoundaryValueGenerator;
@@ -236,6 +238,7 @@ impl BoundaryValueGenerator {
             expected_rejection,
             defect_marker: "ILLEGAL_SUCCESS".to_string(),
             coverage_entry: Some((endpoint.to_string(), param.to_string(), value.to_string())),
+            semantic_assertion: None,
         }
     }
 
@@ -260,6 +263,7 @@ impl BoundaryValueGenerator {
             expected_rejection: true,
             defect_marker: "ILLEGAL_SUCCESS".to_string(),
             coverage_entry: Some((endpoint.to_string(), param.to_string(), value_expr.to_string())),
+            semantic_assertion: None,
         }
     }
 
@@ -281,6 +285,7 @@ impl BoundaryValueGenerator {
             expected_rejection: true,
             defect_marker: "ILLEGAL_SUCCESS".to_string(),
             coverage_entry: Some((endpoint.to_string(), param.to_string(), "<remove>".to_string())),
+            semantic_assertion: None,
         }
     }
 
@@ -302,6 +307,7 @@ impl BoundaryValueGenerator {
             expected_rejection: true,
             defect_marker: "ILLEGAL_SUCCESS".to_string(),
             coverage_entry: Some((endpoint.to_string(), param.to_string(), "INVALID_ENUM_VALUE_42".to_string())),
+            semantic_assertion: None,
         }
     }
 }
@@ -312,14 +318,16 @@ fn is_milvus_search_param(param_name: &str) -> bool {
 }
 
 fn milvus_generate_probe(ep_type: EndpointType, param: &str, value: &str, label: &str) -> String {
+    let template = crate::agent::probe::MilvusProbeTemplate;
     match ep_type {
-        EndpointType::Search => crate::agent::probe_milvus::milvus_search_probe(param, value, label),
-        EndpointType::Create => crate::agent::probe_milvus::milvus_create_probe(param, value, label),
-        EndpointType::Upsert => crate::agent::probe_milvus::milvus_insert_probe(param, value, label),
+        EndpointType::Search => template.search_probe(param, value, label),
+        EndpointType::Create => template.create_probe(param, value, label),
+        EndpointType::Upsert => template.upsert_probe(param, value, label),
         EndpointType::Delete | EndpointType::Scroll => {
-            crate::agent::probe_milvus::milvus_query_probe(param, value, label)
+            template.delete_probe(param, value, label)
         }
-        EndpointType::Recommend => crate::agent::probe_milvus::milvus_search_probe(param, value, label),
+        EndpointType::Recommend => template.recommend_probe(param, value, label),
+        EndpointType::Config => template.search_probe(param, value, label),
     }
 }
 

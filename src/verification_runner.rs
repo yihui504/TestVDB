@@ -36,6 +36,7 @@ pub async fn verify_llm_defect(
         downgrade_reason: None,
         independent_review_summary: None,
         review_scope: None,
+        semantic_gate_result: None,
     };
 
     let mre_code = candidate.mre_code.clone();
@@ -96,6 +97,7 @@ pub async fn verify_batch_defects(
             stderr: bd.stderr.clone(),
             classifier_reason: bd.defect_line.clone(),
             classifier_evidence_excerpt: bd.defect_line.clone(),
+            exit_success: false,
         };
 
         let mut candidate = CandidateDefect {
@@ -112,6 +114,7 @@ pub async fn verify_batch_defects(
             downgrade_reason: None,
             independent_review_summary: None,
             review_scope: None,
+            semantic_gate_result: None,
         };
 
         let mre_code = bd.script.clone();

@@ -34,6 +34,7 @@ const INFRA_ERROR_SIGNALS: &[&str] = &[
 fn defect_signal_to_type(signal: &str) -> Option<DefectType> {
     match signal {
         "illegal_success" => Some(DefectType::IllegalSuccess),
+        "param_ignored" => Some(DefectType::ParamIgnored),
         "poor_diagnostics" => Some(DefectType::PoorDiagnostics),
         "data_corruption" => Some(DefectType::DataCorruption),
         "performance_regression" => Some(DefectType::PerformanceRegression),
@@ -101,6 +102,7 @@ pub fn normalize_observed_output(text: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DefectType {
     IllegalSuccess,
+    ParamIgnored,
     PoorDiagnostics,
     RuntimeFailure,
     StateLogicViolation,
@@ -138,7 +140,7 @@ pub fn detect_defect_type(stdout: &str, stderr: &str) -> Option<DefectType> {
 
     // Check [defect: <type>] tags via the shared signal→type mapping.
     let known_signals = [
-        "illegal_success", "poor_diagnostics", "data_corruption",
+        "illegal_success", "param_ignored", "poor_diagnostics", "data_corruption",
         "performance_regression", "state_logic_violation", "silent_failure",
         "async_inconsistency", "metamorphic_violation", "differential_mismatch",
         "sequence_violation",

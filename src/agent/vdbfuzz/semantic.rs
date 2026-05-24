@@ -29,6 +29,7 @@ impl ConcurrentStateGenerator {
             expected_rejection: false,
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("insert".into(), "concurrent_count".into(), "parallel".into())),
+            semantic_assertion: None,
         });
 
         // 2. Concurrent insert + delete
@@ -39,6 +40,7 @@ impl ConcurrentStateGenerator {
                 expected_rejection: false,
                 defect_marker: "STATE_LOGIC_VIOLATION".into(),
                 coverage_entry: Some(("insert+delete".into(), "concurrent_mixed".into(), "parallel".into())),
+                semantic_assertion: None,
             });
         }
 
@@ -49,6 +51,7 @@ impl ConcurrentStateGenerator {
             expected_rejection: false,
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("upsert".into(), "duplicate_prevention".into(), "parallel".into())),
+            semantic_assertion: None,
         });
 
         // 4. Concurrent drop + insert
@@ -58,6 +61,7 @@ impl ConcurrentStateGenerator {
             expected_rejection: false,
             defect_marker: "RUNTIME_FAILURE".into(),
             coverage_entry: Some(("create+drop".into(), "no_crash".into(), "parallel".into())),
+            semantic_assertion: None,
         });
 
         cases
@@ -86,6 +90,7 @@ impl SemanticDriftGenerator {
             expected_rejection: false,
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "recall".into(), "semantic".into())),
+            semantic_assertion: None,
         });
 
         // 2. Filter precision
@@ -95,6 +100,7 @@ impl SemanticDriftGenerator {
             expected_rejection: false,
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "filter_precision".into(), "semantic".into())),
+            semantic_assertion: None,
         });
 
         // 3. Distance ordering (L2 ascending)
@@ -104,6 +110,7 @@ impl SemanticDriftGenerator {
             expected_rejection: false,
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "distance_order".into(), "semantic".into())),
+            semantic_assertion: None,
         });
 
         // 4. Pagination consistency (offset disjointness)
@@ -113,6 +120,7 @@ impl SemanticDriftGenerator {
             expected_rejection: false,
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "pagination".into(), "semantic".into())),
+            semantic_assertion: None,
         });
 
         cases
@@ -134,6 +142,7 @@ impl ResourceBoundaryGenerator {
             expected_rejection: false,
             defect_marker: "RUNTIME_FAILURE".into(),
             coverage_entry: Some(("create+drop".into(), "rapid_cycle".into(), "resource".into())),
+            semantic_assertion: None,
         });
 
         // 2. Large dimension
@@ -143,6 +152,7 @@ impl ResourceBoundaryGenerator {
             expected_rejection: true,
             defect_marker: "ILLEGAL_SUCCESS".into(),
             coverage_entry: Some(("create".into(), "dim".into(), "resource".into())),
+            semantic_assertion: None,
         });
 
         // 3. Many inserts rapidly
@@ -152,6 +162,7 @@ impl ResourceBoundaryGenerator {
             expected_rejection: false,
             defect_marker: "RUNTIME_FAILURE".into(),
             coverage_entry: Some(("insert".into(), "rapid_bulk".into(), "resource".into())),
+            semantic_assertion: None,
         });
 
         cases

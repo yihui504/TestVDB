@@ -34,6 +34,7 @@ pub async fn run_script_in_fresh_sandbox(
         stderr: normalized_stderr,
         classifier_reason: classification.reason,
         classifier_evidence_excerpt: classification.evidence_excerpt,
+        exit_success: output.success,
     })
 }
 

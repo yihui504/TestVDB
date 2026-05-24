@@ -13,6 +13,8 @@ pub struct RunEvidence {
     pub stderr: String,
     pub classifier_reason: String,
     pub classifier_evidence_excerpt: String,
+    #[serde(default)]
+    pub exit_success: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -37,6 +39,8 @@ pub struct CandidateDefect {
     pub downgrade_reason: Option<String>,
     pub independent_review_summary: Option<String>,
     pub review_scope: Option<String>,
+    #[serde(default)]
+    pub semantic_gate_result: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -224,6 +228,13 @@ impl BugReport {
                     issues
                 )
             }
+            DefectType::ParamIgnored => {
+                let issues = candidate.surviving_assertions.join("; ");
+                format!(
+                    "The database accepted an operation with an invalid parameter but silently ignored it ({}). The server returned success without applying the parameter value, which indicates permissive input handling rather than a true validation defect.",
+                    issues
+                )
+            }
             DefectType::RuntimeFailure => {
                 "The target reached the execution path under test and then failed at runtime, which points to a server-side stability or error-handling defect.".to_string()
             }
@@ -259,6 +270,13 @@ impl BugReport {
                 let issues = candidate.surviving_assertions.join("; ");
                 format!(
                     "Add or tighten request validation for the affected parameter(s) so the invalid operation is rejected at the boundary before success is returned. Specifically: {}. After the fix, add a regression test that asserts the documented constraint produces a 400/422 rejection rather than 200 OK.",
+                    issues
+                )
+            }
+            DefectType::ParamIgnored => {
+                let issues = candidate.surviving_assertions.join("; ");
+                format!(
+                    "Either reject invalid parameter values explicitly (return 400/422) or document that the parameter is advisory and may be silently ignored. Specifically: {}. Add a regression test that verifies the server's actual behavior matches its documented contract.",
                     issues
                 )
             }
@@ -748,6 +766,7 @@ mod tests {
                 stderr: "".to_string(),
                 classifier_reason: "Initial run matched".to_string(),
                 classifier_evidence_excerpt: "marker".to_string(),
+                exit_success: false,
             },
             reproduction_runs: vec![
                 RunEvidence {
@@ -757,6 +776,7 @@ mod tests {
                     stderr: "".to_string(),
                     classifier_reason: "repro_1 matched".to_string(),
                     classifier_evidence_excerpt: "marker".to_string(),
+                    exit_success: false,
                 },
                 RunEvidence {
                     phase: "repro_2".to_string(),
@@ -765,6 +785,7 @@ mod tests {
                     stderr: "".to_string(),
                     classifier_reason: "repro_2 matched".to_string(),
                     classifier_evidence_excerpt: "marker".to_string(),
+                    exit_success: false,
                 },
             ],
             status: CandidateStatus::ReproducedTwice,
@@ -777,6 +798,7 @@ mod tests {
                     .to_string(),
             ),
             downgrade_reason: None,
+            semantic_gate_result: None,
         };
 
         let report = BugReport::from_verified_candidate(&candidate).unwrap();

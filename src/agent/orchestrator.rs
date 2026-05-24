@@ -385,6 +385,7 @@ impl<'a> FAOrchestrator<'a> {
                                     stderr: String::new(),
                                     classifier_reason: result.classification.reason.clone(),
                                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
+                                    exit_success: false,
                                 },
                                 classification: result.classification,
                             });
@@ -428,6 +429,7 @@ impl<'a> FAOrchestrator<'a> {
                                     stderr: String::new(),
                                     classifier_reason: result.classification.reason.clone(),
                                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
+                                    exit_success: false,
                                 },
                                 classification: result.classification,
                             });
@@ -678,13 +680,14 @@ impl<'a> FAOrchestrator<'a> {
                     for (name, script, result) in self.execute_safety_nets(&mut executor, &batch_nets, first_probe).await? {
                         if result.found_defect {
                             let initial_run = generator::RunEvidence {
-                                phase: "safety_net".to_string(),
-                                db_url: result.db_url.clone(),
-                                stdout: String::new(),
-                                stderr: String::new(),
-                                classifier_reason: result.classification.reason.clone(),
-                                classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
-                            };
+                            phase: "safety_net".to_string(),
+                            db_url: result.db_url.clone(),
+                            stdout: String::new(),
+                            stderr: String::new(),
+                            classifier_reason: result.classification.reason.clone(),
+                            classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
+                            exit_success: false,
+                        };
                             if self.multi_defect {
                                 collected_defects.push(CollectedDefect {
                                     script,
@@ -717,6 +720,7 @@ impl<'a> FAOrchestrator<'a> {
                             stderr: String::new(),
                             classifier_reason: oracle_classification.reason.clone(),
                             classifier_evidence_excerpt: oracle_classification.evidence_excerpt.clone(),
+                            exit_success: false,
                         };
                         if let Some(ret) = collect_or_return(self.multi_defect, &mut collected_defects, code, initial_run, oracle_classification) {
                             return Ok(ret);
@@ -748,6 +752,7 @@ impl<'a> FAOrchestrator<'a> {
                         stderr: String::new(),
                         classifier_reason: classification.reason.clone(),
                         classifier_evidence_excerpt: classification.evidence_excerpt.clone(),
+                        exit_success: false,
                     };
                     if let Some(ret) = collect_or_return(self.multi_defect, &mut collected_defects, code, initial_run, classification) {
                         return Ok(ret);
@@ -1040,6 +1045,7 @@ impl<'a> FAOrchestrator<'a> {
                 stderr: String::new(),
                 classifier_reason: result.classification.reason.clone(),
                 classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
+                exit_success: false,
             };
             return Ok((code, initial_run, result.classification, collected_defects));
         }
@@ -1056,6 +1062,7 @@ impl<'a> FAOrchestrator<'a> {
                     stderr: String::new(),
                     classifier_reason: result.classification.reason.clone(),
                     classifier_evidence_excerpt: result.classification.evidence_excerpt.clone(),
+                    exit_success: false,
                 };
                 return Ok((script, initial_run, result.classification, collected_defects));
             }

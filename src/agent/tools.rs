@@ -369,7 +369,7 @@ pub fn get_submit_mre_tool() -> Tool {
                     },
                     "defect_type": {
                         "type": "string",
-                        "description": "The classification: IllegalSuccess, TYPE_VIOLATION, RANGE_VIOLATION, STATE_VIOLATION, ServerCrash, Timeout."
+                        "description": "The classification: IllegalSuccess, ParamIgnored, TYPE_VIOLATION, RANGE_VIOLATION, STATE_VIOLATION, ServerCrash, Timeout."
                     },
                     "surviving_assertions": {
                         "type": "array",

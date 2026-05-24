@@ -2,6 +2,7 @@ use crate::agent::classifier::{ClassificationDisposition, analyze_execution_resu
 use crate::agent::sandbox_runner::{run_script_in_fresh_sandbox, refresh_candidate_evidence_with_mre, run_additional_reproduction};
 use crate::report::generator::{BugReport, CandidateDefect, CandidateStatus};
 use crate::report::llm_analysis::{analyze_defect_with_llm, generate_verification_variant, optimize_defect_report};
+use crate::report::semantic_gate::{self, ParamEffect};
 use crate::sandbox::manager::SidecarSpec;
 use crate::target::TargetPlugin;
 use crate::review::IndependentReviewer;
@@ -22,6 +23,60 @@ pub async fn verify_candidate_defect(
 ) -> anyhow::Result<VerificationOutcome> {
     let defect_type = candidate.defect_type.clone();
     let mut effective_script = script_code.to_string();
+
+    if let Some(gate) = semantic_gate::get_semantic_gate(target) {
+        info!("SemanticGate: checking param effect for target={}", target);
+        let effect = gate.check_param_effect(
+            script_code,
+            &defect_type,
+            db_image,
+            pip_packages,
+            db_port,
+            sidecars,
+            db_env,
+            db_command,
+        ).await;
+
+        let effect_str = format!("{:?}", effect);
+        info!("SemanticGate: result={}", effect_str);
+        candidate.semantic_gate_result = Some(effect_str.clone());
+
+        match effect {
+            ParamEffect::ConfirmedIgnored => {
+                candidate.status = CandidateStatus::Rejected;
+                candidate.downgrade_reason = Some(
+                    "SemanticGate: parameter was silently ignored by the server (ConfirmedIgnored). Not a real defect.".to_string(),
+                );
+                let candidate_path = format!("{}_candidate_defect.md", target);
+                BugReport::export_candidate_to_markdown(candidate, &candidate_path)?;
+                warn!(
+                    "Candidate rejected by SemanticGate (ConfirmedIgnored). Saved to {}",
+                    candidate_path
+                );
+                return Ok(VerificationOutcome::Rejected(
+                    candidate.downgrade_reason.clone().unwrap_or_default(),
+                ));
+            }
+            ParamEffect::ActuallyApplied => {
+                info!(
+                    "SemanticGate: parameter was actually applied (ActuallyApplied). Annotating as potential design behavior, continuing verification."
+                );
+            }
+            ParamEffect::Ambiguous => {
+                info!("SemanticGate: result is Ambiguous. Proceeding with normal verification.");
+            }
+        }
+    }
+
+    if candidate.initial_run.exit_success
+        && defect_type != crate::agent::classifier::DefectType::Pass
+        && defect_type != crate::agent::classifier::DefectType::ScriptError
+    {
+        warn!(
+            "MRE effectiveness gate: initial run classified as {:?} but script exited with code 0 (exit_success=true). MRE may not effectively demonstrate the defect.",
+            defect_type
+        );
+    }
 
     for phase in ["repro_1", "repro_2"] {
         let run = run_script_in_fresh_sandbox(
