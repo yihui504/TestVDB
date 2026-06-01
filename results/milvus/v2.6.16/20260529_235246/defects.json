@@ -1,0 +1,90 @@
+[
+  {
+    "test_name": "nprobe_below_min",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]})\nif r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={\"collectionName\":c,\"data\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}]})\nif r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nbody = {\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":3}\nbody[\"nprobe\"] = 0\nr = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted'); sys.exit(1)\nelse: print(f'properly rejected nprobe below min (0): {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "nprobe",
+    "exit_success": false
+  },
+  {
+    "test_name": "nprobe_zero",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] nprobe=0 accepted",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]})\nif r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={\"collectionName\":c,\"data\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}]})\nif r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nbody = {\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":3}\nbody[\"nprobe\"] = 0\nr = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nprobe=0 accepted'); sys.exit(1)\nelse: print(f'properly rejected nprobe=0: {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] nprobe=0 accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "nprobe",
+    "exit_success": false
+  },
+  {
+    "test_name": "nprobe_negative",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] nprobe=-1 accepted",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]})\nif r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={\"collectionName\":c,\"data\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}]})\nif r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nbody = {\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":3}\nbody[\"nprobe\"] = -1\nr = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nprobe=-1 accepted'); sys.exit(1)\nelse: print(f'properly rejected nprobe=-1: {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] nprobe=-1 accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "nprobe",
+    "exit_success": false
+  },
+  {
+    "test_name": "nlist_below_min",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] nlist below min (0) accepted",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]})\nif r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={\"collectionName\":c,\"data\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}]})\nif r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nbody = {\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":3}\nbody[\"nlist\"] = 0\nr = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nlist below min (0) accepted'); sys.exit(1)\nelse: print(f'properly rejected nlist below min (0): {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] nlist below min (0) accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "nlist",
+    "exit_success": false
+  },
+  {
+    "test_name": "nlist_zero",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] nlist=0 accepted",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]})\nif r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={\"collectionName\":c,\"data\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}]})\nif r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nbody = {\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":3}\nbody[\"nlist\"] = 0\nr = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nlist=0 accepted'); sys.exit(1)\nelse: print(f'properly rejected nlist=0: {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] nlist=0 accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "nlist",
+    "exit_success": false
+  },
+  {
+    "test_name": "nlist_negative",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]})\nif r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={\"collectionName\":c,\"data\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}]})\nif r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nbody = {\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":3}\nbody[\"nlist\"] = -1\nr = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted'); sys.exit(1)\nelse: print(f'properly rejected nlist=-1: {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "nlist",
+    "exit_success": false
+  },
+  {
+    "test_name": "rerank_below_min",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] rerank below min (-1) accepted",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]})\nif r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={\"collectionName\":c,\"data\":[{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}]})\nif r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)\ntime.sleep(1)\nbody = {\"collectionName\":c,\"data\":[[0.1,0.2,0.3,0.4]],\"limit\":3}\nbody[\"rerank\"] = -1\nr = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] rerank below min (-1) accepted'); sys.exit(1)\nelse: print(f'properly rejected rerank below min (-1): {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] rerank below min (-1) accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "rerank",
+    "exit_success": false
+  },
+  {
+    "test_name": "collection.ttl.seconds_below_min",
+    "test_prefix": "boundary",
+    "defect_line": "[DEFECT: ILLEGAL_SUCCESS] collection.ttl.seconds below min (-1) accepted",
+    "script": "import requests, sys, uuid\nBASE = '{TESTVDB_DB_URL}'\nHEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}\nc = 'oracle_' + uuid.uuid4().hex[:8]\nbody = {\"collectionName\":c,\"schema\":{\"autoID\":False,\"enableDynamicField\":True,\"fields\":[{\"fieldName\":\"id\",\"dataType\":\"Int64\",\"isPrimary\":True},{\"fieldName\":\"vector\",\"dataType\":\"FloatVector\",\"elementTypeParams\":{\"dim\":4}}]},\"indexParams\":[{\"fieldName\":\"vector\",\"metricType\":\"COSINE\",\"indexType\":\"AUTOINDEX\"}]}\nbody[\"properties\"] = {\"collection.ttl.seconds\": -1}\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json=body)\nif r.json().get('code') == 0: print('[DEFECT: ILLEGAL_SUCCESS] collection.ttl.seconds below min (-1) accepted'); sys.exit(1)\nelse: print(f'properly rejected collection.ttl.seconds below min (-1): {r.json()}'); sys.exit(0)",
+    "stdout": "[DEFECT: ILLEGAL_SUCCESS] collection.ttl.seconds below min (-1) accepted\n",
+    "stderr": "",
+    "endpoint": "search+create_collection",
+    "param_name": "collection.ttl.seconds",
+    "exit_success": false
+  }
+]

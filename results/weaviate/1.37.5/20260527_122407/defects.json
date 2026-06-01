@@ -1,0 +1,13 @@
+[
+  {
+    "test_name": "metamorphic_flat_cosine_distance_ordering",
+    "test_prefix": "meta",
+    "defect_line": "[DEFECT: METAMORPHIC_VIOLATION] COSINE not descending: dists=[5.9604645e-08, 5.9604645e-08, 1.1920929e-07, 1.1920929e-07, 1.1920929e-07, 2.9802322e-07, 4.7683716e-07, 5.364418e-07, 1.7881393e-06, 6.914139e-06]",
+    "script": "import requests, sys, uuid, time\nBASE = '{TESTVDB_DB_URL}'\nc = 'Meta_' + uuid.uuid4().hex[:8]\nr = requests.post(f'{BASE}/v1/schema', json={\"class\":c,\"vectorIndexConfig\":{\"distance\":\"cosine\",\"efConstruction\":128,\"maxConnections\":64},\"properties\":[{\"name\":\"title\",\"dataType\":[\"string\"]}]})\nif r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)\ntime.sleep(1)\nfor i in range(1,11):\n    r = requests.post(f'{BASE}/v1/objects', json={\"class\":c,\"properties\":{\"title\":\"test\"},\"vector\":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i],\"id\":str(uuid.uuid4())})\ntime.sleep(1)\nq = '{ Get { ' + c + '(nearVector: {vector: [0.1,0.2,0.3,0.4]} limit: 10) { _additional { distance } } } }'\nr = requests.post(f'{BASE}/v1/graphql', json={\"query\":q})\ndists = [h.get('_additional',{}).get('distance') for h in r.json().get('data',{}).get('Get',{}).get(c,[])]\nif not dists: print('no results'); sys.exit(0)\nif any(dists[i] < dists[i+1] for i in range(len(dists)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] COSINE not descending: dists={dists}'); sys.exit(1)\nprint(f'FLAT COSINE ordering verified: dists={dists}'); sys.exit(0)",
+    "stdout": "[DEFECT: METAMORPHIC_VIOLATION] COSINE not descending: dists=[5.9604645e-08, 5.9604645e-08, 1.1920929e-07, 1.1920929e-07, 1.1920929e-07, 2.9802322e-07, 4.7683716e-07, 5.364418e-07, 1.7881393e-06, 6.914139e-06]\n",
+    "stderr": "",
+    "endpoint": "/v2/vectordb/entities/search",
+    "param_name": null,
+    "exit_success": false
+  }
+]

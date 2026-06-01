@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use super::schema::{EndpointEntry, RangeConstraint, TypeConstraint};
+use super::schema::{EndpointEntry, RangeConstraint, RejectionPolicy, TypeConstraint};
 use super::store::{
     AnnotatedRangeConstraint, AnnotatedTypeConstraint, Confidence, ConstraintSource, ContractStore,
 };
@@ -293,9 +293,10 @@ impl OpenApiParser {
                                         max: resolved.maximum,
                                         violation_examples: vec![],
                                     },
-                                    endpoint: endpoint_name.clone(),
+                                    endpoint: Some(endpoint_name.clone()),
                                     source: ConstraintSource::OpenapiDerived,
                                     confidence: Confidence::High,
+                                    rejection_policy: Some(RejectionPolicy::Reject),
                                 });
                             }
                             if let Some(t) = &resolved.schema_type {
@@ -305,9 +306,10 @@ impl OpenApiParser {
                                         expected_type: t.clone(),
                                         violation_examples: vec![],
                                     },
-                                    endpoint: endpoint_name.clone(),
+                                    endpoint: Some(endpoint_name.clone()),
                                     source: ConstraintSource::OpenapiDerived,
                                     confidence: Confidence::High,
+                                    rejection_policy: Some(RejectionPolicy::Reject),
                                 });
                             }
                             if let Some(values) = &param.required {
@@ -356,9 +358,10 @@ impl OpenApiParser {
                         expected_type: t.clone(),
                         violation_examples: vec![],
                     },
-                    endpoint: endpoint.to_string(),
+                    endpoint: Some(endpoint.to_string()),
                     source: ConstraintSource::OpenapiDerived,
                     confidence: Confidence::High,
+                    rejection_policy: Some(RejectionPolicy::Reject),
                 });
             }
             if !prop_resolved.properties.is_empty() {
@@ -386,9 +389,10 @@ impl OpenApiParser {
                         max: resolved.maximum,
                         violation_examples: vec![],
                     },
-                    endpoint: endpoint.to_string(),
+                    endpoint: Some(endpoint.to_string()),
                     source: ConstraintSource::OpenapiDerived,
                     confidence: Confidence::High,
+                    rejection_policy: Some(RejectionPolicy::Reject),
                 });
             }
         }
@@ -618,12 +622,12 @@ mod tests {
         for tc in &store.type_constraints {
             assert_eq!(tc.source, ConstraintSource::OpenapiDerived);
             assert_eq!(tc.confidence, Confidence::High);
-            assert!(!tc.endpoint.is_empty());
+            assert!(tc.endpoint.as_ref().map_or(false, |e| !e.is_empty()));
         }
         for rc in &store.range_constraints {
             assert_eq!(rc.source, ConstraintSource::OpenapiDerived);
             assert_eq!(rc.confidence, Confidence::High);
-            assert!(!rc.endpoint.is_empty());
+            assert!(rc.endpoint.as_ref().map_or(false, |e| !e.is_empty()));
         }
     }
 

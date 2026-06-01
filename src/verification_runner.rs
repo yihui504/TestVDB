@@ -1,4 +1,5 @@
 use crate::agent::classifier::DefectType;
+use crate::agent::llm::DeepSeekClient;
 use crate::contract::analyzer::BatchDefect;
 use crate::contract::schema::StructuredContract;
 use crate::report::generator::{BugReport, CandidateDefect, CandidateStatus, RunEvidence};
@@ -7,6 +8,7 @@ use crate::target::TargetPlugin;
 use tracing::{info, warn};
 
 pub async fn verify_llm_defect(
+    llm_client: &DeepSeekClient,
     defect_type: DefectType,
     script_code: String,
     initial_run: RunEvidence,
@@ -41,6 +43,7 @@ pub async fn verify_llm_defect(
 
     let mre_code = candidate.mre_code.clone();
     let outcome = verification::verify_candidate_defect(
+        llm_client,
         &mut candidate, &mre_code, &db_image, &pip_packages, db_port, plugin, target, &sidecars, &db_env, &db_command,
     ).await?;
 
@@ -49,6 +52,14 @@ pub async fn verify_llm_defect(
             let report_path = verification::formal_report_output_path(target, &report.submission_grade_review.verdict);
             report.export_to_markdown(&report_path)?;
             info!("Verified bug report: {}", report_path);
+
+            let auth_header = plugin.auth_header_value().unwrap_or("");
+            let mre_dir = format!("{}_mre", target);
+            report.export_self_contained_mre(
+                &mre_dir, &db_image, &pip_packages, db_port, &db_env, auth_header,
+            )?;
+            info!("Self-contained MRE exported to {}/", mre_dir);
+
             Ok(Some(report))
         }
         VerificationOutcome::Rejected(reason) => {
@@ -59,6 +70,7 @@ pub async fn verify_llm_defect(
 }
 
 pub async fn verify_batch_defects(
+    llm_client: &DeepSeekClient,
     defects: &[BatchDefect],
     target: &str,
     version: &str,
@@ -119,6 +131,7 @@ pub async fn verify_batch_defects(
 
         let mre_code = bd.script.clone();
         let outcome = verification::verify_candidate_defect(
+            llm_client,
             &mut candidate, &mre_code, &db_image, &pip_packages, db_port, plugin, target, &sidecars, &db_env, &db_command,
         ).await?;
 
@@ -132,6 +145,13 @@ pub async fn verify_batch_defects(
                 let final_path = format!("{}.md", named_path);
                 report.export_to_markdown(&final_path)?;
                 info!("Verified batch bug report [{}/{}]: {}", i + 1, defects.len(), final_path);
+
+                let auth_header = plugin.auth_header_value().unwrap_or("");
+                let mre_dir = format!("{}_batch_{}_{}_mre", target, bd.test_prefix, i);
+                report.export_self_contained_mre(
+                    &mre_dir, &db_image, &pip_packages, db_port, &db_env, auth_header,
+                )?;
+
                 verified_reports.push(report);
             }
             VerificationOutcome::Rejected(reason) => {

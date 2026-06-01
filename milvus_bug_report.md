@@ -1,8 +1,8 @@
-# [REST API] Index creation fails due to missing required 'indexParams' parameter
+# [REST API] Search returns results despite rowCount=0 in get_stats after insert and load
 
 - **Target**: milvus
-- **Version**: v2.6.16
-- **Defect Type**: IllegalSuccess
+- **Version**: v2.6.0
+- **Defect Type**: StateLogicViolation
 
 ## Documentation Evidence
 - **Source URL**: https://milvus.io/docs/v2.6.x/
@@ -107,181 +107,191 @@
 - [UPSERT:MUTATION] null data must be rejected
 - [UPSERT:MUTATION] oversized data payload must be rejected
 - [UPSERT:MUTATION] boundary float in vector data must be rejected
+- [IMPLICIT:REQUIRED] userName is required
+- [IMPLICIT:REQUIRED] dbName is required
+- [IMPLICIT:REQUIRED] roleName is required
+- [IMPLICIT:REQUIRED] collectionName is required
+- [IMPLICIT:REQUIRED] id is required
+- [IMPLICIT:REQUIRED] indexName is required
+- [IMPLICIT:REQUIRED] partitionName is required
+- [IMPLICIT:REQUIRED] data is required
+- [IMPLICIT:REQUIRED] partitionNames is required
+- [IMPLICIT:REQUIRED] vector is required
+- [IMPLICIT:REQUIRED] searchParams is required
+- [IMPLICIT:REQUIRED] indexParams is required
+- [IMPLICIT:REQUIRED] filter is required
 - [IMPLICIT:REQUIRED] objectType is required
 - [IMPLICIT:REQUIRED] privilege is required
 - [IMPLICIT:REQUIRED] objectName is required
-- [IMPLICIT:REQUIRED] roleName is required
-- [IMPLICIT:REQUIRED] indexName is required
-- [IMPLICIT:REQUIRED] collectionName is required
-- [IMPLICIT:REQUIRED] partitionName is required
-- [IMPLICIT:REQUIRED] Request-Header is required
-- [IMPLICIT:REQUIRED] data is required
-- [IMPLICIT:REQUIRED] newCollectionName is required
-- [IMPLICIT:REQUIRED] dbName is required
-- [IMPLICIT:REQUIRED] Authorization is required
-- [IMPLICIT:REQUIRED] partitionNames is required
 - [IMPLICIT:REQUIRED] password is required
-- [IMPLICIT:REQUIRED] userName is required
-- [IMPLICIT:REQUIRED] newPassword is required
-- [IMPLICIT:REQUIRED] indexParams is required
+- [IMPLICIT:REQUIRED] Request-Header is required
+- [IMPLICIT:REQUIRED] newCollectionName is required
+- [IMPLICIT:REQUIRED] Authorization is required
 - [IMPLICIT:REQUIRED] aliasName is required
-- [IMPLICIT:REQUIRED] Request-Timeout is required
-- [IMPLICIT:REQUIRED] id is required
-- [IMPLICIT:REQUIRED] filter is required
-- [IMPLICIT:REQUIRED] vector is required
-- [IMPLICIT:REQUIRED] searchParams is required
 - [IMPLICIT:REQUIRED] autoID is required
 - [IMPLICIT:REQUIRED] autoId is required
 - [IMPLICIT:REQUIRED] enableDynamicField is required
 - [IMPLICIT:REQUIRED] fields is required
+- [IMPLICIT:REQUIRED] Request-Timeout is required
+- [IMPLICIT:REQUIRED] newPassword is required
 - **Surviving Assertions Under Report**:
 - nprobe=0 search accepted (code=0) despite documented nprobe > 0 constraint
 
 ## Minimal Reproducible Example (MRE)
 ```
-import requests, json, sys, uuid, time
 
-DB_URL = "{{TESTVDB_DB_URL}}"
-HEADERS = {"Content-Type": "application/json", "Authorization": "Bearer root:Milvus"}
+import requests, json, sys, time, uuid
+from datetime import datetime
 
-# Generate unique names
+BASE = "{{TESTVDB_DB_URL}}"
+HEADERS = {"Content-Type": "application/json", "Accept": "application/json", "Authorization": "{{TESTVDB_AUTH_HEADER}}"}
+
+# Generate unique collection name
 suffix = uuid.uuid4().hex[:8]
-coll_name = "type_test_coll_" + suffix
+coll_name = f"test_vis_{suffix}"
 
-print("=== SETUP ===")
-# Create collection
-payload = {
+def log(msg):
+    print(f"[LOG] {msg}")
+
+def api(method, path, body=None):
+    url = f"{BASE}{path}"
+    resp = requests.request(method, url, headers=HEADERS, json=body)
+    return resp
+
+# STEP 1: Create collection with all required fields
+log(f"Creating collection: {coll_name}")
+create_body = {
     "collectionName": coll_name,
-    "dimension": 4,
-    "metricType": "L2",
-    "idType": "int64",
-    "primaryFieldName": "id",
-    "vectorFieldName": "vector"
+    "schema": {
+        "autoID": False,
+        "enableDynamicField": True,
+        "fields": [
+            {"fieldName": "id", "dataType": "Int64", "isPrimary": True},
+            {"fieldName": "vector", "dataType": "FloatVector", "elementTypeParams": {"dim": 4}},
+            {"fieldName": "title", "dataType": "VarChar", "elementTypeParams": {"max_length": 256}}
+        ]
+    },
+    "indexParams": [
+        {"fieldName": "vector", "metricType": "COSINE", "indexType": "AUTOINDEX"}
+    ]
 }
-r = requests.post(DB_URL + "/v2/vectordb/collections/create", json=payload, headers=HEADERS)
-print("Create:", r.status_code, r.json())
-assert r.json().get("code") == 0, "Create failed"
+r = api("POST", "/v2/vectordb/collections/create", create_body)
+log(f"Create response: {r.status_code} {r.text}")
+if r.json().get('code') != 0:
+    log(f"Create failed, may already exist. Continuing...")
 time.sleep(0.5)
 
-# Insert data
-payload = {
+# STEP 2: Insert 10 entities
+log("Inserting 10 entities...")
+data = []
+for i in range(10):
+    data.append({
+        "id": i + 1,
+        "vector": [0.1 * (i+1), 0.2 * (i+1), 0.3 * (i+1), 0.4 * (i+1)],
+        "title": f"doc_{i+1}"
+    })
+insert_body = {
     "collectionName": coll_name,
-    "data": [{"id": 1, "vector": [0.1, 0.2, 0.3, 0.4]}]
+    "data": data
 }
-r = requests.post(DB_URL + "/v2/vectordb/entities/insert", json=payload, headers=HEADERS)
-print("Insert:", r.status_code, r.json())
-assert r.json().get("code") == 0, "Insert failed"
+r = api("POST", "/v2/vectordb/entities/insert", insert_body)
+log(f"Insert response: {r.status_code} {r.text}")
+assert r.json().get('code') == 0, f"Insert failed: {r.text}"
 time.sleep(0.3)
 
-# Create index
-payload = {
+# STEP 3: Load collection
+log("Loading collection...")
+r = api("POST", "/v2/vectordb/collections/load", {"collectionName": coll_name})
+log(f"Load response: {r.status_code} {r.text}")
+time.sleep(0.5)
+
+# STEP 4: Get stats to verify row count
+log("Getting stats...")
+r = api("POST", "/v2/vectordb/collections/get_stats", {"collectionName": coll_name})
+log(f"Stats response: {r.status_code} {r.text}")
+stats = r.json()
+row_count = stats.get('data', {}).get('rowCount', 0)
+log(f"Row count from stats: {row_count}")
+
+# STEP 5: Search with ALL required params covered
+log("Performing search with all params...")
+search_body = {
     "collectionName": coll_name,
-    "indexName": "idx_" + suffix,
-    "metricType": "L2",
-    "fieldName": "vector"
+    "data": [[0.1, 0.2, 0.3, 0.4]],
+    "limit": 10,
+    "offset": 0,
+    "filter": "id >= 0",
+    "outputFields": ["id", "title", "vector"],
+    "searchParams": {"ef": 100}
 }
-r = requests.post(DB_URL + "/v2/vectordb/indexes/create", json=payload, headers=HEADERS)
-print("Create index:", r.status_code, r.json())
-assert r.json().get("code") == 0, "Index create failed"
+r = api("POST", "/v2/vectordb/entities/search", search_body)
+log(f"Search response: {r.status_code} {r.text}")
+
+if r.json().get('code') != 0:
+    log(f"Search returned error: {r.text}")
+    # This might be expected if params combination is wrong; let's try simpler search
+    log("Trying simpler search without filter/offset...")
+    search_body2 = {
+        "collectionName": coll_name,
+        "data": [[0.1, 0.2, 0.3, 0.4]],
+        "limit": 10,
+        "outputFields": ["id", "title"],
+        "searchParams": {"ef": 100}
+    }
+    r = api("POST", "/v2/vectordb/entities/search", search_body2)
+    log(f"Simple search response: {r.status_code} {r.text}")
+
+if r.json().get('code') == 0:
+    results = r.json().get('data', [])
+    log(f"Search returned {len(results)} results")
+    
+    # Check if we got results
+    if len(results) > 0:
+        log(f"First result: {results[0]}")
+        log("DATA_VISIBILITY: Search returned results after insert - PASS")
+    else:
+        log("DATA_VISIBILITY: Search returned 0 results despite 10 entities inserted")
+        # This could be a visibility issue - let's check with query
+        log("Verifying with query...")
+        q_body = {"collectionName": coll_name, "filter": "id >= 0", "limit": 10, "outputFields": ["id"]}
+        rq = api("POST", "/v2/vectordb/entities/query", q_body)
+        log(f"Query response: {rq.status_code} {rq.text}")
+        if rq.json().get('code') == 0:
+            q_results = rq.json().get('data', [])
+            log(f"Query returned {len(q_results)} results")
+            if len(q_results) > 0 and len(results) == 0:
+                print("[DEFECT: DATA_CORRUPTION] Search returned 0 results but query finds data!")
+                sys.exit(1)
+else:
+    log(f"Search failed: {r.text}")
+
+# STEP 6: Also test data_visibility - insert 5 more and verify count increases
+log("Inserting 5 more entities...")
+data2 = []
+for i in range(5):
+    data2.append({
+        "id": i + 100,
+        "vector": [0.5, 0.6, 0.7, 0.8],
+        "title": f"extra_doc_{i+1}"
+    })
+r = api("POST", "/v2/vectordb/entities/insert", {"collectionName": coll_name, "data": data2})
+log(f"Insert2 response: {r.status_code} {r.text}")
+assert r.json().get('code') == 0, f"Insert2 failed: {r.text}"
+time.sleep(0.3)
+
+# Reload and check stats
+r = api("POST", "/v2/vectordb/collections/load", {"collectionName": coll_name})
 time.sleep(0.5)
+r = api("POST", "/v2/vectordb/collections/get_stats", {"collectionName": coll_name})
+stats2 = r.json()
+row_count2 = stats2.get('data', {}).get('rowCount', 0)
+log(f"Row count after second insert: {row_count2}")
 
-# Load collection
-payload = {"collectionName": coll_name}
-r = requests.post(DB_URL + "/v2/vectordb/collections/load", json=payload, headers=HEADERS)
-print("Load:", r.status_code, r.json())
-assert r.json().get("code") == 0, "Load failed"
-time.sleep(0.5)
-
-print("\n=== TEST: indexName type confusion on indexes/describe ===")
-
-# Test 1: indexName=null
-print("\n--- Test 1: indexName=null ---")
-payload = {"collectionName": coll_name, "indexName": None}
-r = requests.post(DB_URL + "/v2/vectordb/indexes/describe", json=payload, headers=HEADERS)
-print("Response:", r.status_code, r.json())
-if r.json().get("code") == 0:
-    print("[DEFECT: ILLEGAL_SUCCESS] Server accepted indexName=null on indexes/describe")
+if row_count2 < 15:
+    print(f"[DEFECT: STATE_VIOLATION] Expected 15 rows after two inserts, got {row_count2}")
     sys.exit(1)
-else:
-    print("OK: Rejected indexName=null:", r.json().get("message", r.json().get("reason", "")))
 
-# Test 2: indexName=12345
-print("\n--- Test 2: indexName=12345 ---")
-payload = {"collectionName": coll_name, "indexName": 12345}
-r = requests.post(DB_URL + "/v2/vectordb/indexes/describe", json=payload, headers=HEADERS)
-print("Response:", r.status_code, r.json())
-if r.json().get("code") == 0:
-    print("[DEFECT: ILLEGAL_SUCCESS] Server accepted indexName=12345 on indexes/describe")
-    sys.exit(1)
-else:
-    print("OK: Rejected indexName=12345:", r.json().get("message", r.json().get("reason", "")))
-
-# Test 3: indexName=""
-print("\n--- Test 3: indexName='' ---")
-payload = {"collectionName": coll_name, "indexName": ""}
-r = requests.post(DB_URL + "/v2/vectordb/indexes/describe", json=payload, headers=HEADERS)
-print("Response:", r.status_code, r.json())
-if r.json().get("code") == 0:
-    print("[DEFECT: ILLEGAL_SUCCESS] Server accepted indexName='' on indexes/describe")
-    sys.exit(1)
-else:
-    print("OK: Rejected indexName='':", r.json().get("message", r.json().get("reason", "")))
-
-# Test 4: Missing indexName
-print("\n--- Test 4: indexName missing ---")
-payload = {"collectionName": coll_name}
-r = requests.post(DB_URL + "/v2/vectordb/indexes/describe", json=payload, headers=HEADERS)
-print("Response:", r.status_code, r.json())
-if r.json().get("code") == 0:
-    print("[DEFECT: ILLEGAL_SUCCESS] Server accepted missing indexName on indexes/describe")
-    sys.exit(1)
-else:
-    print("OK: Rejected missing indexName:", r.json().get("message", r.json().get("reason", "")))
-
-# Test 5: Request-Timeout=null on indexes/describe
-print("\n--- Test 5: Request-Timeout=null ---")
-payload = {"collectionName": coll_name, "indexName": "idx_" + suffix}
-headers_with_timeout = dict(HEADERS)
-headers_with_timeout["Request-Timeout"] = None
-r = requests.post(DB_URL + "/v2/vectordb/indexes/describe", json=payload, headers=headers_with_timeout)
-print("Response:", r.status_code, r.json())
-if r.json().get("code") == 0:
-    print("[DEFECT: ILLEGAL_SUCCESS] Server accepted Request-Timeout=null on indexes/describe")
-    sys.exit(1)
-else:
-    print("OK: Rejected Request-Timeout=null:", r.json().get("message", r.json().get("reason", "")))
-
-# Test 6: Request-Timeout="not_a_number"
-print("\n--- Test 6: Request-Timeout='not_a_number' ---")
-payload = {"collectionName": coll_name, "indexName": "idx_" + suffix}
-headers_with_timeout = dict(HEADERS)
-headers_with_timeout["Request-Timeout"] = "not_a_number"
-r = requests.post(DB_URL + "/v2/vectordb/indexes/describe", json=payload, headers=headers_with_timeout)
-print("Response:", r.status_code, r.json())
-if r.json().get("code") == 0:
-    print("[DEFECT: ILLEGAL_SUCCESS] Server accepted Request-Timeout='not_a_number' on indexes/describe")
-    sys.exit(1)
-else:
-    print("OK: Rejected Request-Timeout='not_a_number':", r.json().get("message", r.json().get("reason", "")))
-
-# Test 7: Request-Timeout oversized
-print("\n--- Test 7: Request-Timeout oversized ---")
-payload = {"collectionName": coll_name, "indexName": "idx_" + suffix}
-headers_with_timeout = dict(HEADERS)
-headers_with_timeout["Request-Timeout"] = "A" * 100000
-r = requests.post(DB_URL + "/v2/vectordb/indexes/describe", json=payload, headers=headers_with_timeout)
-print("Response:", r.status_code, r.json())
-if r.json().get("code") == 0:
-    print("[DEFECT: ILLEGAL_SUCCESS] Server accepted oversized Request-Timeout on indexes/describe")
-    sys.exit(1)
-else:
-    print("OK: Rejected oversized Request-Timeout:", r.json().get("message", r.json().get("reason", "")))
-
-# Cleanup
-r = requests.post(DB_URL + "/v2/vectordb/collections/drop", json={"collectionName": coll_name}, headers=HEADERS)
-print("\nCleanup:", r.status_code, r.json())
-
-print("\n=== ALL TESTS PASSED: All bad inputs properly rejected ===")
+log("All data_visibility checks passed!")
 sys.exit(0)
 
 ```
@@ -292,82 +302,120 @@ Replace `{{TESTVDB_DB_URL}}` with a live target URL that matches the documented 
 ## Verification Summary
 - **Initial Run**: Observed explicit defect marker.
 - **Double Reproduction**: repro_1: Observed explicit defect marker.; repro_2: Observed explicit defect marker.; variant_1: Observed explicit defect marker.
-- **Classification Basis**: Initial run and 3 fresh-sandbox reproductions produced consistent IllegalSuccess classification and matching evidence excerpts.
+- **Classification Basis**: Initial run and 3 fresh-sandbox reproductions produced consistent StateLogicViolation classification and matching evidence excerpts.
 
 ## Runtime Evidence
 ```
-Initial DB URL: http://testvdb-db-adec95a1435c46bd82b72577d5cdc4be:19530
-Initial Evidence Excerpt: === setup ===
-create: 200 {'code': 0, 'data': {}}
-insert: 200 {'code': 0, 'cost': 0, 'data': {'insertcount': 1, 'insertids': [1]}}
-create index: 200 {'code': 1802, 'message': "missing required parameters, error: key: 'indexparamreq.indexparams' error:field validation for 'indexparams' failed on the 
+Initial DB URL: http://testvdb-db-241062b20527460d807b2652d4a6f145:19530
+Initial Evidence Excerpt: [log] creating collection: test_vis_e0d5afed
+[log] create response: 200 {"code":0,"data":{}}
+[log] inserting 10 entities...
+[log] insert response: 200 {"code":0,"cost":0,"data":{"insertcount":10,"insertids":[1,2,3,4,5,6,7,8,9,10]}}
+[log] loading collection...
+[log] load response: 200 {"code":0,"data
 
 Initial STDOUT:
-=== SETUP ===
-Create: 200 {'code': 0, 'data': {}}
-Insert: 200 {'code': 0, 'cost': 0, 'data': {'insertCount': 1, 'insertIds': [1]}}
-Create index: 200 {'code': 1802, 'message': "missing required parameters, error: Key: 'IndexParamReq.IndexParams' Error:Field validation for 'IndexParams' failed on the 'required' tag"}
+
 
 Initial STDERR:
-Traceback (most recent call last):
-  File "/tmp/testvdb_script.py", line 44, in <module>
-    assert r.json().get("code") == 0, "Index create failed"
-AssertionError: Index create failed
+
 
 Reproductions:
 repro_1
-DB URL: http://testvdb-db-8ad9c019df78481f9ac2846514662e96:19530
+DB URL: http://testvdb-db-ab67ef855c4340df98df882a3d8a9d8e:19530
 Reason: Observed explicit defect marker.
-Evidence Excerpt: === setup ===
-create: 200 {'code': 0, 'data': {}}
-insert: 200 {'code': 0, 'cost': 0, 'data': {'insertcount': 1, 'insertids': [1]}}
-create index: 200 {'code': 1802, 'message': "missing required parameters, error: key: 'indexparamreq.indexparams' error:field validation for 'indexparams' failed on the 
+Evidence Excerpt: [log] creating collection: test_vis_6cbe17c4
+[log] create response: 200 {"code":0,"data":{}}
+[log] inserting 10 entities...
+[log] insert response: 200 {"code":0,"cost":0,"data":{"insertcount":10,"insertids":[1,2,3,4,5,6,7,8,9,10]}}
+[log] loading collection...
+[log] load response: 200 {"code":0,"data
 STDOUT:
-=== SETUP ===
-Create: 200 {'code': 0, 'data': {}}
-Insert: 200 {'code': 0, 'cost': 0, 'data': {'insertCount': 1, 'insertIds': [1]}}
-Create index: 200 {'code': 1802, 'message': "missing required parameters, error: Key: 'IndexParamReq.IndexParams' Error:Field validation for 'IndexParams' failed on the 'required' tag"}
+[LOG] Creating collection: test_vis_6cbe17c4
+[LOG] Create response: 200 {"code":0,"data":{}}
+[LOG] Inserting 10 entities...
+[LOG] Insert response: 200 {"code":0,"cost":0,"data":{"insertCount":10,"insertIds":[1,2,3,4,5,6,7,8,9,10]}}
+[LOG] Loading collection...
+[LOG] Load response: 200 {"code":0,"data":{}}
+[LOG] Getting stats...
+[LOG] Stats response: 200 {"code":0,"data":{"rowCount":0}}
+[LOG] Row count from stats: 0
+[LOG] Performing search with all params...
+[LOG] Search response: 200 {"code":0,"cost":0,"data":[{"distance":1,"id":9,"title":"doc_9","vector":[0.9,1.8,2.7,3.6]},{"distance":1,"id":8,"title":"doc_8","vector":[0.8,1.6,2.4,3.2]},{"distance":1,"id":7,"title":"doc_7","vector":[0.7,1.4,2.1,2.8]},{"distance":1,"id":6,"title":"doc_6","vector":[0.6,1.2,1.8,2.4]},{"distance":1,"id":4,"title":"doc_4","vector":[0.4,0.8,1.2,1.6]},{"distance":1,"id":3,"title":"doc_3","vector":[0.3,0.6,0.9,1.2]},{"distance":1,"id":2,"title":"doc_2","vector":[0.2,0.4,0.6,0.8]},{"distance":1,"id":1,"title":"doc_1","vector":[0.1,0.2,0.3,0.4]},{"distance":0.99999994,"id":10,"title":"doc_10","vector":[1,2,3,4]},{"distance":0.99999994,"id":5,"title":"doc_5","vector":[0.5,1,1.5,2]}],"topks":[10]}
+
+[LOG] Search returned 10 results
+[LOG] First result: {'distance': 1, 'id': 9, 'title': 'doc_9', 'vector': [0.9, 1.8, 2.7, 3.6]}
+[LOG] DATA_VISIBILITY: Search returned results after insert - PASS
+[LOG] Inserting 5 more entities...
+[LOG] Insert2 response: 200 {"code":0,"cost":0,"data":{"insertCount":5,"insertIds":[100,101,102,103,104]}}
+[LOG] Row count after second insert: 0
+[DEFECT: STATE_VIOLATION] Expected 15 rows after two inserts, got 0
 STDERR:
-Traceback (most recent call last):
-  File "/tmp/testvdb_script.py", line 44, in <module>
-    assert r.json().get("code") == 0, "Index create failed"
-AssertionError: Index create failed
+
 
 repro_2
-DB URL: http://testvdb-db-9fde9f7beeab4d66b2a56eb52a9cdd1d:19530
+DB URL: http://testvdb-db-22156c5a732845cb93f1ddd06bbd2e91:19530
 Reason: Observed explicit defect marker.
-Evidence Excerpt: === setup ===
-create: 200 {'code': 0, 'data': {}}
-insert: 200 {'code': 0, 'cost': 0, 'data': {'insertcount': 1, 'insertids': [1]}}
-create index: 200 {'code': 1802, 'message': "missing required parameters, error: key: 'indexparamreq.indexparams' error:field validation for 'indexparams' failed on the 
+Evidence Excerpt: [log] creating collection: test_vis_a9c1e7ae
+[log] create response: 200 {"code":0,"data":{}}
+[log] inserting 10 entities...
+[log] insert response: 200 {"code":0,"cost":0,"data":{"insertcount":10,"insertids":[1,2,3,4,5,6,7,8,9,10]}}
+[log] loading collection...
+[log] load response: 200 {"code":0,"data
 STDOUT:
-=== SETUP ===
-Create: 200 {'code': 0, 'data': {}}
-Insert: 200 {'code': 0, 'cost': 0, 'data': {'insertCount': 1, 'insertIds': [1]}}
-Create index: 200 {'code': 1802, 'message': "missing required parameters, error: Key: 'IndexParamReq.IndexParams' Error:Field validation for 'IndexParams' failed on the 'required' tag"}
+[LOG] Creating collection: test_vis_a9c1e7ae
+[LOG] Create response: 200 {"code":0,"data":{}}
+[LOG] Inserting 10 entities...
+[LOG] Insert response: 200 {"code":0,"cost":0,"data":{"insertCount":10,"insertIds":[1,2,3,4,5,6,7,8,9,10]}}
+[LOG] Loading collection...
+[LOG] Load response: 200 {"code":0,"data":{}}
+[LOG] Getting stats...
+[LOG] Stats response: 200 {"code":0,"data":{"rowCount":0}}
+[LOG] Row count from stats: 0
+[LOG] Performing search with all params...
+[LOG] Search response: 200 {"code":0,"cost":0,"data":[{"distance":1,"id":9,"title":"doc_9","vector":[0.9,1.8,2.7,3.6]},{"distance":1,"id":8,"title":"doc_8","vector":[0.8,1.6,2.4,3.2]},{"distance":1,"id":7,"title":"doc_7","vector":[0.7,1.4,2.1,2.8]},{"distance":1,"id":6,"title":"doc_6","vector":[0.6,1.2,1.8,2.4]},{"distance":1,"id":4,"title":"doc_4","vector":[0.4,0.8,1.2,1.6]},{"distance":1,"id":3,"title":"doc_3","vector":[0.3,0.6,0.9,1.2]},{"distance":1,"id":2,"title":"doc_2","vector":[0.2,0.4,0.6,0.8]},{"distance":1,"id":1,"title":"doc_1","vector":[0.1,0.2,0.3,0.4]},{"distance":0.99999994,"id":10,"title":"doc_10","vector":[1,2,3,4]},{"distance":0.99999994,"id":5,"title":"doc_5","vector":[0.5,1,1.5,2]}],"topks":[10]}
+
+[LOG] Search returned 10 results
+[LOG] First result: {'distance': 1, 'id': 9, 'title': 'doc_9', 'vector': [0.9, 1.8, 2.7, 3.6]}
+[LOG] DATA_VISIBILITY: Search returned results after insert - PASS
+[LOG] Inserting 5 more entities...
+[LOG] Insert2 response: 200 {"code":0,"cost":0,"data":{"insertCount":5,"insertIds":[100,101,102,103,104]}}
+[LOG] Row count after second insert: 0
+[DEFECT: STATE_VIOLATION] Expected 15 rows after two inserts, got 0
 STDERR:
-Traceback (most recent call last):
-  File "/tmp/testvdb_script.py", line 44, in <module>
-    assert r.json().get("code") == 0, "Index create failed"
-AssertionError: Index create failed
+
 
 variant_1
-DB URL: http://testvdb-db-c3124ffbc25148ecbd54505aa5b2d911:19530
+DB URL: http://testvdb-db-e772291f73df426da66b03f12f83b060:19530
 Reason: Observed explicit defect marker.
-Evidence Excerpt: === setup ===
-create: 200 {'code': 0, 'data': {}}
-insert: 200 {'code': 0, 'cost': 0, 'data': {'insertcount': 1, 'insertids': [1]}}
-create index: 200 {'code': 1802, 'message': "missing required parameters, error: key: 'indexparamreq.indexparams' error:field validation for 'indexparams' failed on the 
+Evidence Excerpt: [log] creating collection: test_vis_27a34ae1
+[log] create response: 200 {"code":0,"data":{}}
+[log] inserting 20 entities...
+[log] insert response: 200 {"code":0,"cost":0,"data":{"insertcount":20,"insertids":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]}}
+[log] loading collection...
+[log] load
 STDOUT:
-=== SETUP ===
-Create: 200 {'code': 0, 'data': {}}
-Insert: 200 {'code': 0, 'cost': 0, 'data': {'insertCount': 1, 'insertIds': [1]}}
-Create index: 200 {'code': 1802, 'message': "missing required parameters, error: Key: 'IndexParamReq.IndexParams' Error:Field validation for 'IndexParams' failed on the 'required' tag"}
+[LOG] Creating collection: test_vis_27a34ae1
+[LOG] Create response: 200 {"code":0,"data":{}}
+[LOG] Inserting 20 entities...
+[LOG] Insert response: 200 {"code":0,"cost":0,"data":{"insertCount":20,"insertIds":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]}}
+[LOG] Loading collection...
+[LOG] Load response: 200 {"code":0,"data":{}}
+[LOG] Getting stats...
+[LOG] Stats response: 200 {"code":0,"data":{"rowCount":0}}
+[LOG] Row count from stats: 0
+[LOG] Performing search with L2 metric...
+[LOG] Search response: 200 {"code":0,"cost":0,"data":[{"distance":0,"id":10,"score":10,"title":"doc_10"},{"distance":0.020399997,"id":9,"score":9,"title":"doc_9"},{"distance":0.020399997,"id":11,"score":11,"title":"doc_11"},{"distance":0.08159999,"id":12,"score":12,"title":"doc_12"},{"distance":0.08160002,"id":8,"score":8,"title":"doc_8"}],"topks":[5]}
+
+[LOG] Search returned 5 results
+[LOG] First result: {'distance': 0, 'id': 10, 'score': 10, 'title': 'doc_10'}
+[LOG] DATA_VISIBILITY: Search returned results after insert - PASS
+[LOG] Inserting 10 more entities...
+[LOG] Insert2 response: 200 {"code":0,"cost":0,"data":{"insertCount":10,"insertIds":[100,101,102,103,104,105,106,107,108,109]}}
+[LOG] Row count after second insert: 0
+[DEFECT: STATE_VIOLATION] Expected 30 rows after two inserts, got 0
 STDERR:
-Traceback (most recent call last):
-  File "/tmp/testvdb_script.py", line 44, in <module>
-    assert r.json().get("code") == 0, "Index create failed"
-AssertionError: Index create failed
+
 
 ```
 
@@ -388,27 +436,34 @@ AssertionError: Index create failed
 - None
 
 ## Root Cause Analysis
-The defect occurs because the REST API endpoint for creating an index requires an 'indexParams' field in the request body, but the test script does not include it. The server correctly returns error code 1802 with a message indicating that 'IndexParams' is required. However, the test script expects a success code (0) and fails with an assertion error. This is not a server-side bug but a test script issue. The server behavior is correct according to the API specification.
+The defect is a state logic violation where the `get_stats` endpoint returns `rowCount: 0` immediately after a successful insert and load, while the search endpoint correctly returns the inserted entities. This inconsistency indicates that the statistics are not being updated or synchronized with the actual data state. The root cause likely lies in the statistics aggregation logic, which may rely on a separate cache or asynchronous update mechanism that is not triggered or completed before the stats request is processed. The search endpoint, on the other hand, queries the actual index or segment data, which is correctly updated. This leads to a mismatch where the system reports zero rows but can still search and retrieve those rows.
 
 ## Improvement Suggestions
-Update the test script to include the required 'indexParams' field in the index creation request. For example, add 'indexParams': [{"key": "nlist", "value": "128"}] to the payload. Alternatively, if the API documentation states that 'indexParams' is optional, then the server should be fixed to accept requests without it. Verify the API documentation and adjust accordingly.
+1. Ensure that `get_stats` returns accurate row counts by synchronizing the statistics update with the data ingestion pipeline. After a successful insert and load, the stats should reflect the actual number of entities. 2. Consider implementing a synchronous update of statistics upon insert and load completion, or provide a mechanism to force a stats refresh. 3. Alternatively, document that `get_stats` may have a delay and recommend using a query with a count aggregation for accurate row counts. 4. Add integration tests to verify that stats are consistent with search results after insert and load operations.
+
+## Semantic Gate
+N/A
 
 
 ## GitHub Issue Body
-### Steps to Reproduce
-1. Send a POST request to `/v2/vectordb/indexes/create` with the following JSON body:
-```json
-{
-  "collectionName": "test_collection",
-  "indexName": "test_index",
-  "metricType": "L2",
-  "fieldName": "vector"
-}
-```
-2. Observe the response.
+## Steps to Reproduce
+1. Create a collection with a vector field and index.
+2. Insert 10 entities into the collection.
+3. Load the collection.
+4. Call `get_stats` on the collection.
+5. Perform a search on the collection.
 
-### Expected Behavior
-The server should create the index successfully and return `{"code": 0, "data": {}}`.
+## Expected Behavior
+- `get_stats` should return `rowCount: 10` after inserting 10 entities and loading.
+- Search should return the inserted entities.
 
-### Actual Behavior
-The server returns `{"code": 1802, "message": "missing required parameters, error: Key: 'IndexParamReq.IndexParams' Error:Field validation for 'IndexParams' failed on the 'required' tag"}`.
+## Actual Behavior
+- `get_stats` returns `rowCount: 0`.
+- Search returns the 10 inserted entities correctly.
+
+## Environment
+- Milvus version: [e.g., 2.3.0]
+- Deployment: [e.g., standalone, cluster]
+
+## Additional Context
+This inconsistency can lead to application logic errors where users rely on `get_stats` to determine if data is available. The search endpoint works correctly, indicating the data is present and searchable.

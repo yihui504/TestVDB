@@ -4,33 +4,184 @@
   "assertions": [
     "[CREATE] vector dimension must be > 0",
     "[CREATE] vector dimension must be <= 1048575",
-    "[CREATE] HNSW m must be >= 2",
-    "[CREATE] HNSW ef_construction must be >= 4",
+    "[CREATE] vector dimension must be an integer, not float or string",
+    "[CREATE] HNSW m must be >= 2 and <= 64",
+    "[CREATE] HNSW ef_construction must be >= 4 and <= 1000",
+    "[CREATE] HNSW m must be within valid range (2-64)",
     "[CREATE] IVFFlat lists must be >= 1",
+    "[CREATE] IVFFlat lists must be <= number of rows in table",
+    "[CREATE] IVFFlat lists parameter must be a positive integer",
     "[INSERT] inserted vector dimension must match column dimension",
-    "[INSERT] vector elements must be finite float numbers",
-    "[SEARCH] distance operator must match index type",
+    "[INSERT] vector elements must be finite float numbers (no NaN, no Infinity, no NULL)",
+    "[INSERT] vector must not be NULL",
+    "[INSERT] vector with dimension 0 must be rejected",
+    "[INSERT] vector with oversize dimension must be rejected",
+    "[INSERT] empty vector must be rejected with clear error",
+    "[INSERT] NaN vector element must be rejected with clear error",
+    "[INSERT] Infinity vector element must be rejected with clear error",
+    "[INSERT] INSERT N rows must result in COUNT(*) = N",
+    "[INSERT] bulk INSERT must maintain count consistency",
+    "[DELETE] DELETE M of N rows must result in COUNT(*) = N-M",
+    "[DELETE] DELETE all rows must result in COUNT(*) = 0",
+    "[DELETE] DELETE on empty table must return 0 affected rows, not error",
+    "[UPDATE] UPDATE vector with mismatched dimension must be rejected",
+    "[UPDATE] UPDATE vector to NULL must be rejected or set correctly",
+    "[UPDATE] UPDATE must not change COUNT(*) when modifying existing rows",
+    "[SEARCH] L2 distance operator must produce ascending distance order",
+    "[SEARCH] IP distance operator must produce descending distance order",
+    "[SEARCH] Cosine distance operator must produce ascending distance order",
+    "[SEARCH] distance operator must match index type used for the search",
     "[SEARCH] LIMIT must be >= 1",
-    "[BEHAVIOR:STATE] INSERT N rows → COUNT(*) must equal N",
-    "[BEHAVIOR:STATE] DELETE M of N rows → COUNT(*) must equal N-M",
-    "[INDEX] HNSW index on empty table must not crash"
+    "[SEARCH] LIMIT=0 must return empty result, not error",
+    "[SEARCH] negative LIMIT must be rejected with clear error",
+    "[SEARCH] search on empty table must return 0 results, not crash",
+    "[SEARCH] search with NULL vector must be rejected with clear error",
+    "[SEARCH] HNSW index search must return correctly ordered results matching the distance operator",
+    "[SEARCH] IVFFlat index without training (empty table) must produce warning or error, not crash",
+    "[SEARCH] search after index creation must return same results as without index",
+    "[SEARCH] search after index drop must still work (sequential scan fallback)",
+    "[INDEX] HNSW index on empty table must not crash",
+    "[INDEX] HNSW index with m=1 must be rejected (below minimum 2)",
+    "[INDEX] HNSW ef_construction=3 must be rejected (below minimum 4)",
+    "[INDEX] IVFFlat index with lists=0 must be rejected (below minimum 1)",
+    "[INDEX] HNSW index creation must fail with invalid distance operator",
+    "[INDEX] IVFFlat index must be created successfully when table has sufficient rows",
+    "[INDEX] creating index on non-existent column must return clear error",
+    "[INDEX] DROP INDEX must succeed on existing index",
+    "[INDEX] DROP INDEX on non-existent index must fail with clear error",
+    "[INDEX] CREATE INDEX with same name twice must fail with clear error",
+    "[SEMANTIC] L2 search on HNSW index must return results in ascending distance order",
+    "[SEMANTIC] Cosine search on HNSW index must return results in ascending cosine distance order",
+    "[SEMANTIC] Inner Product search on HNSW index must return results in descending IP order",
+    "[SEMANTIC] IVFFlat probe parameter affects result count/ordering within bounds",
+    "[BEHAVIOR:STATE] After INSERT+DELETE, COUNT must reflect net change: INSERT N, DELETE D → COUNT = N-D",
+    "[BEHAVIOR:STATE] INSERT then UPDATE then COUNT must still equal original N",
+    "[BEHAVIOR:STATE] CREATE INDEX then DROP INDEX must leave table searchable",
+    "[BEHAVIOR:DIAGNOSTIC] dimension mismatch error must mention 'dimension' or 'different'",
+    "[BEHAVIOR:DIAGNOSTIC] invalid distance operator error must be descriptive",
+    "[BEHAVIOR:DIAGNOSTIC] NULL vector error must mention 'NULL' or 'vector'",
+    "[BEHAVIOR:DIAGNOSTIC] negative LIMIT error must mention 'LIMIT'",
+    "[CONCURRENCY] concurrent INSERT from 2 threads must maintain COUNT consistency",
+    "[CONCURRENCY] concurrent DELETE+SEARCH must not cause crash or data corruption"
   ],
   "type_constraints": [
-    {"param_name": "vector.dim", "expected_type": "positive integer", "violation_examples": []},
-    {"param_name": "hnsw.m", "expected_type": "integer", "violation_examples": []},
-    {"param_name": "hnsw.ef_construction", "expected_type": "integer", "violation_examples": []},
-    {"param_name": "ivfflat.lists", "expected_type": "integer", "violation_examples": []},
-    {"param_name": "distance_ops", "expected_type": "enum", "violation_examples": []}
+    {"param_name": "vector.dim", "expected_type": "positive integer", "violation_examples": ["0", "-1", "1.5", "'abc'", "null"]},
+    {"param_name": "hnsw.m", "expected_type": "integer", "violation_examples": ["0", "1", "1.5", "'abc'", "null"]},
+    {"param_name": "hnsw.ef_construction", "expected_type": "integer", "violation_examples": ["0", "3", "1.5", "'abc'", "null"]},
+    {"param_name": "ivfflat.lists", "expected_type": "integer", "violation_examples": ["0", "-1", "1.5", "'abc'", "null"]},
+    {"param_name": "distance_ops", "expected_type": "enum", "violation_examples": ["invalid_distance_ops", "'random'", "null"]},
+    {"param_name": "vector.element", "expected_type": "float", "violation_examples": ["NaN", "Infinity", "-Infinity", "'abc'", "null"]},
+    {"param_name": "search.limit", "expected_type": "positive integer", "violation_examples": ["0", "-1", "1.5", "'abc'", "null"]}
   ],
   "range_constraints": [
-    {"param_name": "vector.dim", "description": "dimension must be 1-1048575", "min": 1.0, "max": 1048575.0, "violation_examples": []},
-    {"param_name": "hnsw.m", "description": "m must be >= 2", "min": 2.0, "max": null, "violation_examples": []},
-    {"param_name": "hnsw.ef_construction", "description": "ef_construction must be >= 4", "min": 4.0, "max": null, "violation_examples": []},
-    {"param_name": "ivfflat.lists", "description": "lists must be >= 1", "min": 1.0, "max": null, "violation_examples": []}
+    {"param_name": "vector.dim", "description": "dimension must be 1-1048575", "min": 1.0, "max": 1048575.0, "violation_examples": ["0", "-1", "1048576"]},
+    {"param_name": "hnsw.m", "description": "m must be in range [2, 64]", "min": 2.0, "max": 64.0, "violation_examples": ["1", "65"]},
+    {"param_name": "hnsw.ef_construction", "description": "ef_construction must be >= 4", "min": 4.0, "max": null, "violation_examples": ["3", "0", "-1"]},
+    {"param_name": "ivfflat.lists", "description": "lists must be >= 1", "min": 1.0, "max": null, "violation_examples": ["0", "-1"]},
+    {"param_name": "search.limit", "description": "LIMIT must be >= 0", "min": 0.0, "max": null, "violation_examples": ["-1"]}
   ],
   "state_constraints": [
-    {"description": "CREATE EXTENSION vector must run before creating vector columns", "determinism": "deterministic", "setup_script_template": null}
+    {"description": "CREATE EXTENSION vector must run before creating vector columns", "determinism": "deterministic", "setup_script_template": "CREATE EXTENSION IF NOT EXISTS vector"},
+    {"description": "Table must exist before INSERT/UPDATE/DELETE operations", "determinism": "deterministic", "setup_script_template": "CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector({dim}))"},
+    {"description": "IVFFlat index requires table to have at least lists rows before training", "determinism": "deterministic", "setup_script_template": "INSERT INTO {table} (embedding) SELECT '[1,2,3,4]' FROM generate_series(1, {lists})"},
+    {"description": "HNSW index can be created on empty table", "determinism": "deterministic", "setup_script_template": "CREATE INDEX ON {table} USING hnsw (embedding vector_l2_ops)"}
   ],
-  "state_invariants": [],
-  "behavioral_contracts": []
+  "state_invariants": [
+    {
+      "name": "insert_count_consistency",
+      "check_type": "count_consistency",
+      "endpoint": "INSERT",
+      "precondition": "table exists",
+      "assertion_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'inv_insert_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\nfor i in range(5):\n    cur.execute(f\"INSERT INTO {table} (embedding) VALUES ('[{0.1*i},{0.2*i},{0.3*i},{0.4*i}]')\")\nconn.commit()\ncur.execute(f'SELECT COUNT(*) FROM {table}')\ncount = cur.fetchone()[0]\nif count != 5:\n    print(f'[DEFECT: STATE_VIOLATION] Insert 5 rows but COUNT={count}')\n    sys.exit(1)\nprint('Insert count consistency verified: 5 rows')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()"
+    },
+    {
+      "name": "delete_count_consistency",
+      "check_type": "count_consistency",
+      "endpoint": "DELETE",
+      "precondition": "table with data exists",
+      "assertion_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'inv_delete_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\nfor i in range(5):\n    cur.execute(f\"INSERT INTO {table} (embedding) VALUES ('[{0.1*i},{0.2*i},{0.3*i},{0.4*i}]')\")\nconn.commit()\ncur.execute(f'DELETE FROM {table} WHERE id <= 2')\nconn.commit()\ncur.execute(f'SELECT COUNT(*) FROM {table}')\ncount = cur.fetchone()[0]\nif count != 3:\n    print(f'[DEFECT: STATE_VIOLATION] Insert 5, delete 2, COUNT={count}')\n    sys.exit(1)\nprint('Delete count consistency verified: 3 remaining')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()"
+    },
+    {
+      "name": "search_empty_table_no_crash",
+      "check_type": "existence_check",
+      "endpoint": "SELECT",
+      "precondition": "empty table exists",
+      "assertion_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'inv_empty_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\ntry:\n    cur.execute(f\"SELECT * FROM {table} ORDER BY embedding <-> '[1,2,3,4]' LIMIT 5\")\n    rows = cur.fetchall()\n    if len(rows) != 0:\n        print(f'[DEFECT: STATE_VIOLATION] Empty table search returned {len(rows)} rows')\n        sys.exit(1)\n    print('Empty table search returns 0 rows')\nexcept Exception as e:\n    print(f'[DEFECT: RUNTIME_FAILURE] Empty table search crashed: {e}')\n    sys.exit(1)\nfinally:\n    cur.execute(f'DROP TABLE IF EXISTS {table}')\n    conn.commit()\n    conn.close()"
+    },
+    {
+      "name": "hnsw_index_on_empty_table_no_crash",
+      "check_type": "existence_check",
+      "endpoint": "CREATE INDEX",
+      "precondition": "empty table with vector column exists",
+      "assertion_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'inv_hnsw_empty_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\ntry:\n    cur.execute(f'CREATE INDEX ON {table} USING hnsw (embedding vector_l2_ops)')\n    conn.commit()\n    print('HNSW index created on empty table')\nexcept Exception as e:\n    print(f'[DEFECT: RUNTIME_FAILURE] HNSW index on empty table failed: {e}')\n    sys.exit(1)\nfinally:\n    cur.execute(f'DROP TABLE IF EXISTS {table}')\n    conn.commit()\n    conn.close()"
+    },
+    {
+      "name": "l2_distance_ordering",
+      "check_type": "value_range",
+      "endpoint": "SELECT",
+      "precondition": "table with data and HNSW index exists",
+      "assertion_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'inv_l2_order_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\nfor i in range(10):\n    cur.execute(f\"INSERT INTO {table} (embedding) VALUES ('[{0.1*i},{0.2*i},{0.3*i},{0.4*i}]')\")\nconn.commit()\ncur.execute(f'CREATE INDEX ON {table} USING hnsw (embedding vector_l2_ops)')\nconn.commit()\ncur.execute(f\"SELECT id, embedding <-> '[0.5,0.5,0.5,0.5]' AS dist FROM {table} ORDER BY embedding <-> '[0.5,0.5,0.5,0.5]' LIMIT 5\")\nrows = cur.fetchall()\ndistances = [r[1] for r in rows]\nif distances != sorted(distances):\n    print(f'[DEFECT: STATE_VIOLATION] L2 distance ordering not ascending: {distances}')\n    sys.exit(1)\nprint(f'L2 distance ordering OK: {distances}')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()"
+    },
+    {
+      "name": "dim_mismatch_rejected",
+      "check_type": "value_range",
+      "endpoint": "INSERT",
+      "precondition": "table with vector(4) column exists",
+      "assertion_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'inv_dimmis_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\ntry:\n    cur.execute(f\"INSERT INTO {table} (embedding) VALUES ('[1,2,3]')\")\n    conn.commit()\n    print(f'[DEFECT: ILLEGAL_SUCCESS] Dim mismatch insert accepted (vector(4) vs [1,2,3])')\n    sys.exit(1)\nexcept Exception as e:\n    if 'dimension' in str(e).lower() or 'different' in str(e).lower():\n        print(f'dim mismatch correctly rejected: {e}')\n    else:\n        print(f'[DEFECT: POOR_DIAGNOSTICS] Unexpected error on dim mismatch: {e}')\nfinally:\n    cur.execute(f'DROP TABLE IF EXISTS {table}')\n    conn.commit()\n    conn.close()"
+    }
+  ],
+  "behavioral_contracts": [
+    {
+      "name": "insert_search_visibility",
+      "category": "semantic_correctness",
+      "endpoints": ["INSERT", "SELECT"],
+      "precondition_script": "table exists with vector column",
+      "verification_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'bc_vis_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\ntarget_id = 42\ntarget_vec = [0.5, 0.5, 0.5, 0.5]\ncur.execute(f\"INSERT INTO {table} (id, embedding) VALUES ({target_id}, '{target_vec}')\")\nconn.commit()\ncur.execute(f\"SELECT id FROM {table} ORDER BY embedding <-> '{target_vec}' LIMIT 1\")\nresult = cur.fetchone()\nif result is None or result[0] != target_id:\n    print(f'[DEFECT: STATE_VIOLATION] Inserted vector not visible in search')\n    sys.exit(1)\nprint('Insert-search visibility OK')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()",
+      "expected_outcome": "inserted vector is immediately visible in search results",
+      "supersedes": null,
+      "mutation_rules": []
+    },
+    {
+      "name": "delete_search_invisibility",
+      "category": "state_consistency",
+      "endpoints": ["DELETE", "SELECT"],
+      "precondition_script": "table with data exists",
+      "verification_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'bc_del_invis_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\nfor i in range(5):\n    cur.execute(f\"INSERT INTO {table} (id, embedding) VALUES ({i}, '[{0.1*i},{0.2*i},{0.3*i},{0.4*i}]')\")\nconn.commit()\ncur.execute(f'DELETE FROM {table} WHERE id = 0')\nconn.commit()\ncur.execute(f'SELECT COUNT(*) FROM {table} WHERE id = 0')\ncount = cur.fetchone()[0]\nif count != 0:\n    print(f'[DEFECT: STATE_VIOLATION] Deleted row still visible: id=0 found {count} times')\n    sys.exit(1)\nprint('Delete-search invisibility OK')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()",
+      "expected_outcome": "deleted rows are not visible in subsequent queries",
+      "supersedes": null,
+      "mutation_rules": []
+    },
+    {
+      "name": "index_drop_search_fallback",
+      "category": "interface_consistency",
+      "endpoints": ["CREATE INDEX", "DROP INDEX", "SELECT"],
+      "precondition_script": "table with data and HNSW index exists",
+      "verification_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'bc_idx_drop_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\nfor i in range(5):\n    cur.execute(f\"INSERT INTO {table} (id, embedding) VALUES ({i}, '[{0.1*i},{0.2*i},{0.3*i},{0.4*i}]')\")\nconn.commit()\ncur.execute(f'CREATE INDEX IF NOT EXISTS idx_{table} ON {table} USING hnsw (embedding vector_l2_ops)')\nconn.commit()\ncur.execute(f\"SELECT id FROM {table} ORDER BY embedding <-> '[0.5,0.5,0.5,0.5]' LIMIT 3\")\nbefore = cur.fetchall()\ncur.execute(f'DROP INDEX IF EXISTS idx_{table}')\nconn.commit()\ncur.execute(f\"SELECT id FROM {table} ORDER BY embedding <-> '[0.5,0.5,0.5,0.5]' LIMIT 3\")\nafter = cur.fetchall()\nif len(before) != len(after):\n    print(f'[DEFECT: STATE_VIOLATION] Index drop changed result count: {len(before)} vs {len(after)}')\n    sys.exit(1)\nprint('Index drop search fallback OK')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()",
+      "expected_outcome": "search after index drop should still work via sequential scan with same results",
+      "supersedes": null,
+      "mutation_rules": []
+    },
+    {
+      "name": "update_preserves_count",
+      "category": "state_consistency",
+      "endpoints": ["INSERT", "UPDATE"],
+      "precondition_script": "table with data exists",
+      "verification_script": "import psycopg2, sys, uuid\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'bc_upd_count_' + uuid.uuid4().hex[:8]\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\nfor i in range(5):\n    cur.execute(f\"INSERT INTO {table} (embedding) VALUES ('[{0.1*i},{0.2*i},{0.3*i},{0.4*i}]')\")\nconn.commit()\ncur.execute(f'SELECT COUNT(*) FROM {table}')\nbefore = cur.fetchone()[0]\ncur.execute(f\"UPDATE {table} SET embedding = '[0.9,0.9,0.9,0.9]' WHERE id = 1\")\nconn.commit()\ncur.execute(f'SELECT COUNT(*) FROM {table}')\nafter = cur.fetchone()[0]\nif before != after:\n    print(f'[DEFECT: STATE_VIOLATION] UPDATE changed row count: {before} -> {after}')\n    sys.exit(1)\nprint(f'Update preserves count OK: {before} rows')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()",
+      "expected_outcome": "UPDATE should not change the total row count",
+      "supersedes": null,
+      "mutation_rules": []
+    },
+    {
+      "name": "concurrent_insert_count",
+      "category": "state_consistency",
+      "endpoints": ["INSERT"],
+      "precondition_script": "table exists with vector column",
+      "verification_script": "import psycopg2, sys, uuid, threading\nDB = '{{TESTVDB_DB_URL}}'\ntable = 'bc_conc_' + uuid.uuid4().hex[:8]\nN = 10\nerrors = []\ndef insert_rows(start, count):\n    try:\n        conn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\n        cur = conn.cursor()\n        for i in range(start, start + count):\n            cur.execute(f\"INSERT INTO {table} (embedding) VALUES ('[{0.1*i},{0.2*i},{0.3*i},{0.4*i}]')\")\n        conn.commit()\n        conn.close()\n    except Exception as e:\n        errors.append(str(e))\nconn = psycopg2.connect(f'dbname=testvdb user=postgres password=postgres host={DB} port=5432')\ncur = conn.cursor()\ncur.execute('CREATE EXTENSION IF NOT EXISTS vector')\ncur.execute(f'CREATE TABLE {table} (id bigserial PRIMARY KEY, embedding vector(4))')\nconn.commit()\nthreads = []\nfor t in range(2):\n    th = threading.Thread(target=insert_rows, args=(t * (N // 2), N // 2))\n    threads.append(th)\n    th.start()\nfor th in threads:\n    th.join()\nif errors:\n    print(f'[DEFECT: RUNTIME_FAILURE] Concurrent insert errors: {errors}')\n    sys.exit(1)\ncur.execute(f'SELECT COUNT(*) FROM {table}')\ncount = cur.fetchone()[0]\nif count != N:\n    print(f'[DEFECT: STATE_VIOLATION] Concurrent insert {N} rows but COUNT={count}')\n    sys.exit(1)\nprint(f'Concurrent insert count OK: {N} rows')\ncur.execute(f'DROP TABLE IF EXISTS {table}')\nconn.commit()\nconn.close()",
+      "expected_outcome": "concurrent inserts from 2 threads should result in COUNT(*) = N",
+      "supersedes": null,
+      "mutation_rules": []
+    }
+  ],
+  "rejection_policies": {},
+  "nested_params": {}
 }

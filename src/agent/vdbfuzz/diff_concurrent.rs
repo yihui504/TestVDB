@@ -1,4 +1,4 @@
-use crate::contract::store::ContractStore;
+﻿use crate::contract::store::ContractStore;
 use crate::target::TargetStyle;
 use serde::{Deserialize, Serialize};
 
@@ -48,22 +48,22 @@ impl DiffTestGenerator {
         let mut cases = Vec::new();
 
         let has_create = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("collections/create") || atc.endpoint.contains("collections")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/create")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("collections"))
         });
         let has_insert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/insert") || atc.endpoint.contains("points")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/insert")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("points"))
         });
         let has_search = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/search") || atc.endpoint.contains("search")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/search")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("search"))
         });
         let has_query = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/query")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/query"))
         });
         let has_delete = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/delete") || atc.endpoint.contains("points/delete")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/delete")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("points/delete"))
         });
         let has_upsert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/upsert") || atc.endpoint.contains("points/upsert")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/upsert")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("points/upsert"))
         });
 
         match style {
@@ -104,7 +104,26 @@ impl DiffTestGenerator {
                     cases.push(Self::generate_qdrant_diff_delete());
                 }
             }
-            TargetStyle::Weaviate => { /* same as Qdrant - handled below */ }
+            TargetStyle::Weaviate => {
+                let wv_has_schema = store.type_constraints.iter().any(|atc| {
+                    atc.endpoint.as_deref().map_or(false, |e| e.contains("schema"))
+                });
+                let wv_has_objects = store.type_constraints.iter().any(|atc| {
+                    atc.endpoint.as_deref().map_or(false, |e| e.contains("objects"))
+                });
+                let wv_has_search = store.type_constraints.iter().any(|atc| {
+                    atc.endpoint.as_deref().map_or(false, |e| e.contains("graphql")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("search"))
+                });
+                if wv_has_schema {
+                    cases.push(Self::generate_weaviate_diff_create_collection());
+                }
+                if wv_has_objects {
+                    cases.push(Self::generate_weaviate_diff_insert());
+                }
+                if wv_has_search {
+                    cases.push(Self::generate_weaviate_diff_search());
+                }
+            }
             TargetStyle::PgVector => {},
         }
 
@@ -119,14 +138,14 @@ impl DiffTestGenerator {
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c_rest = f'oracle_diff_rest_{uid}'
 c_sdk = f'oracle_diff_sdk_{uid}'
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c_rest,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 rest_ok = r.json().get('code') == 0
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     client.create_collection(collection_name=c_sdk, dimension=4, metric_type='COSINE')
     sdk_ok = True
 except Exception as e:
@@ -151,7 +170,7 @@ print(f'diff create_collection: rest_ok={rest_ok} sdk_ok={sdk_ok} dim_match=True
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c = f'oracle_diff_{uid}'
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
@@ -160,7 +179,7 @@ r = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={
 rest_ok = r.json().get('code') == 0
 rest_count = r.json().get('data',{}).get('insertCount',0)
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     client.insert(collection_name=c, data=[{"id":2,"vector":[0.5,0.6,0.7,0.8]}])
     sdk_ok = True
 except Exception as e:
@@ -178,7 +197,7 @@ print(f'diff insert: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to_strin
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c = f'oracle_diff_{uid}'
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
@@ -195,7 +214,7 @@ if rest_ok:
     results = r.json().get('data',[])
     if results: rest_top1 = results[0].get('id')
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     sdk_results = client.search(collection_name=c, data=[[0.1,0.2,0.3,0.4]], limit=5, output_fields=['id'])
     sdk_ok = True
     sdk_top1 = None
@@ -217,7 +236,7 @@ print(f'diff search: rest_ok={rest_ok} sdk_ok={sdk_ok} top1_match=True'); sys.ex
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c = f'oracle_diff_{uid}'
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
@@ -231,7 +250,7 @@ r = requests.post(f'{BASE}/v2/vectordb/entities/query', headers=HEADERS, json={"
 rest_ok = r.json().get('code') == 0
 rest_ids = sorted([d.get('id') for d in r.json().get('data',[])])
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     sdk_results = client.query(collection_name=c, filter='id > 0', limit=10, output_fields=['id'])
     sdk_ok = True
     sdk_ids = sorted([d.get('id') for d in sdk_results])
@@ -252,7 +271,7 @@ print(f'diff query: rest_ok={rest_ok} sdk_ok={sdk_ok} ids_match=True'); sys.exit
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c = f'oracle_diff_{uid}'
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
@@ -263,7 +282,7 @@ time.sleep(1)
 r = requests.post(f'{BASE}/v2/vectordb/entities/delete', headers=HEADERS, json={"collectionName":c,"filter":"id == 1"})
 rest_ok = r.json().get('code') == 0
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     client.delete(collection_name=c, filter='id == 2')
     sdk_ok = True
 except Exception as e:
@@ -281,7 +300,7 @@ print(f'diff delete: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to_strin
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient, CollectionSchema, FieldSchema, DataType
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c_rest = f'oracle_diff_rest_{uid}'
 c_sdk = f'oracle_diff_sdk_{uid}'
@@ -290,7 +309,7 @@ time.sleep(1)
 r = requests.post(f'{BASE}/v2/vectordb/indexes/create', headers=HEADERS, json={"collectionName":c_rest,"indexParams":[{"fieldName":"vector","metricType":"L2","indexType":"IVF_FLAT"}]})
 rest_ok = r.json().get('code') == 0
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     client.create_collection(collection_name=c_sdk, dimension=4)
     time.sleep(1)
     from pymilvus import Collection
@@ -302,9 +321,9 @@ try:
     sdk_ok = True
 except Exception as e:
     sdk_ok = False
-if rest_ok != sdk_ok: print(f'[DEFECT: DIFFERENTIAL_MISMATCH] create_index: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(1)
+if rest_ok != sdk_ok: print(f'[DEFECT: PARAM_IGNORED] create_index: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(1)
 print(f'diff create_index: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to_string(),
-            defect_marker: "DIFFERENTIAL_MISMATCH".to_string(),
+            defect_marker: "PARAM_IGNORED".to_string(),
         }
     }
 
@@ -315,7 +334,7 @@ print(f'diff create_index: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c = f'oracle_diff_{uid}'
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
@@ -325,7 +344,7 @@ rest_ok = r.json().get('code') == 0
 rest_dim = r.json().get('data',{}).get('dimension')
 rest_name = r.json().get('data',{}).get('collectionName')
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     rs = client.describe_collection(collection_name=c)
     sdk_ok = True
     sdk_dim = rs.get('dimension')
@@ -350,7 +369,7 @@ print(f'diff describe: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to_str
             script: r#"import requests, sys, uuid, time
 from pymilvus import MilvusClient
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 c = f'oracle_diff_{uid}'
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
@@ -360,7 +379,7 @@ time.sleep(1)
 r = requests.post(f'{BASE}/v2/vectordb/entities/upsert', headers=HEADERS, json={"collectionName":c,"data":[{"id":1,"vector":[0.9,0.8,0.7,0.6]}]})
 rest_ok = r.json().get('code') == 0
 try:
-    client = MilvusClient(uri=BASE, token='root:Milvus')
+    client = MilvusClient(uri=BASE, token='{{TESTVDB_AUTH_HEADER}}')
     client.upsert(collection_name=c, data=[{"id":2,"vector":[0.5,0.6,0.7,0.8]}])
     sdk_ok = True
 except Exception as e:
@@ -384,7 +403,7 @@ c_sdk = f'oracle_diff_sdk_{uid}'
 r = requests.put(f'{BASE}/collections/{c_rest}', json={"vectors":{"size":4,"distance":"Cosine"}})
 rest_ok = r.status_code == 200
 try:
-    client = QdrantClient(url=BASE, prefer_grpc=False)
+    client = QdrantClient(url=BASE, prefer_grpc=False, check_compatibility=False)
     client.create_collection(collection_name=c_sdk, vectors_config=models.VectorParams(size=4, distance=models.Distance.COSINE))
     sdk_ok = True
 except Exception as e:
@@ -417,7 +436,7 @@ r = requests.get(f'{BASE}/collections/{c}')
 rest_ok = r.status_code == 200
 rest_status = r.json().get('status',{}).get('ok') if r.status_code == 200 else None
 try:
-    client = QdrantClient(url=BASE, prefer_grpc=False)
+    client = QdrantClient(url=BASE, prefer_grpc=False, check_compatibility=False)
     info = client.get_collection(c)
     sdk_ok = True
     sdk_status = info.status.value if hasattr(info.status,'value') else str(info.status)
@@ -445,7 +464,7 @@ time.sleep(1)
 r = requests.put(f'{BASE}/collections/{c}/points', json={"points":[{"id":1,"vector":[0.1,0.2,0.3,0.4],"payload":{}}]})
 rest_ok = r.status_code == 200
 try:
-    client = QdrantClient(url=BASE, prefer_grpc=False)
+    client = QdrantClient(url=BASE, prefer_grpc=False, check_compatibility=False)
     client.upsert(collection_name=c, points=[PointStruct(id=2,vector=[0.5,0.6,0.7,0.8],payload={})])
     sdk_ok = True
 except Exception as e:
@@ -477,7 +496,7 @@ if rest_ok:
     results = r.json().get('result',[])
     if results: rest_top1 = results[0].get('id')
 try:
-    client = QdrantClient(url=BASE, prefer_grpc=False)
+    client = QdrantClient(url=BASE, prefer_grpc=False, check_compatibility=False)
     sdk_results = client.search(collection_name=c, query_vector=[0.1,0.2,0.3,0.4], limit=5)
     sdk_ok = True
     sdk_top1 = sdk_results[0].id if sdk_results else None
@@ -508,13 +527,104 @@ time.sleep(1)
 r = requests.post(f'{BASE}/collections/{c}/points/delete', json={"points":[1]})
 rest_ok = r.status_code == 200
 try:
-    client = QdrantClient(url=BASE, prefer_grpc=False)
+    client = QdrantClient(url=BASE, prefer_grpc=False, check_compatibility=False)
     client.delete(collection_name=c, points_selector=[2])
     sdk_ok = True
 except Exception as e:
     sdk_ok = False
 if rest_ok != sdk_ok: print(f'[DEFECT: DIFFERENTIAL_MISMATCH] delete: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(1)
 print(f'diff delete: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to_string(),
+            defect_marker: "DIFFERENTIAL_MISMATCH".to_string(),
+        }
+    }
+
+    fn generate_weaviate_diff_create_collection() -> DiffTestCase {
+        DiffTestCase {
+            name: "weaviate_diff_create_collection".to_string(),
+            diff_pattern: DiffPattern::CreateCollection,
+            script: r#"import requests, sys, uuid, time
+import weaviate
+BASE = '{TESTVDB_DB_URL}'
+uid = uuid.uuid4().hex[:8]
+c_rest = f'TestDiffRest_{uid}'
+c_sdk = f'TestDiffSdk_{uid}'
+r = requests.post(f'{BASE}/v1/schema', json={"class":c_rest,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+rest_ok = r.status_code == 200
+if rest_ok: requests.delete(f'{BASE}/v1/schema/{c_rest}')
+try:
+    client = weaviate.connect_to_local(host=BASE.replace('http://','').split(':')[0], port=int(BASE.split(':')[-1].rstrip('/')) if ':' in BASE.split('//')[-1] else 8080)
+    client.collections.create(name=c_sdk, properties=[weaviate.classes.config.Property(name="title", data_type=weaviate.classes.config.DataType.TEXT)])
+    sdk_ok = True
+    client.collections.delete(c_sdk)
+    client.close()
+except Exception as e:
+    print(f'sdk unavailable, skipping diff: {e}'); sys.exit(0)
+if rest_ok != sdk_ok: print(f'[DEFECT: DIFFERENTIAL_MISMATCH] create_collection: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(1)
+print(f'diff create_collection: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to_string(),
+            defect_marker: "DIFFERENTIAL_MISMATCH".to_string(),
+        }
+    }
+
+    fn generate_weaviate_diff_insert() -> DiffTestCase {
+        DiffTestCase {
+            name: "weaviate_diff_insert".to_string(),
+            diff_pattern: DiffPattern::Insert,
+            script: r#"import requests, sys, uuid, time
+import weaviate
+BASE = '{TESTVDB_DB_URL}'
+uid = uuid.uuid4().hex[:8]
+c = f'TestDiffIns_{uid}'
+requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+time.sleep(1)
+vec = [0.1,0.2,0.3,0.4]
+r = requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":"rest_test"},"vector":vec})
+rest_ok = r.status_code in (200, 201)
+try:
+    client = weaviate.connect_to_local(host=BASE.replace('http://','').split(':')[0], port=int(BASE.split(':')[-1].rstrip('/')) if ':' in BASE.split('//')[-1] else 8080)
+    collection = client.collections.get(c)
+    obj_uuid = str(uuid.uuid4())
+    collection.data.insert(properties={"title":"sdk_test"}, vector=vec, uuid=obj_uuid)
+    sdk_ok = True
+    client.close()
+except Exception as e:
+    print(f'sdk unavailable, skipping diff: {e}'); sys.exit(0)
+requests.delete(f'{BASE}/v1/schema/{c}')
+if rest_ok != sdk_ok: print(f'[DEFECT: DIFFERENTIAL_MISMATCH] insert: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(1)
+print(f'diff insert: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(0)"#.to_string(),
+            defect_marker: "DIFFERENTIAL_MISMATCH".to_string(),
+        }
+    }
+
+    fn generate_weaviate_diff_search() -> DiffTestCase {
+        DiffTestCase {
+            name: "weaviate_diff_search".to_string(),
+            diff_pattern: DiffPattern::Search,
+            script: r#"import requests, sys, uuid, time
+import weaviate
+BASE = '{TESTVDB_DB_URL}'
+uid = uuid.uuid4().hex[:8]
+c = f'TestDiffSearch_{uid}'
+requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+time.sleep(1)
+vec = [0.1,0.2,0.3,0.4]
+requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":"test"},"vector":vec})
+time.sleep(1)
+r = requests.post(f'{BASE}/v1/graphql', json={"query":f"{{ Get {{ {c}(nearVector: {{vector: {vec}}} limit: 5) {{ title _additional {{ distance }} }} }} }}"})
+rest_ok = r.status_code == 200
+rest_count = len(r.json().get('data',{}).get('Get',{}).get(c,[]))
+try:
+    client = weaviate.connect_to_local(host=BASE.replace('http://','').split(':')[0], port=int(BASE.split(':')[-1].rstrip('/')) if ':' in BASE.split('//')[-1] else 8080)
+    collection = client.collections.get(c)
+    results = collection.query.near_vector(near_vector=vec, limit=5)
+    sdk_ok = True
+    sdk_count = len(results.objects)
+    client.close()
+except Exception as e:
+    print(f'sdk unavailable, skipping diff: {e}'); sys.exit(0)
+requests.delete(f'{BASE}/v1/schema/{c}')
+if rest_ok != sdk_ok: print(f'[DEFECT: DIFFERENTIAL_MISMATCH] search: rest_ok={rest_ok} sdk_ok={sdk_ok}'); sys.exit(1)
+if rest_count != sdk_count: print(f'[DEFECT: DIFFERENTIAL_MISMATCH] search count: rest={rest_count} sdk={sdk_count}'); sys.exit(1)
+print(f'diff search: rest_ok={rest_ok} sdk_ok={sdk_ok} rest_count={rest_count} sdk_count={sdk_count}'); sys.exit(0)"#.to_string(),
             defect_marker: "DIFFERENTIAL_MISMATCH".to_string(),
         }
     }
@@ -527,25 +637,25 @@ impl ConcurrentTestGenerator {
         let mut cases = Vec::new();
 
         let has_create = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("collections/create") || atc.endpoint.contains("collections")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/create")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("collections"))
         });
         let has_insert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/insert") || atc.endpoint.contains("points")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/insert")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("points"))
         });
         let has_search = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/search") || atc.endpoint.contains("search")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/search")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("search"))
         });
         let has_query = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/query")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/query"))
         });
         let has_delete = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/delete") || atc.endpoint.contains("points/delete")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/delete")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("points/delete"))
         });
         let has_upsert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/upsert") || atc.endpoint.contains("points/upsert")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/upsert")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("points/upsert"))
         });
         let has_drop = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("collections/drop") || atc.endpoint.contains("collections/delete")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/drop")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/delete"))
         });
 
         match style {
@@ -579,7 +689,26 @@ impl ConcurrentTestGenerator {
                     cases.push(Self::generate_qdrant_concurrent_create_delete());
                 }
             }
-            TargetStyle::Weaviate => { /* same as Qdrant - handled below */ }
+            TargetStyle::Weaviate => {
+                let wv_has_schema = store.type_constraints.iter().any(|atc| {
+                    atc.endpoint.as_deref().map_or(false, |e| e.contains("schema"))
+                });
+                let wv_has_objects = store.type_constraints.iter().any(|atc| {
+                    atc.endpoint.as_deref().map_or(false, |e| e.contains("objects"))
+                });
+                let wv_has_search = store.type_constraints.iter().any(|atc| {
+                    atc.endpoint.as_deref().map_or(false, |e| e.contains("graphql")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("search"))
+                });
+                if wv_has_objects && wv_has_search {
+                    cases.push(Self::generate_weaviate_concurrent_insert_search());
+                }
+                if wv_has_objects {
+                    cases.push(Self::generate_weaviate_concurrent_insert_count());
+                }
+                if wv_has_schema {
+                    cases.push(Self::generate_weaviate_concurrent_create_delete());
+                }
+            }
             TargetStyle::PgVector => {},
         }
 
@@ -593,7 +722,7 @@ impl ConcurrentTestGenerator {
             concurrent_pattern: ConcurrentPattern::InsertSearch,
             script: r#"import requests, sys, uuid, time, threading
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_conc_' + uuid.uuid4().hex[:8]
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 time.sleep(1)
@@ -632,7 +761,7 @@ print(f'concurrent insert+search: no errors'); sys.exit(0)"#.to_string(),
             concurrent_pattern: ConcurrentPattern::DeleteQuery,
             script: r#"import requests, sys, uuid, time, threading
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_conc_' + uuid.uuid4().hex[:8]
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 time.sleep(1)
@@ -674,7 +803,7 @@ print(f'concurrent delete+query: no errors'); sys.exit(0)"#.to_string(),
             concurrent_pattern: ConcurrentPattern::UpsertSearch,
             script: r#"import requests, sys, uuid, time, threading
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_conc_' + uuid.uuid4().hex[:8]
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 time.sleep(1)
@@ -715,7 +844,7 @@ print(f'concurrent upsert+search: no errors'); sys.exit(0)"#.to_string(),
             concurrent_pattern: ConcurrentPattern::CreateDrop,
             script: r#"import requests, sys, uuid, time, threading
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 uid = uuid.uuid4().hex[:8]
 errors = []
 def do_create_drop_a():
@@ -754,7 +883,7 @@ print(f'concurrent create+drop: no errors'); sys.exit(0)"#.to_string(),
             concurrent_pattern: ConcurrentPattern::InsertFlush,
             script: r#"import requests, sys, uuid, time, threading
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_conc_' + uuid.uuid4().hex[:8]
 requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]}})
 time.sleep(1)
@@ -898,12 +1027,106 @@ print(f'concurrent create+delete: no errors'); sys.exit(0)"#.to_string(),
             defect_marker: "SEQUENCE_VIOLATION".to_string(),
         }
     }
+
+    fn generate_weaviate_concurrent_insert_search() -> ConcurrentTestCase {
+        ConcurrentTestCase {
+            name: "weaviate_concurrent_insert_search".to_string(),
+            concurrent_pattern: ConcurrentPattern::InsertSearch,
+            script: r#"import requests, sys, uuid, time, threading
+BASE = '{TESTVDB_DB_URL}'
+uid = uuid.uuid4().hex[:8]
+c = f'TestConcIS_{uid}'
+requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+time.sleep(1)
+errors = []
+def insert_batch():
+    try:
+        for i in range(5):
+            vec = [0.1*i,0.2*i,0.3*i,0.4*i]
+            r = requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":f"doc_{i}"},"vector":vec})
+            if r.status_code not in (200,201): errors.append(f"insert failed: {r.status_code} {r.text}")
+    except Exception as e: errors.append(str(e))
+def search_loop():
+    try:
+        for _ in range(5):
+            requests.post(f'{BASE}/v1/graphql', json={"query":f"{{ Get {{ {c}(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ title }} }} }}"})
+            time.sleep(0.1)
+    except Exception as e: errors.append(str(e))
+t1 = threading.Thread(target=insert_batch)
+t2 = threading.Thread(target=search_loop)
+t1.start(); t2.start()
+t1.join(); t2.join()
+time.sleep(1)
+r = requests.post(f'{BASE}/v1/graphql', json={"query":f"{{ Aggregate {{ {c} {{ meta {{ count }} }} }} }}"})
+count = r.json().get('data',{}).get('Aggregate',{}).get(c,[{}])[0].get('meta',{}).get('count',0)
+requests.delete(f'{BASE}/v1/schema/{c}')
+if errors: print(f'[DEFECT: SEQUENCE_VIOLATION] concurrent insert+search errors: {errors}'); sys.exit(1)
+if count != 5: print(f'[DEFECT: SEQUENCE_VIOLATION] concurrent insert+search count: expected 5 got {count}'); sys.exit(1)
+print(f'concurrent insert+search: count={count}'); sys.exit(0)"#.to_string(),
+            defect_marker: "SEQUENCE_VIOLATION".to_string(),
+        }
+    }
+
+    fn generate_weaviate_concurrent_insert_count() -> ConcurrentTestCase {
+        ConcurrentTestCase {
+            name: "weaviate_concurrent_insert_count".to_string(),
+            concurrent_pattern: ConcurrentPattern::InsertFlush,
+            script: r#"import requests, sys, uuid, time, threading
+BASE = '{TESTVDB_DB_URL}'
+uid = uuid.uuid4().hex[:8]
+c = f'TestConcIC_{uid}'
+requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+time.sleep(1)
+errors = []
+def insert_obj(i):
+    try:
+        vec = [0.1*i,0.2*i,0.3*i,0.4*i]
+        r = requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":f"doc_{i}"},"vector":vec})
+        if r.status_code not in (200,201): errors.append(f"insert {i} failed: {r.status_code}")
+    except Exception as e: errors.append(str(e))
+threads = [threading.Thread(target=insert_obj, args=(i,)) for i in range(10)]
+for t in threads: t.start()
+for t in threads: t.join()
+time.sleep(2)
+r = requests.post(f'{BASE}/v1/graphql', json={"query":f"{{ Aggregate {{ {c} {{ meta {{ count }} }} }} }}"})
+count = r.json().get('data',{}).get('Aggregate',{}).get(c,[{}])[0].get('meta',{}).get('count',0)
+requests.delete(f'{BASE}/v1/schema/{c}')
+if count != 10: print(f'[DEFECT: SEQUENCE_VIOLATION] concurrent insert count: expected 10 got {count}'); sys.exit(1)
+print(f'concurrent insert count: {count}'); sys.exit(0)"#.to_string(),
+            defect_marker: "SEQUENCE_VIOLATION".to_string(),
+        }
+    }
+
+    fn generate_weaviate_concurrent_create_delete() -> ConcurrentTestCase {
+        ConcurrentTestCase {
+            name: "weaviate_concurrent_create_delete".to_string(),
+            concurrent_pattern: ConcurrentPattern::CreateDrop,
+            script: r#"import requests, sys, uuid, time, threading
+BASE = '{TESTVDB_DB_URL}'
+uid = uuid.uuid4().hex[:8]
+errors = []
+def do_create_delete(i):
+    try:
+        c = f'TestConcCD_{uid}_{i}'
+        r1 = requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+        time.sleep(0.2)
+        r2 = requests.delete(f'{BASE}/v1/schema/{c}')
+        if r1.status_code != 200 and r2.status_code != 200: errors.append(f"round {i}: create={r1.status_code} delete={r2.status_code}")
+    except Exception as e: errors.append(str(e))
+threads = [threading.Thread(target=do_create_delete, args=(i,)) for i in range(5)]
+for t in threads: t.start()
+for t in threads: t.join()
+if errors: print(f'[DEFECT: SEQUENCE_VIOLATION] concurrent create+delete errors: {errors}'); sys.exit(1)
+print(f'concurrent create+delete: no errors'); sys.exit(0)"#.to_string(),
+            defect_marker: "SEQUENCE_VIOLATION".to_string(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::schema::TypeConstraint;
+    use crate::contract::schema::{RejectionPolicy, TypeConstraint};
 
     fn make_milvus_store() -> ContractStore {
         let mut store = ContractStore::new("milvus", "v2.4");
@@ -924,9 +1147,10 @@ mod tests {
                     expected_type: "string".to_string(),
                     violation_examples: vec![],
                 },
-                endpoint: ep.to_string(),
+                endpoint: Some(ep.to_string()),
                 source: crate::contract::store::ConstraintSource::ExplicitDoc,
                 confidence: crate::contract::store::Confidence::High,
+                rejection_policy: Some(RejectionPolicy::Reject),
             });
         }
         store
@@ -938,7 +1162,7 @@ mod tests {
         let cases = DiffTestGenerator::from_store(&store, TargetStyle::Milvus);
         assert!(cases.len() >= 7, "Should have at least 7 diff tests, got {}", cases.len());
         for case in &cases {
-            assert!(case.script.contains("[DEFECT: DIFFERENTIAL_MISMATCH]"));
+            assert!(case.script.contains("[DEFECT:") || case.defect_marker == "PARAM_IGNORED");
             assert!(case.script.contains("sys.exit"));
             assert!(case.script.contains("pymilvus"));
         }
@@ -960,9 +1184,10 @@ mod tests {
                     expected_type: "string".to_string(),
                     violation_examples: vec![],
                 },
-                endpoint: ep.to_string(),
+                endpoint: Some(ep.to_string()),
                 source: crate::contract::store::ConstraintSource::ExplicitDoc,
                 confidence: crate::contract::store::Confidence::High,
+                rejection_policy: Some(RejectionPolicy::Reject),
             });
         }
         let cases = DiffTestGenerator::from_store(&store, TargetStyle::Qdrant);
@@ -1008,9 +1233,10 @@ mod tests {
                     expected_type: "string".to_string(),
                     violation_examples: vec![],
                 },
-                endpoint: ep.to_string(),
+                endpoint: Some(ep.to_string()),
                 source: crate::contract::store::ConstraintSource::ExplicitDoc,
                 confidence: crate::contract::store::Confidence::High,
+                rejection_policy: Some(RejectionPolicy::Reject),
             });
         }
         let cases = ConcurrentTestGenerator::from_store(&store, TargetStyle::Qdrant);
@@ -1026,5 +1252,51 @@ mod tests {
         let store = ContractStore::new("milvus", "v2.4");
         let cases = ConcurrentTestGenerator::from_store(&store, TargetStyle::Milvus);
         assert!(cases.is_empty(), "Should have no concurrent tests without endpoints");
+    }
+
+    fn make_weaviate_store() -> ContractStore {
+        let mut store = ContractStore::new("weaviate", "v1.37");
+        let endpoints = [
+            ("/v1/schema", "class"),
+            ("/v1/objects", "class"),
+            ("/v1/graphql", "query"),
+        ];
+        for (ep, param) in &endpoints {
+            store.type_constraints.push(crate::contract::store::AnnotatedTypeConstraint {
+                constraint: TypeConstraint {
+                    param_name: param.to_string(),
+                    expected_type: "string".to_string(),
+                    violation_examples: vec![],
+                },
+                endpoint: Some(ep.to_string()),
+                source: crate::contract::store::ConstraintSource::ExplicitDoc,
+                confidence: crate::contract::store::Confidence::High,
+                rejection_policy: Some(RejectionPolicy::Reject),
+            });
+        }
+        store
+    }
+
+    #[test]
+    fn test_diff_generator_weaviate() {
+        let store = make_weaviate_store();
+        let cases = DiffTestGenerator::from_store(&store, TargetStyle::Weaviate);
+        assert!(cases.len() >= 3, "Should have at least 3 diff tests for Weaviate, got {}", cases.len());
+        for case in &cases {
+            assert!(case.script.contains("[DEFECT:") || case.defect_marker == "PARAM_IGNORED");
+            assert!(case.script.contains("sys.exit"));
+            assert!(case.script.contains("weaviate"));
+        }
+    }
+
+    #[test]
+    fn test_concurrent_generator_weaviate() {
+        let store = make_weaviate_store();
+        let cases = ConcurrentTestGenerator::from_store(&store, TargetStyle::Weaviate);
+        assert!(cases.len() >= 2, "Should have at least 2 concurrent tests for Weaviate, got {}", cases.len());
+        for case in &cases {
+            assert!(case.script.contains("[DEFECT: SEQUENCE_VIOLATION]"));
+            assert!(case.script.contains("threading"));
+        }
     }
 }

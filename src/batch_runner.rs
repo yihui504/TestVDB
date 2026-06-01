@@ -2,13 +2,14 @@ use crate::infra;
 use crate::target::TargetRegistry;
 use tracing::{info, warn};
 
-/// Resolve `{{TESTVDB_DB_URL}}` template in probe scripts.
-fn resolve_db_url(script: &str, db_url: &str) -> String {
+/// Resolve `{{TESTVDB_DB_URL}}` and `{{TESTVDB_AUTH_HEADER}}` templates in probe scripts.
+fn resolve_db_url(script: &str, db_url: &str, auth_header: &str) -> String {
     script
         .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
         .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
         .replace("{TESTVDB_DB_URL}", db_url)
         .replace("{{TESTVDB_DB_URL}}", db_url)
+        .replace("{{TESTVDB_AUTH_HEADER}}", auth_header)
 }
 
 pub async fn run_batch(
@@ -41,14 +42,14 @@ pub async fn run_batch(
         Some(h) => h.clone(),
         None => format!("{}-standalone", target),
     };
-    let db_url = format!("http://{}:{}", hostname, actual_port);
+    let db_url = crate::infra::build_db_url(&hostname, actual_port);
     info!("DB URL inside Docker: {}", db_url);
 
     let runner_name = format!("testvdb-batch-{}", target);
     infra::ensure_runner_container(&runner_name, &net_name, &pip_packages)?;
 
     // ── H4: Smoke test ──
-    match run_smoke_test(&runner_name, target, &db_url) {
+    match run_smoke_test(&runner_name, target, &db_url, plugin.auth_header_value().unwrap_or("")) {
         Ok(()) => info!("Smoke test passed: {} is reachable", target),
         Err(e) => warn!("Smoke test failed for {}: {}. Probes may fail.", target, e),
     }
@@ -60,7 +61,7 @@ pub async fn run_batch(
     info!("Running {} safety net probes...", nets.len());
 
     for (i, net) in nets.iter().enumerate() {
-        let script = resolve_db_url(&net.script, &db_url);
+        let script = resolve_db_url(&net.script, &db_url, plugin.auth_header_value().unwrap_or(""));
 
         match infra::execute_probe_script(&runner_name, &script) {
             Ok((stdout, stderr, has_defect, exit_ok)) => {
@@ -151,7 +152,7 @@ pub async fn run_batch_simple(target: &str) -> anyhow::Result<usize> {
     let nets: Vec<_> = nets.into_iter().filter(|n| !n.redundant_with_mutation).collect();
 
     let hostname = format!("{}-standalone", target);
-    let db_url = format!("http://{}:{}", hostname, plugin.db_port());
+    let db_url = crate::infra::build_db_url(&hostname, plugin.db_port());
 
     let net_name = infra::find_docker_network(target)?;
 
@@ -162,7 +163,7 @@ pub async fn run_batch_simple(target: &str) -> anyhow::Result<usize> {
     let mut defects = 0usize;
 
     for net in nets.iter() {
-        let script = resolve_db_url(&net.script, &db_url);
+        let script = resolve_db_url(&net.script, &db_url, plugin.auth_header_value().unwrap_or(""));
 
         match infra::execute_probe_script(&runner_name, &script) {
             Ok((_, _, has_defect, _)) => {
@@ -180,11 +181,10 @@ pub async fn run_batch_simple(target: &str) -> anyhow::Result<usize> {
 }
 
 // ── Smoke test: verify DB connectivity before running probes ──
-fn run_smoke_test(runner_name: &str, target: &str, db_url: &str) -> anyhow::Result<()> {
+fn run_smoke_test(runner_name: &str, target: &str, db_url: &str, auth_header: &str) -> anyhow::Result<()> {
     let script = match target {
         "milvus" => format!(
-            "import requests; r=requests.post('{}/v2/vectordb/collections/list',headers={{'Authorization':'Bearer root:Milvus','Content-Type':'application/json'}},json={{}}); assert r.json().get('code')==0,f'Milvus list failed: {{r.text}}'; print('milvus ok')",
-            db_url
+            "import requests; r=requests.post('{{{{TESTVDB_DB_URL}}}}/v2/vectordb/collections/list',headers={{'Authorization':'{{{{TESTVDB_AUTH_HEADER}}}}','Content-Type':'application/json'}},json={{}}); assert r.json().get('code')==0,f'Milvus list failed: {{r.text}}'; print('milvus ok')"
         ),
         "qdrant" => format!(
             "import requests; r=requests.get('{}/collections'); assert r.status_code==200,f'Qdrant GET collections failed: {{r.status_code}}'; print('qdrant ok')",
@@ -194,12 +194,16 @@ fn run_smoke_test(runner_name: &str, target: &str, db_url: &str) -> anyhow::Resu
             "import requests; r=requests.get('{}/v1/schema'); assert r.status_code==200,f'Weaviate GET schema failed: {{r.status_code}}'; print('weaviate ok')",
             db_url
         ),
-        "pgvector" => format!(
-            "import psycopg2; conn=psycopg2.connect('postgresql://postgres:postgres@{}:5432/testvdb'); cur=conn.cursor(); cur.execute('SELECT 1'); print('pgvector ok')",
-            db_url.trim_start_matches("http://").split(':').next().unwrap_or("localhost")
-        ),
+        "pgvector" => {
+            let pg_host = db_url.trim_start_matches("http://").split(':').next().unwrap_or("localhost");
+            format!(
+                "import psycopg2; conn={}; cur=conn.cursor(); cur.execute('SELECT 1'); print('pgvector ok')",
+                crate::target::pgvector::pg_connect_uri(pg_host)
+            )
+        }
         _ => anyhow::bail!("Unknown target for smoke test: {}", target),
     };
+    let script = resolve_db_url(&script, db_url, auth_header);
     match infra::execute_probe_script(runner_name, &script) {
         Ok((stdout, _, _, exit_ok)) if exit_ok => {
             info!("Smoke test output: {}", stdout.trim());

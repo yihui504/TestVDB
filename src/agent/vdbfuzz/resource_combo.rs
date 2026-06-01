@@ -1,4 +1,4 @@
-use crate::contract::store::ContractStore;
+﻿use crate::contract::store::ContractStore;
 use crate::target::TargetStyle;
 use serde::{Deserialize, Serialize};
 
@@ -39,7 +39,7 @@ impl ResourceTestGenerator {
         let mut cases = Vec::new();
 
         let has_create = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("collections/create")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/create")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("/v1/schema"))
         });
         if !has_create {
             return cases;
@@ -48,9 +48,11 @@ impl ResourceTestGenerator {
         let dim_max = store.range_constraints.iter().find_map(|arc| {
             if arc.constraint.param_name == "dim" { arc.constraint.max } else { None }
         });
-        let large_dim = dim_max.map_or(32768, |m| (m as usize) * 2);
+        let large_dim = dim_max.map_or(65536, |m| (m as usize) * 2);
 
-        cases.push(Self::generate_large_dimension(large_dim, style));
+        if large_dim > 32768 {
+            cases.push(Self::generate_large_dimension(large_dim, style));
+        }
 
         let dim_min = store.range_constraints.iter().find_map(|arc| {
             if arc.constraint.param_name == "dim" { arc.constraint.min } else { None }
@@ -74,7 +76,7 @@ impl ResourceTestGenerator {
         let script = match style {
             TargetStyle::Milvus => format!(r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_res_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{{"dim":{large_dim}}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}}]}})
 if r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] {large_dim}-dim collection created (may cause OOM)'); sys.exit(1)
@@ -85,7 +87,17 @@ c = 'oracle_res_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{{BASE}}/collections/{{c}}', json={{"vectors":{{"size":{large_dim},"distance":"Cosine"}}}})
 if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] {large_dim}-dim collection created (may cause OOM)'); sys.exit(1)
 else: print(f'properly rejected {large_dim}-dim: {{r.status_code}}'); sys.exit(0)"#),
-            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
+            TargetStyle::Weaviate => format!(r#"import requests, sys, uuid
+BASE = '{{TESTVDB_DB_URL}}'
+c = 'testvdb_' + uuid.uuid4().hex[:8]
+r = requests.post(f'{{BASE}}/v1/schema', json={{"class":c,"vectorizer":"none","vectorIndexConfig":{{"distance":"cosine","efConstruction":128,"maxConnections":64}},"properties":[{{"name":"title","dataType":["string"]}}],"moduleConfig":{{"none":{{}}}}}})
+if r.status_code != 200: print(f'create failed: {{r.status_code}} {{r.text}}'); sys.exit(0)
+vec_data = [0.01] * {large_dim}
+r = requests.post(f'{{BASE}}/v1/objects', json={{"class":c,"properties":{{"title":"test"}},"vector":vec_data}})
+requests.delete(f'{{BASE}}/v1/schema/{{c}}')
+if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] {large_dim}-dim object inserted (max 65536)'); sys.exit(1)
+else: print(f'properly rejected {large_dim}-dim: {{r.status_code}}'); sys.exit(0)"#),
+            TargetStyle::PgVector => String::new(),
         };
         ResourceTestCase {
             name: format!("resource_large_dimension_{}", large_dim),
@@ -99,7 +111,7 @@ else: print(f'properly rejected {large_dim}-dim: {{r.status_code}}'); sys.exit(0
         let script = match style {
             TargetStyle::Milvus => r#"import requests, sys, uuid
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_res_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":0}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] 0-dim collection created'); sys.exit(1)
@@ -110,7 +122,16 @@ c = 'oracle_res_' + uuid.uuid4().hex[:8]
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":0,"distance":"Cosine"}})
 if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] 0-dim collection created'); sys.exit(1)
 else: print(f'properly rejected 0-dim: {r.status_code}'); sys.exit(0)"#.to_string(),
-            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
+            TargetStyle::Weaviate => r#"import requests, sys, uuid
+BASE = '{TESTVDB_DB_URL}'
+c = 'testvdb_' + uuid.uuid4().hex[:8]
+r = requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorizer":"none","vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}],"moduleConfig":{"none":{}}}})
+if r.status_code != 200: print(f'create failed: {r.status_code} {r.text}'); sys.exit(0)
+r = requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":"test"},"vector":[]})
+requests.delete(f'{BASE}/v1/schema/{c}')
+if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] 0-dim object inserted'); sys.exit(1)
+else: print(f'properly rejected 0-dim: {r.status_code}'); sys.exit(0)"#.to_string(),
+            TargetStyle::PgVector => String::new(),
         };
         ResourceTestCase {
             name: "resource_zero_dimension".to_string(),
@@ -124,7 +145,7 @@ else: print(f'properly rejected 0-dim: {r.status_code}'); sys.exit(0)"#.to_strin
         let script = match style {
             TargetStyle::Milvus => r#"import requests, sys, uuid
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'a' * 256
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] 256-char collection name accepted'); sys.exit(1)
@@ -135,7 +156,13 @@ c = 'a' * 256
 r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":4,"distance":"Cosine"}})
 if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] 256-char collection name accepted'); sys.exit(1)
 else: print(f'properly rejected 256-char name: {r.status_code}'); sys.exit(0)"#.to_string(),
-            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
+            TargetStyle::Weaviate => r#"import requests, sys
+BASE = '{TESTVDB_DB_URL}'
+c = 'A' * 1000
+r = requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorizer":"none","vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}],"moduleConfig":{"none":{}}}})
+if r.status_code == 200: print(f'[DEFECT: ILLEGAL_SUCCESS] 1000-char class name accepted'); requests.delete(f'{BASE}/v1/schema/{c}'); sys.exit(1)
+else: print(f'properly rejected 1000-char name: {r.status_code}'); sys.exit(0)"#.to_string(),
+            TargetStyle::PgVector => String::new(),
         };
         ResourceTestCase {
             name: "resource_long_collection_name".to_string(),
@@ -153,7 +180,7 @@ impl ComboTestGenerator {
         let mut cases = Vec::new();
 
         let has_create = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("collections/create") || atc.endpoint.contains("collections")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/create")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("collections")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("/v1/schema"))
         });
         if !has_create {
             return cases;
@@ -225,7 +252,7 @@ impl ComboTestGenerator {
         let script = match style {
             TargetStyle::Milvus => format!(r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_combo_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{{"dim":{dim}}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"{metric}","indexType":"{idx}"}}]}})
 if r.json().get('code') != 0: print(f'create failed: {{r.text}}'); sys.exit(0)
@@ -253,7 +280,21 @@ time.sleep(1)
 r = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{"vector":vec_data,"limit":3}})
 if r.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] search failed for dim={dim} distance={metric}: {{r.text}}'); sys.exit(1)
 else: print(f'param combo verified: dim={dim} distance={metric}'); sys.exit(0)"#),
-            TargetStyle::Weaviate | TargetStyle::PgVector => String::new(),
+            TargetStyle::Weaviate => format!(r#"import requests, sys, uuid, time
+BASE = '{{TESTVDB_DB_URL}}'
+c = 'Testvdb' + uuid.uuid4().hex[:8]
+r = requests.post(f'{{BASE}}/v1/schema', json={{"class":c,"vectorizer":"none","vectorIndexConfig":{{"distance":"{metric}","efConstruction":128,"maxConnections":64}},"properties":[{{"name":"title","dataType":["string"]}}],"moduleConfig":{{"none":{{}}}}}})
+if r.status_code != 200: print(f'create failed: {{r.status_code}} {{r.text}}'); sys.exit(0)
+time.sleep(1)
+vec_data = [0.01] * {dim}
+r = requests.post(f'{{BASE}}/v1/objects', json={{"class":c,"properties":{{"title":"test"}},"vector":vec_data}})
+if r.status_code != 200: print(f'insert failed: {{r.status_code}} {{r.text}}'); sys.exit(0)
+time.sleep(1)
+q = {{"query": "{{ Get {{ " + c + "(nearVector: {{vector: [" + ",".join(["0.01"]*{dim}) + "]}}, limit: 3) {{ title _additional {{ distance }} }} }} }}"}}
+r = requests.post(f'{{BASE}}/v1/graphql', json=q)
+if r.status_code != 200 or 'errors' in r.json(): print(f'[DEFECT: SEQUENCE_VIOLATION] search failed for dim={dim} metric={metric} index={idx}: {{r.status_code}} {{r.text}}'); sys.exit(1)
+else: print(f'param combo verified: dim={dim} metric={metric} index={idx}'); sys.exit(0)"#),
+            TargetStyle::PgVector => String::new(),
         };
         Some(ComboTestCase {
             name,
@@ -268,7 +309,7 @@ else: print(f'param combo verified: dim={dim} distance={metric}'); sys.exit(0)"#
 mod tests {
     use super::*;
     use crate::contract::schema::{
-        RangeConstraint, TypeConstraint,
+        RangeConstraint, RejectionPolicy, TypeConstraint,
     };
 
     fn make_milvus_store() -> ContractStore {
@@ -279,9 +320,10 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/collections/create".to_string(),
+            endpoint: Some("/v2/vectordb/collections/create".to_string()),
             source: crate::contract::store::ConstraintSource::ExplicitDoc,
             confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
         store.type_constraints.push(crate::contract::store::AnnotatedTypeConstraint {
             constraint: TypeConstraint {
@@ -289,9 +331,10 @@ mod tests {
                 expected_type: "integer".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/collections/create".to_string(),
+            endpoint: Some("/v2/vectordb/collections/create".to_string()),
             source: crate::contract::store::ConstraintSource::ExplicitDoc,
             confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
         store.range_constraints.push(crate::contract::store::AnnotatedRangeConstraint {
             constraint: RangeConstraint {
@@ -301,12 +344,55 @@ mod tests {
                 max: Some(32768.0),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/collections/create".to_string(),
+            endpoint: Some("/v2/vectordb/collections/create".to_string()),
             source: crate::contract::store::ConstraintSource::ExplicitDoc,
             confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
         store.set_enum_values("metricType", vec!["L2".to_string(), "COSINE".to_string(), "IP".to_string()]);
         store.set_enum_values("indexType", vec!["IVF_FLAT".to_string(), "HNSW".to_string(), "FLAT".to_string(), "AUTOINDEX".to_string()]);
+        store
+    }
+
+    fn make_weaviate_store() -> ContractStore {
+        let mut store = ContractStore::new("weaviate", "v1.26");
+        store.type_constraints.push(crate::contract::store::AnnotatedTypeConstraint {
+            constraint: TypeConstraint {
+                param_name: "collectionName".to_string(),
+                expected_type: "string".to_string(),
+                violation_examples: vec![],
+            },
+            endpoint: Some("/v1/schema".to_string()),
+            source: crate::contract::store::ConstraintSource::ExplicitDoc,
+            confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
+        });
+        store.type_constraints.push(crate::contract::store::AnnotatedTypeConstraint {
+            constraint: TypeConstraint {
+                param_name: "dim".to_string(),
+                expected_type: "integer".to_string(),
+                violation_examples: vec![],
+            },
+            endpoint: Some("/v1/schema".to_string()),
+            source: crate::contract::store::ConstraintSource::ExplicitDoc,
+            confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
+        });
+        store.range_constraints.push(crate::contract::store::AnnotatedRangeConstraint {
+            constraint: RangeConstraint {
+                param_name: "dim".to_string(),
+                description: "dim must be >= 1".to_string(),
+                min: Some(1.0),
+                max: Some(65536.0),
+                violation_examples: vec![],
+            },
+            endpoint: Some("/v1/schema".to_string()),
+            source: crate::contract::store::ConstraintSource::ExplicitDoc,
+            confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
+        });
+        store.set_enum_values("metricType", vec!["cosine".to_string(), "dot".to_string(), "l2".to_string()]);
+        store.set_enum_values("indexType", vec!["hnsw".to_string()]);
         store
     }
 
@@ -343,12 +429,32 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/collections/create".to_string(),
+            endpoint: Some("/collections/create".to_string()),
             source: crate::contract::store::ConstraintSource::ExplicitDoc,
             confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
         let cases = ResourceTestGenerator::from_store(&store, TargetStyle::Qdrant);
         assert!(cases.len() >= 2, "Should have at least 2 resource tests for Qdrant");
+    }
+
+    #[test]
+    fn test_resource_generator_weaviate() {
+        let store = make_weaviate_store();
+        let cases = ResourceTestGenerator::from_store(&store, TargetStyle::Weaviate);
+        assert!(cases.len() >= 3, "Should have at least 3 resource tests for Weaviate, got {}", cases.len());
+
+        let names: Vec<&str> = cases.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.iter().any(|n| n.contains("large_dimension")));
+        assert!(names.iter().any(|n| n.contains("zero_dimension")));
+        assert!(names.iter().any(|n| n.contains("long_collection_name")));
+
+        for case in &cases {
+            assert!(!case.script.is_empty(), "Script should not be empty for {}", case.name);
+            assert!(case.script.contains("[DEFECT:"));
+            assert!(case.script.contains("sys.exit"));
+            assert!(case.script.contains("/v1/schema"));
+        }
     }
 
     #[test]
@@ -388,15 +494,32 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "collections".to_string(),
+            endpoint: Some("collections".to_string()),
             source: crate::contract::store::ConstraintSource::ExplicitDoc,
             confidence: crate::contract::store::Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
         let cases = ComboTestGenerator::from_store(&store, TargetStyle::Qdrant);
         assert!(!cases.is_empty(), "Should have combo tests for Qdrant");
         for case in &cases {
             assert!(case.script.contains("[DEFECT: SEQUENCE_VIOLATION]"));
             assert!(case.script.contains("qdrant") || case.script.contains("requests"));
+        }
+    }
+
+    #[test]
+    fn test_combo_generator_weaviate() {
+        let store = make_weaviate_store();
+        let cases = ComboTestGenerator::from_store(&store, TargetStyle::Weaviate);
+        assert!(!cases.is_empty(), "Should have combo tests for Weaviate");
+
+        for case in &cases {
+            assert!(!case.script.is_empty(), "Script should not be empty for {}", case.name);
+            assert!(case.script.contains("[DEFECT: SEQUENCE_VIOLATION]"));
+            assert!(case.script.contains("sys.exit"));
+            assert!(case.script.contains("/v1/schema"));
+            assert!(case.script.contains("/v1/objects"));
+            assert!(case.script.contains("/v1/graphql"));
         }
     }
 }

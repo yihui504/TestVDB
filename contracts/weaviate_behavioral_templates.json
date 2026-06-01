@@ -1,0 +1,205 @@
+[
+  {
+    "name": "insert_count_consistency",
+    "category": "state_consistency",
+    "endpoints": ["POST /v1/objects", "GET /v1/objects"],
+    "precondition_script": "collection does not exist",
+    "verification_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='test_insert_count'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nfor i in range(5):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nr2=requests.get(f'{BASE}/v1/objects?class={c}')\ncount=r2.json().get('totalResults',-1)\nif count!=5:print(f'[DEFECT: STATE_LOGIC_VIOLATION] insert 5 objects but totalResults={count}');sys.exit(1)\nelse:print(f'totalResults consistent: {count}');sys.exit(0)",
+    "expected_outcome": "totalResults == 5 after inserting 5 objects",
+    "supersedes": null,
+    "mutation_rules": [
+      {
+        "name": "insert_wrong_dimension",
+        "target_field": "vector",
+        "mutation_type": "dimension_mismatch",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_ins_dim'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nr0=requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1,0.2,0.3,0.4],'properties':{'text':'dim4'}})\nassert r0.status_code==200,f'setup insert failed: {r0.text}'\ntime.sleep(0.5)\nr2=requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1,0.2,0.3],'properties':{'text':'dim3'}})\nif r2.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] insert 3-dim vector into 4-dim collection accepted');sys.exit(1)\nelse:print(f'wrong dimension properly rejected: status={r2.status_code}');sys.exit(0)",
+        "expected_result": "status_code != 200",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "insert_empty_vector",
+        "target_field": "vector",
+        "mutation_type": "empty_array",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_ins_empty'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nr2=requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[],'properties':{'text':'empty'}})\nif r2.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] insert empty vector [] accepted');sys.exit(1)\nelse:print(f'empty vector properly rejected: status={r2.status_code}');sys.exit(0)",
+        "expected_result": "status_code != 200",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "insert_nan_vector",
+        "target_field": "vector",
+        "mutation_type": "nan_value",
+        "mutated_script": "import requests,sys,time,uuid,math\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_ins_nan'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nr2=requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[float('nan'),0.2,0.3,0.4],'properties':{'text':'nan'}})\nif r2.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] insert NaN vector accepted');sys.exit(1)\nelse:print(f'NaN vector properly rejected: status={r2.status_code}');sys.exit(0)",
+        "expected_result": "status_code != 200",
+        "defect_type": "IllegalSuccess"
+      }
+    ]
+  },
+  {
+    "name": "delete_count_consistency",
+    "category": "state_consistency",
+    "endpoints": ["POST /v1/objects", "DELETE /v1/objects/{className}/{id}", "GET /v1/objects"],
+    "precondition_script": "collection with 5 objects exists",
+    "verification_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='test_delete_count'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nids=[str(uuid.uuid4()) for _ in range(5)]\nfor i,oid in enumerate(ids):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':oid,'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nrequests.delete(f'{BASE}/v1/objects/{c}/{ids[0]}')\nrequests.delete(f'{BASE}/v1/objects/{c}/{ids[1]}')\ntime.sleep(1)\nr2=requests.get(f'{BASE}/v1/objects?class={c}')\ncount=r2.json().get('totalResults',-1)\nif count!=3:print(f'[DEFECT: STATE_LOGIC_VIOLATION] insert 5, delete 2, totalResults={count}');sys.exit(1)\nelse:print(f'delete count consistent: {count}');sys.exit(0)",
+    "expected_outcome": "totalResults == 3 after deleting 2 of 5 objects",
+    "supersedes": null,
+    "mutation_rules": [
+      {
+        "name": "delete_nonexistent_id",
+        "target_field": "id",
+        "mutation_type": "nonexistent_match",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_del_ne'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nfor i in range(5):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nr2=requests.get(f'{BASE}/v1/objects?class={c}')\ncount_before=r2.json().get('totalResults',-1)\nfake_id=str(uuid.uuid4())\nrequests.delete(f'{BASE}/v1/objects/{c}/{fake_id}')\ntime.sleep(0.5)\nr3=requests.get(f'{BASE}/v1/objects?class={c}')\ncount_after=r3.json().get('totalResults',-1)\nif count_after!=count_before:print(f'[DEFECT: STATE_LOGIC_VIOLATION] delete nonexistent ID changed count: {count_before}->{count_after}');sys.exit(1)\nprint(f'delete nonexistent ID: count unchanged at {count_before}');sys.exit(0)",
+        "expected_result": "totalResults unchanged after deleting nonexistent ID",
+        "defect_type": "StateLogicViolation"
+      }
+    ]
+  },
+  {
+    "name": "search_score_ordering",
+    "category": "semantic_correctness",
+    "endpoints": ["POST /v1/objects", "POST /v1/graphql"],
+    "precondition_script": "collection with 5 objects exists",
+    "verification_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='test_search_order'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nfor i in range(5):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nq='{Get{'+c+'(nearVector:{vector:[0.5,0.5,0.5,0.5],certainty:0.0}limit:10){_additional{distance}}}}'\nr2=requests.post(f'{BASE}/v1/graphql',json={'query':q})\nassert r2.status_code==200,f'search failed: {r2.text}'\nitems=r2.json().get('data',{}).get('Get',{}).get(c,[])\ndistances=[float(item.get('_additional',{}).get('distance',0)) for item in items]\nfor i in range(len(distances)-1):\n    if distances[i]>distances[i+1]:print(f'[DEFECT: STATE_LOGIC_VIOLATION] distances not ascending (smaller=more similar for cosine): {distances}');sys.exit(1)\nprint(f'distances correctly ascending: {distances[:3]}...');sys.exit(0)",
+    "expected_outcome": "cosine search results distance values are in ascending order (smaller distance = more similar)",
+    "supersedes": null,
+    "mutation_rules": [
+      {
+        "name": "search_wrong_dimension",
+        "target_field": "nearVector.vector",
+        "mutation_type": "dimension_mismatch",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_srch_dim'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nfor i in range(5):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nq='{Get{'+c+'(nearVector:{vector:[0.5,0.5,0.5],certainty:0.0}limit:10){_additional{distance}}}}'\nr2=requests.post(f'{BASE}/v1/graphql',json={'query':q})\nif r2.status_code==200 and not r2.json().get('errors'):items=r2.json().get('data',{}).get('Get',{}).get(c,[])\nif len(items)>0:print(f'[DEFECT: ILLEGAL_SUCCESS] search with wrong dimension vector returned results');sys.exit(1)\nprint(f'wrong dimension search handled');sys.exit(0)",
+        "expected_result": "GraphQL errors returned or non-200 status",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "search_limit_zero",
+        "target_field": "limit",
+        "mutation_type": "zero_value",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_srch_lim0'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nfor i in range(5):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nq='{Get{'+c+'(nearVector:{vector:[0.5,0.5,0.5,0.5],certainty:0.0}limit:0){_additional{distance}}}}'\nr2=requests.post(f'{BASE}/v1/graphql',json={'query':q})\nif r2.status_code==200 and not r2.json().get('errors'):print(f'[DEFECT: ILLEGAL_SUCCESS] search with limit=0 accepted');sys.exit(1)\nelse:print(f'limit=0 properly rejected');sys.exit(0)",
+        "expected_result": "GraphQL errors returned",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "search_limit_negative",
+        "target_field": "limit",
+        "mutation_type": "negative_value",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_srch_limneg'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nfor i in range(5):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nq='{Get{'+c+'(nearVector:{vector:[0.5,0.5,0.5,0.5],certainty:0.0}limit:-1){_additional{distance}}}}'\nr2=requests.post(f'{BASE}/v1/graphql',json={'query':q})\nif r2.status_code==200 and not r2.json().get('errors'):print(f'[DEFECT: ILLEGAL_SUCCESS] search with limit=-1 accepted');sys.exit(1)\nelse:print(f'limit=-1 properly rejected');sys.exit(0)",
+        "expected_result": "GraphQL errors returned",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "search_limit_oversized",
+        "target_field": "limit",
+        "mutation_type": "boundary_value",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_srch_limbig'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.5)\nfor i in range(5):\n    requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],'properties':{'text':f'item{i}'}})\ntime.sleep(1)\nq='{Get{'+c+'(nearVector:{vector:[0.5,0.5,0.5,0.5],certainty:0.0}limit:10001){_additional{distance}}}}'\nr2=requests.post(f'{BASE}/v1/graphql',json={'query':q})\nif r2.status_code==200 and not r2.json().get('errors'):print(f'[DEFECT: ILLEGAL_SUCCESS] limit=10001 (above max 10000) accepted without error');sys.exit(1)\nprint(f'limit=10001 properly rejected or capped');sys.exit(0)",
+        "expected_result": "limit=10001 rejected with GraphQL error or capped at 10000",
+        "defect_type": "IllegalSuccess"
+      }
+    ]
+  },
+  {
+    "name": "schema_config_silent_normalization",
+    "category": "interface_consistency",
+    "endpoints": ["POST /v1/schema", "GET /v1/schema/{className}"],
+    "precondition_script": "collection does not exist",
+    "verification_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='test_config_norm'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128,'maxConnections':32,'dynamicEfMin':10,'dynamicEfMax':500,'dynamicEfFactor':8},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'create failed: {r.text}'\ntime.sleep(0.3)\nr2=requests.get(f'{BASE}/v1/schema/{c}')\nassert r2.status_code==200\nvic=r2.json().get('vectorIndexConfig',{})\nif vic.get('efConstruction')!=128:print(f'[DEFECT: STATE_LOGIC_VIOLATION] efConstruction silently changed to {vic.get(\"efConstruction\")}');sys.exit(1)\nif vic.get('maxConnections')!=32:print(f'[DEFECT: STATE_LOGIC_VIOLATION] maxConnections silently changed to {vic.get(\"maxConnections\")}');sys.exit(1)\nprint(f'config preserved as specified');sys.exit(0)",
+    "expected_outcome": "schema config values are preserved exactly as specified, not silently normalized",
+    "supersedes": null,
+    "mutation_rules": [
+      {
+        "name": "ef_negative_two",
+        "target_field": "vectorIndexConfig.ef",
+        "mutation_type": "negative_value",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_ef_neg2'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','ef':-2,'efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:\n    time.sleep(0.3)\n    r2=requests.get(f'{BASE}/v1/schema/{c}')\n    ef=r2.json().get('vectorIndexConfig',{}).get('ef',-999)\n    if ef!=-2:print(f'[DEFECT: ILLEGAL_SUCCESS] ef=-2 silently normalized to {ef}');sys.exit(1)\nprint(f'ef=-2 handled');sys.exit(0)",
+        "expected_result": "ef=-2 rejected or preserved as-is (not silently normalized)",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "maxConnections_zero",
+        "target_field": "vectorIndexConfig.maxConnections",
+        "mutation_type": "zero_value",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_mc_zero'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','maxConnections':0,'efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:\n    time.sleep(0.3)\n    r2=requests.get(f'{BASE}/v1/schema/{c}')\n    mc=r2.json().get('vectorIndexConfig',{}).get('maxConnections',-999)\n    if mc!=0:print(f'[DEFECT: ILLEGAL_SUCCESS] maxConnections=0 silently normalized to {mc}');sys.exit(1)\nprint(f'maxConnections=0 handled');sys.exit(0)",
+        "expected_result": "maxConnections=0 rejected or preserved as-is",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "dynamicEfMin_gt_dynamicEfMax",
+        "target_field": "vectorIndexConfig.dynamicEfMin",
+        "mutation_type": "constraint_violation",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_efminmax'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128,'dynamicEfMin':500,'dynamicEfMax':10,'dynamicEfFactor':8},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:\n    time.sleep(0.3)\n    r2=requests.get(f'{BASE}/v1/schema/{c}')\n    vic=r2.json().get('vectorIndexConfig',{})\n    if vic.get('dynamicEfMin')!=500 or vic.get('dynamicEfMax')!=10:print(f'[DEFECT: ILLEGAL_SUCCESS] dynamicEfMin>dynamicEfMax silently normalized');sys.exit(1)\nprint(f'dynamicEfMin>dynamicEfMax handled');sys.exit(0)",
+        "expected_result": "dynamicEfMin>dynamicEfMax rejected or preserved as-is",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "replication_factor_negative",
+        "target_field": "replicationConfig.factor",
+        "mutation_type": "negative_value",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_rep_neg'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','replicationConfig':{'factor':-1},'vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:\n    time.sleep(0.3)\n    r2=requests.get(f'{BASE}/v1/schema/{c}')\n    factor=r2.json().get('replicationConfig',{}).get('factor',-999)\n    if factor!=-1:print(f'[DEFECT: STATE_LOGIC_VIOLATION] replicationFactor=-1 silently normalized to {factor}');sys.exit(1)\nprint(f'replicationFactor=-1 handled');sys.exit(0)",
+        "expected_result": "replicationFactor=-1 rejected or preserved as-is",
+        "defect_type": "StateLogicViolation"
+      },
+      {
+        "name": "bq_rescoreLimit_negative",
+        "target_field": "vectorIndexConfig.bq.rescoreLimit",
+        "mutation_type": "negative_value",
+        "mutated_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='mut_bq_neg'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128,'bq':{'enabled':True,'rescoreLimit':-1}},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:\n    time.sleep(0.3)\n    r2=requests.get(f'{BASE}/v1/schema/{c}')\n    bq=r2.json().get('vectorIndexConfig',{}).get('bq',{})\n    if 'rescoreLimit' not in bq:print(f'[DEFECT: STATE_LOGIC_VIOLATION] bq.rescoreLimit=-1 silently discarded from config');sys.exit(1)\nprint(f'bq.rescoreLimit=-1 handled');sys.exit(0)",
+        "expected_result": "bq.rescoreLimit=-1 rejected or preserved as-is",
+        "defect_type": "StateLogicViolation"
+      }
+    ]
+  },
+  {
+    "name": "multi_tenant_insert_requires_tenant",
+    "category": "interface_consistency",
+    "endpoints": ["POST /v1/schema", "POST /v1/objects"],
+    "precondition_script": "collection does not exist",
+    "verification_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='test_mt_tenant'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','multiTenancyConfig':{'enabled':True},'vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code!=200:print(f'MT setup failed: {r.status_code}');sys.exit(0)\ntime.sleep(0.5)\nr2=requests.post(f'{BASE}/v1/objects',json={'class':c,'id':str(uuid.uuid4()),'vector':[0.1,0.2,0.3,0.4],'properties':{'text':'no_tenant'}})\nif r2.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] multi-tenant collection accepted insert without tenant key');sys.exit(1)\nelse:print(f'multi-tenant insert without tenant properly rejected: status={r2.status_code}');sys.exit(0)",
+    "expected_outcome": "insert without tenant key on multi-tenant collection should be rejected",
+    "supersedes": null,
+    "mutation_rules": []
+  },
+  {
+    "name": "duplicate_class_rejection",
+    "category": "interface_consistency",
+    "endpoints": ["POST /v1/schema"],
+    "precondition_script": "collection does not exist",
+    "verification_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='test_dup_class'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nassert r.status_code==200,f'first create failed: {r.text}'\ntime.sleep(0.3)\nr2=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r2.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] duplicate class name accepted');sys.exit(1)\nelse:print(f'duplicate class properly rejected: status={r2.status_code}');sys.exit(0)",
+    "expected_outcome": "creating a class with duplicate name should be rejected",
+    "supersedes": null,
+    "mutation_rules": []
+  },
+  {
+    "name": "class_naming_rules",
+    "category": "interface_consistency",
+    "endpoints": ["POST /v1/schema"],
+    "precondition_script": "collection does not exist",
+    "verification_script": "import requests,sys,time,uuid\nBASE='{{TESTVDB_DB_URL}}'\nc='ValidClassName'\nr=requests.delete(f'{BASE}/v1/schema/{c}')\nr=requests.post(f'{BASE}/v1/schema',json={'class':c,'vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code!=200:print(f'[DEFECT: RUNTIME_FAILURE] valid class name rejected: {r.text}');sys.exit(1)\nelse:print(f'valid class name accepted');sys.exit(0)",
+    "expected_outcome": "valid class name (PascalCase) should be accepted",
+    "supersedes": null,
+    "mutation_rules": [
+      {
+        "name": "empty_class_name",
+        "target_field": "class",
+        "mutation_type": "empty_string",
+        "mutated_script": "import requests,sys\nBASE='{{TESTVDB_DB_URL}}'\nr=requests.post(f'{BASE}/v1/schema',json={'class':'','vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] empty class name accepted');sys.exit(1)\nelse:print(f'empty class name properly rejected: status={r.status_code}');sys.exit(0)",
+        "expected_result": "status_code != 200",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "numeric_start_class",
+        "target_field": "class",
+        "mutation_type": "invalid_format",
+        "mutated_script": "import requests,sys\nBASE='{{TESTVDB_DB_URL}}'\nr=requests.post(f'{BASE}/v1/schema',json={'class':'1InvalidName','vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] numeric-start class name accepted');sys.exit(1)\nelse:print(f'numeric-start class name properly rejected: status={r.status_code}');sys.exit(0)",
+        "expected_result": "status_code != 200",
+        "defect_type": "IllegalSuccess"
+      },
+      {
+        "name": "special_chars_class",
+        "target_field": "class",
+        "mutation_type": "invalid_format",
+        "mutated_script": "import requests,sys\nBASE='{{TESTVDB_DB_URL}}'\nr=requests.post(f'{BASE}/v1/schema',json={'class':'Bad@Class!Name','vectorizer':'none','vectorIndexConfig':{'distance':'cosine','efConstruction':128},'properties':[{'name':'text','dataType':['text']}]})\nif r.status_code==200:print(f'[DEFECT: ILLEGAL_SUCCESS] special-chars class name accepted');sys.exit(1)\nelse:print(f'special-chars class name properly rejected: status={r.status_code}');sys.exit(0)",
+        "expected_result": "status_code != 200",
+        "defect_type": "IllegalSuccess"
+      }
+    ]
+  }
+]

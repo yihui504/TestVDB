@@ -14,7 +14,7 @@ impl IndependentReviewer for QdrantIndependentReviewer {
     }
 
     async fn run_probe(&self, sandbox: &Sandbox, port: u16) -> Result<ReviewResult> {
-        let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), port);
+        let db_url = crate::infra::build_db_url(sandbox.db_host.as_ref().ok_or_else(|| anyhow::anyhow!("sandbox db_host missing"))?, port);
         let probe_script = QDRANT_REVIEW_PROBE_TEMPLATE.replace("__DB_URL__", &db_url);
         let output = sandbox.exec_script(
             &probe_script,

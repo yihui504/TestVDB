@@ -11,7 +11,7 @@ pub struct ApiEndpoint {
 #[derive(Debug, Clone, Default)]
 pub struct CoverageTracker {
     visited: HashSet<String>,
-    endpoints: Vec<ApiEndpoint>,
+    pub endpoints: Vec<ApiEndpoint>,
 }
 
 impl CoverageTracker {
@@ -60,6 +60,21 @@ impl CoverageTracker {
         result
     }
 
+    pub fn unvisited_params_for_endpoint(&self, target_endpoint: &str) -> Vec<String> {
+        let mut covered_params = HashSet::new();
+        for key in &self.visited {
+            let parts: Vec<&str> = key.splitn(3, '|').collect();
+            if parts.len() >= 2 && parts[0] == target_endpoint {
+                covered_params.insert(parts[1].to_string());
+            }
+        }
+        self.endpoints
+            .iter()
+            .filter(|ep| ep.path == target_endpoint)
+            .flat_map(|ep| ep.params.iter().filter(|p| !covered_params.contains(*p)).cloned())
+            .collect()
+    }
+
     pub fn coverage_ratio(&self) -> f64 {
         if self.endpoints.is_empty() {
             return 0.0;
@@ -95,7 +110,7 @@ impl CoverageTracker {
     }
 }
 
-const PATTERN_CATEGORIES: [&str; 21] = [
+pub const PATTERN_CATEGORIES: [&str; 21] = [
     "count_consistency",
     "data_visibility",
     "state_residual",

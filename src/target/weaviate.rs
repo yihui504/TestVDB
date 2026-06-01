@@ -1,6 +1,7 @@
 use super::{SafetyNet, TargetPlugin, TargetStyle};
 use crate::agent::oracle::InvariantCheck;
 use crate::agent::probe::{ProbeTemplate, NoopProbeTemplate};
+use crate::agent::vdbfuzz::coverage::ApiEndpoint;
 use crate::contract::schema::StructuredContract;
 use crate::review::IndependentReviewer;
 use crate::review::weaviate::WeaviateIndependentReviewer;
@@ -13,11 +14,8 @@ impl TargetPlugin for WeaviatePlugin {
     }
 
     fn target_image(&self, version: &str) -> String {
-        if version.starts_with('v') {
-            format!("semitechnologies/weaviate:{}", version)
-        } else {
-            format!("semitechnologies/weaviate:{}", version)
-        }
+        let v = version.strip_prefix('v').unwrap_or(version);
+        format!("semitechnologies/weaviate:{}", v)
     }
 
     fn pip_packages(&self) -> Vec<String> {
@@ -95,6 +93,31 @@ impl TargetPlugin for WeaviatePlugin {
         nets.push(SafetyNet {
             name: "search_nonexistent_collection".into(),
             script: weaviate_search_nonexistent_probe(),
+            redundant_with_mutation: false,
+        });
+        nets.push(SafetyNet {
+            name: "graphql_limit_negative".into(),
+            script: weaviate_graphql_limit_negative_probe(),
+            redundant_with_mutation: false,
+        });
+        nets.push(SafetyNet {
+            name: "empty_vector".into(),
+            script: weaviate_empty_vector_probe(),
+            redundant_with_mutation: false,
+        });
+        nets.push(SafetyNet {
+            name: "large_efconstruction".into(),
+            script: weaviate_large_efconstruction_probe(),
+            redundant_with_mutation: false,
+        });
+        nets.push(SafetyNet {
+            name: "bm25_fractional_boost".into(),
+            script: weaviate_bm25_fractional_boost_probe(),
+            redundant_with_mutation: false,
+        });
+        nets.push(SafetyNet {
+            name: "nested_blobhash".into(),
+            script: weaviate_nested_blobhash_probe(),
             redundant_with_mutation: false,
         });
 
@@ -192,6 +215,26 @@ impl TargetPlugin for WeaviatePlugin {
 
     fn probe_template(&self) -> &dyn ProbeTemplate {
         &NoopProbeTemplate
+    }
+
+    fn all_api_endpoints(&self) -> Vec<ApiEndpoint> {
+        vec![
+            ApiEndpoint { method: "POST".into(), path: "/v1/schema".into(), params: vec!["class".into(), "vectorizer".into(), "vectorIndexConfig".into(), "replicationConfig".into(), "multiTenancyConfig".into(), "properties".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v1/schema".into(), params: vec![] },
+            ApiEndpoint { method: "GET".into(), path: "/v1/schema/{className}".into(), params: vec!["className".into()] },
+            ApiEndpoint { method: "DELETE".into(), path: "/v1/schema/{className}".into(), params: vec!["className".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v1/schema/{className}/properties".into(), params: vec!["className".into(), "name".into(), "dataType".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v1/objects".into(), params: vec!["class".into(), "id".into(), "vector".into(), "properties".into(), "tenant".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v1/objects".into(), params: vec!["class".into(), "limit".into(), "offset".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v1/objects/{className}/{id}".into(), params: vec!["className".into(), "id".into(), "include".into()] },
+            ApiEndpoint { method: "PUT".into(), path: "/v1/objects/{className}/{id}".into(), params: vec!["className".into(), "id".into(), "properties".into(), "vector".into()] },
+            ApiEndpoint { method: "PATCH".into(), path: "/v1/objects/{className}/{id}".into(), params: vec!["className".into(), "id".into(), "properties".into()] },
+            ApiEndpoint { method: "DELETE".into(), path: "/v1/objects/{className}/{id}".into(), params: vec!["className".into(), "id".into(), "consistency_level".into(), "tenant".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v1/batch/objects".into(), params: vec!["objects".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v1/graphql".into(), params: vec!["query".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v1/meta".into(), params: vec![] },
+            ApiEndpoint { method: "GET".into(), path: "/v1/nodes".into(), params: vec![] },
+        ]
     }
 
     fn db_env(&self) -> Vec<(String, String)> {
@@ -384,7 +427,7 @@ time.sleep(1.0)
 r2 = requests.get(f"{BASE}/v1/schema/{name}")
 count = r2.json().get("class", {}).get("objectCount", -1)
 if count != 5:
-    print(f"[DEFECT: STATE_VIOLATION] Insert 5 objects but count={count}")
+    print(f"[DEFECT: STATE_LOGIC_VIOLATION] Insert 5 objects but count={count}")
     sys.exit(1)
 print("State count verified: 5 objects")
 requests.delete(f"{BASE}/v1/schema/{name}")
@@ -418,7 +461,7 @@ time.sleep(1.0)
 r2 = requests.get(f"{BASE}/v1/schema/{name}")
 count = r2.json().get("class", {}).get("objectCount", -1)
 if count != 3:
-    print(f"[DEFECT: STATE_VIOLATION] Insert 5, delete 2, count={count}")
+    print(f"[DEFECT: STATE_LOGIC_VIOLATION] Insert 5, delete 2, count={count}")
     sys.exit(1)
 print("Delete count verified: 3 remaining")
 requests.delete(f"{BASE}/v1/schema/{name}")
@@ -608,5 +651,117 @@ if r2.status_code==200:
     sys.exit(1)
 requests.delete(f'{BASE}/v1/schema/{c}')
 sys.exit(0)
+"#.to_string()
+}
+
+fn weaviate_graphql_limit_negative_probe() -> String {
+    r#"import requests, sys, uuid, time
+BASE = "{{TESTVDB_DB_URL}}"
+c = "testvdb_limneg_" + uuid.uuid4().hex[:8]
+r = requests.post(f"{BASE}/v1/schema", json={"class": c, "vectorizer": "none", "vectorIndexConfig": {"distance": "cosine"}, "properties": [{"name": "title", "dataType": ["string"]}]})
+if r.status_code != 200:
+    print("Setup failed")
+    sys.exit(0)
+time.sleep(0.5)
+requests.post(f"{BASE}/v1/objects", json={"class": c, "properties": {"title": "test"}, "vector": [0.1, 0.2, 0.3, 0.4]})
+time.sleep(0.5)
+q = '{ Get { ' + c + '(limit: -1) { title } } }'
+r2 = requests.post(f"{BASE}/v1/graphql", json={"query": q})
+if r2.status_code == 200 and not r2.json().get("errors"):
+    print("[DEFECT: ILLEGAL_SUCCESS] GraphQL limit=-1 accepted")
+    sys.exit(1)
+print("GraphQL limit=-1 correctly rejected")
+requests.delete(f"{BASE}/v1/schema/{c}")
+"#.to_string()
+}
+
+fn weaviate_empty_vector_probe() -> String {
+    r#"import requests, sys, uuid, time
+BASE = "{{TESTVDB_DB_URL}}"
+c = "testvdb_emptyvec_" + uuid.uuid4().hex[:8]
+r = requests.post(f"{BASE}/v1/schema", json={"class": c, "vectorizer": "none", "vectorIndexConfig": {"distance": "cosine"}, "properties": [{"name": "title", "dataType": ["string"]}]})
+if r.status_code != 200:
+    print("Setup failed")
+    sys.exit(0)
+time.sleep(0.5)
+r2 = requests.post(f"{BASE}/v1/objects", json={"class": c, "properties": {"title": "test"}, "vector": []})
+if r2.status_code == 200:
+    print("[DEFECT: ILLEGAL_SUCCESS] Empty vector [] accepted")
+    sys.exit(1)
+print("Empty vector correctly rejected")
+requests.delete(f"{BASE}/v1/schema/{c}")
+"#.to_string()
+}
+
+fn weaviate_large_efconstruction_probe() -> String {
+    r#"import requests, sys, uuid
+BASE = "{{TESTVDB_DB_URL}}"
+c = "testvdb_largeefc_" + uuid.uuid4().hex[:8]
+r = requests.post(f"{BASE}/v1/schema", json={"class": c, "vectorizer": "none", "vectorIndexConfig": {"distance": "cosine", "efConstruction": 999999999, "maxConnections": 64}, "properties": [{"name": "title", "dataType": ["string"]}]})
+if r.status_code == 200:
+    print("[DEFECT: ILLEGAL_SUCCESS] efConstruction=999999999 accepted")
+    sys.exit(1)
+print("efConstruction=999999999 correctly rejected")
+requests.delete(f"{BASE}/v1/schema/{c}")
+"#.to_string()
+}
+
+fn weaviate_bm25_fractional_boost_probe() -> String {
+    r#"import requests, sys, uuid, time
+BASE = "{{TESTVDB_DB_URL}}"
+c = "testvdb_bm25boost_" + uuid.uuid4().hex[:8]
+r = requests.post(f"{BASE}/v1/schema", json={"class": c, "vectorizer": "none", "vectorIndexConfig": {"distance": "cosine"}, "properties": [{"name": "title", "dataType": ["text"], "indexSearchable": True}]})
+if r.status_code != 200:
+    print("Setup failed")
+    sys.exit(0)
+time.sleep(0.5)
+requests.post(f"{BASE}/v1/objects", json={"class": c, "id": "11111111-1111-1111-1111-111111111111", "properties": {"title": "needle"}, "vector": [0.1, 0.2, 0.3, 0.4]})
+time.sleep(1.0)
+q1 = '{ Get { ' + c + '(bm25:{query:"needle",properties:["title^1"]}) { title _additional { score } } } }'
+r1 = requests.post(f"{BASE}/v1/graphql", json={"query": q1})
+score_int = 0.0
+if r1.status_code == 200:
+    items = r1.json().get("data", {}).get("Get", {}).get(c, [])
+    if items:
+        score_int = float(items[0].get("_additional", {}).get("score", 0))
+q2 = '{ Get { ' + c + '(bm25:{query:"needle",properties:["title^0.5"]}) { title _additional { score } } } }'
+r2 = requests.post(f"{BASE}/v1/graphql", json={"query": q2})
+score_frac = -1.0
+if r2.status_code == 200:
+    items = r2.json().get("data", {}).get("Get", {}).get(c, [])
+    if items:
+        score_frac = float(items[0].get("_additional", {}).get("score", 0))
+if score_int > 0 and score_frac == 0.0:
+    print(f"[DEFECT: ILLEGAL_SUCCESS] BM25 boost^0.5 score=0 but boost^1 score={score_int}")
+    sys.exit(1)
+print(f"BM25 fractional boost OK: int={score_int}, frac={score_frac}")
+requests.delete(f"{BASE}/v1/schema/{c}")
+"#.to_string()
+}
+
+fn weaviate_nested_blobhash_probe() -> String {
+    r#"import requests, sys, uuid, time, hashlib, base64
+BASE = "{{TESTVDB_DB_URL}}"
+c = "testvdb_blobhash_" + uuid.uuid4().hex[:8]
+r = requests.post(f"{BASE}/v1/schema", json={"class": c, "vectorizer": "none", "vectorIndexConfig": {"distance": "cosine"}, "properties": [{"name": "meta", "dataType": ["object"], "nestedProperties": [{"name": "image", "dataType": ["blobHash"]}]}]})
+if r.status_code != 200:
+    print("Setup failed (nested blobHash not supported)")
+    sys.exit(0)
+time.sleep(0.5)
+b64_val = "aGVsbG8="
+expected_hash = hashlib.sha256(base64.b64decode(b64_val)).hexdigest()
+requests.post(f"{BASE}/v1/objects", json={"id": "00000000-0000-0000-0000-000000000111", "class": c, "properties": {"meta": {"image": b64_val}}})
+time.sleep(0.5)
+q = '{ Get { ' + c + ' { meta { image } } } }'
+r2 = requests.post(f"{BASE}/v1/graphql", json={"query": q})
+if r2.status_code == 200:
+    items = r2.json().get("data", {}).get("Get", {}).get(c, [])
+    if items:
+        actual = items[0].get("meta", {}).get("image", "")
+        if actual == b64_val:
+            print(f"[DEFECT: ILLEGAL_SUCCESS] Nested blobHash returned raw base64 instead of SHA-256 hash")
+            sys.exit(1)
+print("Nested blobHash correctly hashed or not supported")
+requests.delete(f"{BASE}/v1/schema/{c}")
 "#.to_string()
 }

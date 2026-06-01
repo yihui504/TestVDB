@@ -4,7 +4,7 @@ use tracing::{info, warn};
 
 use crate::agent::llm::{DeepSeekClient, Message};
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RootCauseAnalysis {
     pub is_real_defect: bool,
     pub defect_type: Option<String>,
@@ -48,71 +48,23 @@ fn llm_fallback_analysis() -> RootCauseAnalysis {
     }
 }
 
+#[deprecated(note = "Use analyze_defect_with_client instead to avoid hardcoded DeepSeekClient")]
 pub async fn analyze_defect_with_llm(
+    client: &DeepSeekClient,
     stdout: &str,
     stderr: &str,
     original_defect_type: &str,
     mre_code: &str,
 ) -> RootCauseAnalysis {
-    let client = match DeepSeekClient::new() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("LLM analysis: DeepSeekClient::new() failed: {}", e);
-            return llm_fallback_analysis();
-        }
-    };
-
-    let system_prompt = r#"You are a defect analysis expert. Analyze the following script execution output to determine if a real defect was found.
-
-Rules:
-1. If stdout contains [DEFECT: ...] markers, the defect is REAL regardless of any Traceback that follows
-2. If the script crashed (Traceback) BEFORE finding any defect marker, the defect is NOT real - it's a script error
-3. If the script found a defect marker AND then crashed, the defect IS real - the crash is in the verification code, not the defect detection
-4. If is_real_defect is true AND the crash happened after the defect marker, provide a fixed_script that removes the crashing code after the defect detection
-
-Respond in JSON format:
-{
-  "is_real_defect": boolean,
-  "defect_type": "the defect type from the marker, or null",
-  "root_cause": "one-line explanation of what happened",
-  "confidence": 0.0-1.0,
-  "fixed_script": "the fixed MRE script if applicable, or null"
-}"#;
-
-    let user_prompt = format!(
-        "## Script stdout (truncated):\n{}\n\n## Script stderr (truncated):\n{}\n\n## Original defect type: {}\n\n## MRE script:\n{}",
-        truncate(stdout, 2000),
-        truncate(stderr, 1000),
-        original_defect_type,
-        mre_code,
-    );
-
-    let messages = vec![
-        Message::system(system_prompt),
-        Message::user(user_prompt),
-    ];
-
-    match client.send_chat_json_mode(messages).await {
-        Ok(text) => {
-            info!("LLM analysis raw response (first 500 chars): {}", &text[..text.len().min(500)]);
-            serde_json::from_str::<RootCauseAnalysis>(&text).unwrap_or_else(|e| {
-                warn!("LLM analysis JSON parse failed: {}. Raw: {}", e, &text[..text.len().min(200)]);
-                llm_fallback_analysis()
-            })
-        }
-        Err(e) => {
-            warn!("LLM analysis API call failed: {}", e);
-            llm_fallback_analysis()
-        }
-    }
+    analyze_defect_with_client(client, stdout, stderr, original_defect_type, mre_code).await
 }
 
 pub async fn generate_verification_variant(
+    client: &DeepSeekClient,
     mre_code: &str,
     defect_type: &str,
     defect_evidence: &str,
 ) -> Result<VariantVerificationResult> {
-    let client = DeepSeekClient::new()?;
 
     let system_prompt = r#"You are a test variant generator. Given an MRE (Minimal Reproducible Example) script that found a defect, generate a VERIFICATION VARIANT script.
 
@@ -155,12 +107,12 @@ Respond in JSON:
 }
 
 pub async fn optimize_defect_report(
+    client: &DeepSeekClient,
     defect_type: &str,
     surviving_assertions: &[String],
     mre_code: &str,
     initial_evidence: &str,
 ) -> Result<OptimizedReport> {
-    let client = DeepSeekClient::new()?;
 
     let system_prompt = r#"You are a defect report optimization expert. Given defect information, produce a polished, submission-ready report.
 
@@ -202,5 +154,71 @@ Respond in JSON:
             improvement_suggestions: "Review the MRE and surviving assertions manually for fix directions.".to_string(),
             github_issue_body: format!("## Defect: {}\n\n### MRE\n```\n{}\n```\n\n### Evidence\n{}", defect_type, mre_code, initial_evidence),
         }),
+    }
+}
+
+/// Same as analyze_defect_with_llm but uses a caller-provided DeepSeekClient
+/// instead of creating a new one. This allows the harness to reuse the
+/// orchestrator's existing client.
+pub async fn analyze_defect_with_client(
+    client: &DeepSeekClient,
+    stdout: &str,
+    stderr: &str,
+    original_defect_type: &str,
+    mre_code: &str,
+) -> RootCauseAnalysis {
+    let system_prompt = r#"You are a defect analysis expert. Analyze the following script execution output to determine if a real defect was found.
+
+Rules:
+1. If stdout contains [DEFECT: ...] markers, the defect is REAL regardless of any Traceback that follows
+2. If the script crashed (Traceback) BEFORE finding any defect marker, the defect is NOT real - it's a script error
+3. If the script found a defect marker AND then crashed, the defect IS real - the crash is in the verification code, not the defect detection
+4. If is_real_defect is true AND the crash happened after the defect marker, provide a fixed_script that removes the crashing code after the defect detection
+5. If the script calls a search/query/scroll API and claims a defect based on missing data in the response (e.g., payload is None, vector is missing, fields are absent), check whether the script included the relevant request parameters to request that data (e.g., with_payload=True, with_vector=True, output_fields=[...]). If the script omitted such parameters, the defect is likely a FALSE POSITIVE caused by incorrect API usage, not a database bug. Set is_real_defect=false in this case.
+
+Respond in JSON format:
+{
+  "is_real_defect": boolean,
+  "defect_type": "the defect type from the marker, or null",
+  "root_cause": "one-line explanation of what happened",
+  "confidence": 0.0-1.0,
+  "fixed_script": "the fixed MRE script if applicable, or null"
+}"#;
+
+    let defect_lines: Vec<&str> = stdout.lines()
+        .filter(|l| l.to_lowercase().contains("[defect:"))
+        .collect();
+    let defect_summary = if defect_lines.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n=== DEFECT MARKERS FOUND IN FULL OUTPUT ===\n{}\n=== END DEFECT MARKERS ===", defect_lines.join("\n"))
+    };
+
+    let user_prompt = format!(
+        "## Script stdout (truncated):\n{}{}\n\n## Script stderr (truncated):\n{}\n\n## Original defect type: {}\n\n## MRE script:\n{}",
+        truncate(stdout, 2000),
+        defect_summary,
+        truncate(stderr, 1000),
+        original_defect_type,
+        mre_code,
+    );
+
+    let messages = vec![
+        Message::system(system_prompt),
+        Message::user(user_prompt),
+    ];
+
+    match client.send_chat_json_mode(messages).await {
+        Ok(text) => {
+            info!("LLM analysis raw response (first 500 chars): {}", &text[..text.len().min(500)]);
+            serde_json::from_str::<RootCauseAnalysis>(&text).unwrap_or_else(|e| {
+                warn!("LLM analysis JSON parse failed: {}. Raw: {}", e, &text[..text.len().min(200)]);
+                llm_fallback_analysis()
+            })
+        }
+        Err(e) => {
+            warn!("LLM analysis API call failed: {}", e);
+            llm_fallback_analysis()
+        }
     }
 }

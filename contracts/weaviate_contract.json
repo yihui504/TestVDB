@@ -3,37 +3,226 @@
   "doc_url": "https://weaviate.io/developers/weaviate",
   "assertions": [
     "[SCHEMA] class must be non-empty and follow naming rules",
-    "[SCHEMA] vectorIndexConfig.distance must be one of: cosine, dot, l2, hamming",
+    "[SCHEMA] class name must start with uppercase letter",
+    "[SCHEMA] class name must not start with a digit",
+    "[SCHEMA] class name must not contain special characters",
+    "[SCHEMA] duplicate class name must be rejected",
+    "[SCHEMA] vectorIndexConfig.distance must be one of: cosine, dot, l2-squared, hamming, ip",
     "[SCHEMA] vectorIndexConfig.ef must be -1 or >= 0",
-    "[SCHEMA] vectorIndexConfig.maxConnections must be >= 4",
+    "[SCHEMA] vectorIndexConfig.maxConnections must be > 0",
     "[SCHEMA] vectorIndexConfig.dynamicEfMin must be >= 2",
+    "[SCHEMA] vectorIndexConfig.efConstruction must be > 0",
+    "[SCHEMA] vectorIndexConfig.dynamicEfMax must be >= dynamicEfMin",
+    "[SCHEMA] vectorIndexConfig.dynamicEfFactor must be >= 1",
+    "[SCHEMA] vectorIndexConfig.flatSearchCutoff must be >= 0",
+    "[SCHEMA] vectorIndexConfig.cleanupIntervalSeconds must be > 0",
+    "[SCHEMA] vectorIndexConfig.vectorCacheMaxObjects must be >= 0",
+    "[SCHEMA] replicationConfig.factor must be >= 1",
+    "[SCHEMA] invalid distance metric must be rejected",
+    "[SCHEMA] ef=-2 must not be silently normalized",
+    "[SCHEMA] maxConnections below minimum must not be silently normalized",
+    "[SCHEMA] dynamicEfMin > dynamicEfMax must not be silently normalized",
+    "[SCHEMA] replicationConfig.factor negative must not be silently normalized",
+    "[SCHEMA] bq.rescoreLimit negative must not be silently discarded",
     "[OBJECTS] object vector dimension must match collection dimension",
+    "[OBJECTS] empty vector [] must be rejected",
+    "[OBJECTS] NaN vector must be rejected",
+    "[OBJECTS] insert without tenant on multi-tenant collection must be rejected",
+    "[OBJECTS] object must have a valid class reference",
+    "[OBJECTS] object ID must be valid UUID format",
     "[SEARCH] nearVector dimension must match collection dimension",
-    "[SEARCH] limit must be > 0",
-    "[SEARCH] offset must be >= 0",
-    "[BEHAVIOR:STATE] insert N objects → objectCount must equal N",
-    "[BEHAVIOR:STATE] delete M of N objects → objectCount must equal N-M",
-    "[BEHAVIOR:SEMANTIC] search results must have scores in descending order for cosine"
+    "[SEARCH] search results must have distances in ascending order for cosine (smaller = more similar)",
+    "[SEARCH] search limit must be >= 1",
+    "[SEARCH] search limit=0 must be rejected",
+    "[SEARCH] search limit=-1 must be rejected",
+    "[SEARCH] search with limit above 10000 must be rejected",
+    "[SEARCH] GraphQL query on nonexistent class must fail",
+    "[BEHAVIOR:STATE] insert N objects -> objectCount must equal N",
+    "[BEHAVIOR:STATE] delete M of N objects -> objectCount must equal N-M",
+    "[BEHAVIOR:STATE] delete nonexistent ID must not change objectCount",
+    "[BEHAVIOR:SEMANTIC] search results must have distances in ascending order for cosine (smaller = more similar)",
+    "[BEHAVIOR:STATE] collection must exist before inserting objects",
+    "[BEHAVIOR:STATE] collection must exist before search",
+    "[BEHAVIOR:STATE] create + immediate describe must succeed",
+    "[BEHAVIOR:STATE] search on empty collection must not crash"
   ],
+  "parameters": {
+    "POST /v1/schema": {
+      "class": {"type": "string", "required": true, "description": "Class name, must be PascalCase"},
+      "vectorizer": {"type": "string", "required": true, "description": "Vectorizer module, e.g. 'none'"},
+      "vectorIndexConfig": {"type": "object", "required": false, "description": "HNSW index configuration"},
+      "replicationConfig": {"type": "object", "required": false, "description": "Replication configuration"},
+      "multiTenancyConfig": {"type": "object", "required": false, "description": "Multi-tenancy configuration"},
+      "properties": {"type": "array", "required": false, "description": "Property definitions"}
+    },
+    "GET /v1/schema/{className}": {
+      "className": {"type": "string", "required": true, "description": "Class name to retrieve"}
+    },
+    "DELETE /v1/schema/{className}": {
+      "className": {"type": "string", "required": true, "description": "Class name to delete"}
+    },
+    "POST /v1/schema/{className}/properties": {
+      "className": {"type": "string", "required": true, "description": "Class name to add property to"},
+      "name": {"type": "string", "required": true, "description": "Property name"},
+      "dataType": {"type": "array", "required": true, "description": "Property data type(s)"}
+    },
+    "POST /v1/objects": {
+      "class": {"type": "string", "required": true, "description": "Class name of the object"},
+      "id": {"type": "string", "required": false, "description": "UUID of the object"},
+      "vector": {"type": "array", "required": false, "description": "Vector embedding"},
+      "properties": {"type": "object", "required": false, "description": "Object properties"},
+      "tenant": {"type": "string", "required": false, "description": "Tenant key for multi-tenant collections"}
+    },
+    "GET /v1/objects": {
+      "class": {"type": "string", "required": true, "description": "Class name to list objects from"},
+      "limit": {"type": "integer", "required": false, "description": "Maximum number of objects to return"},
+      "offset": {"type": "integer", "required": false, "description": "Offset for pagination"}
+    },
+    "GET /v1/objects/{className}/{id}": {
+      "className": {"type": "string", "required": true, "description": "Class name"},
+      "id": {"type": "string", "required": true, "description": "Object UUID"},
+      "include": {"type": "string", "required": false, "description": "Which extra fields to include"}
+    },
+    "DELETE /v1/objects/{className}/{id}": {
+      "className": {"type": "string", "required": true, "description": "Class name"},
+      "id": {"type": "string", "required": true, "description": "Object UUID"},
+      "consistency_level": {"type": "string", "required": false, "description": "Consistency level for deletion"},
+      "tenant": {"type": "string", "required": false, "description": "Tenant key"}
+    },
+    "POST /v1/batch/objects": {
+      "objects": {"type": "array", "required": true, "description": "Array of objects to batch create"}
+    },
+    "POST /v1/graphql": {
+      "query": {"type": "string", "required": true, "description": "GraphQL query string"}
+    }
+  },
+  "data_types": {
+    "className": {"base": "string", "pattern": "^[A-Z][a-zA-Z0-9]*$", "description": "PascalCase class name"},
+    "vector": {"base": "float_array", "min_length": 1, "description": "Non-empty float array for vector embedding"},
+    "distance": {"base": "enum", "values": ["cosine", "dot", "l2-squared", "hamming", "ip"], "description": "Distance metric for vector index"},
+    "ef": {"base": "integer", "min": -1, "description": "HNSW ef parameter, -1 means unlimited"},
+    "maxConnections": {"base": "integer", "min": 1, "description": "HNSW maxConnections parameter, must be > 0"},
+    "efConstruction": {"base": "integer", "min": 1, "description": "HNSW efConstruction parameter, must be > 0"},
+    "dynamicEfMin": {"base": "integer", "min": 2, "description": "Minimum dynamic ef value"},
+    "dynamicEfMax": {"base": "integer", "description": "Maximum dynamic ef value, must be >= dynamicEfMin"},
+    "dynamicEfFactor": {"base": "integer", "min": 1, "description": "Factor for dynamic ef calculation"},
+    "flatSearchCutoff": {"base": "integer", "min": 0, "description": "Cutoff for flat search"},
+    "cleanupIntervalSeconds": {"base": "integer", "min": 1, "description": "Cleanup interval in seconds"},
+    "vectorCacheMaxObjects": {"base": "integer", "min": 0, "description": "Max objects in vector cache"},
+    "replicationFactor": {"base": "integer", "min": 1, "description": "Replication factor"},
+    "limit": {"base": "integer", "min": 1, "description": "Result limit, must be >= 1"},
+    "uuid": {"base": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "description": "UUID format"}
+  },
   "type_constraints": [
-    {"param_name": "class", "expected_type": "string", "violation_examples": []},
-    {"param_name": "vectorIndexConfig.distance", "expected_type": "enum", "violation_examples": []},
-    {"param_name": "vectorIndexConfig.ef", "expected_type": "integer", "violation_examples": []},
-    {"param_name": "vectorIndexConfig.maxConnections", "expected_type": "integer", "violation_examples": []},
-    {"param_name": "objects.vector", "expected_type": "float array", "violation_examples": []},
-    {"param_name": "search.limit", "expected_type": "integer", "violation_examples": []},
-    {"param_name": "search.offset", "expected_type": "integer", "violation_examples": []}
+    {"param_name": "class", "expected_type": "string", "violation_examples": ["", "1BadName", "bad@name"]},
+    {"param_name": "vectorIndexConfig.distance", "expected_type": "enum", "violation_examples": ["InvalidMetric", "cosin"]},
+    {"param_name": "objects.vector", "expected_type": "float array", "violation_examples": ["[]", "not_array", "[1,2,3]"]},
+    {"param_name": "objects.id", "expected_type": "uuid string", "violation_examples": ["not-a-uuid", ""]},
+    {"param_name": "objects.tenant", "expected_type": "string", "violation_examples": ["null", "123"]}
   ],
   "range_constraints": [
-    {"param_name": "vectorIndexConfig.ef", "description": "ef must be -1 or >= 0", "min": -1.0, "max": null, "violation_examples": []},
-    {"param_name": "vectorIndexConfig.maxConnections", "description": "maxConnections must be >= 4", "min": 4.0, "max": null, "violation_examples": []},
-    {"param_name": "search.limit", "description": "limit must be > 0", "min": 1.0, "max": null, "violation_examples": []},
-    {"param_name": "search.offset", "description": "offset must be >= 0", "min": 0.0, "max": null, "violation_examples": []}
+    {"param_name": "vectorIndexConfig.ef", "description": "ef must be -1 or >= 0", "min": -1.0, "max": null, "violation_examples": ["-2"]},
+    {"param_name": "vectorIndexConfig.maxConnections", "description": "maxConnections must be > 0", "min": 1.0, "max": null, "violation_examples": ["0"]},
+    {"param_name": "vectorIndexConfig.efConstruction", "description": "efConstruction must be > 0", "min": 1.0, "max": null, "violation_examples": ["0"]},
+    {"param_name": "vectorIndexConfig.dynamicEfMin", "description": "dynamicEfMin must be >= 2", "min": 2.0, "max": null, "violation_examples": ["0", "1"]},
+    {"param_name": "vectorIndexConfig.dynamicEfMax", "description": "dynamicEfMax must be >= dynamicEfMin", "min": 2.0, "max": null, "violation_examples": ["1"]},
+    {"param_name": "vectorIndexConfig.dynamicEfFactor", "description": "dynamicEfFactor must be >= 1", "min": 1.0, "max": null, "violation_examples": ["0"]},
+    {"param_name": "vectorIndexConfig.flatSearchCutoff", "description": "flatSearchCutoff must be >= 0", "min": 0.0, "max": null, "violation_examples": ["-1", "-100"]},
+    {"param_name": "vectorIndexConfig.cleanupIntervalSeconds", "description": "cleanupIntervalSeconds must be > 0", "min": 1.0, "max": null, "violation_examples": ["0", "-1"]},
+    {"param_name": "replicationConfig.factor", "description": "replicationFactor must be >= 1", "min": 1.0, "max": null, "violation_examples": ["0", "-1"]},
+    {"param_name": "vectorIndexConfig.vectorCacheMaxObjects", "description": "vectorCacheMaxObjects must be >= 0", "min": 0.0, "max": null, "violation_examples": ["-1"]},
+    {"param_name": "search.limit", "description": "search limit must be >= 1", "min": 1.0, "max": null, "violation_examples": ["0", "-1"]}
   ],
   "state_constraints": [
     {"description": "collection must exist before inserting objects", "determinism": "deterministic", "setup_script_template": null},
-    {"description": "collection must exist before search", "determinism": "deterministic", "setup_script_template": null}
+    {"description": "collection must exist before search", "determinism": "deterministic", "setup_script_template": null},
+    {"description": "collection must exist before deleting objects", "determinism": "deterministic", "setup_script_template": null},
+    {"description": "multi-tenant collection requires tenant key for insert", "determinism": "deterministic", "setup_script_template": null}
   ],
-  "state_invariants": [],
-  "behavioral_contracts": []
+  "state_invariants": [
+    {
+      "name": "insert_count_consistency",
+      "check_type": "count_consistency",
+      "endpoint": "/v1/schema/{className}",
+      "precondition": "collection exists with 0 objects",
+      "assertion_script": "insert N objects → objectCount == N"
+    },
+    {
+      "name": "delete_count_consistency",
+      "check_type": "count_consistency",
+      "endpoint": "/v1/schema/{className}",
+      "precondition": "collection exists with N objects",
+      "assertion_script": "delete M of N objects → objectCount == N-M"
+    },
+    {
+      "name": "delete_nonexistent_idempotent",
+      "check_type": "count_consistency",
+      "endpoint": "/v1/objects/{className}/{id}",
+      "precondition": "collection with N objects, id does not exist",
+      "assertion_script": "delete nonexistent ID → objectCount unchanged"
+    },
+    {
+      "name": "search_score_descending",
+      "check_type": "existence_check",
+      "endpoint": "/v1/graphql",
+      "precondition": "collection with 5+ objects exists",
+      "assertion_script": "cosine nearVector search → distances[i] <= distances[i+1] (ascending, smaller=more similar)"
+    },
+    {
+      "name": "schema_config_preserved",
+      "check_type": "value_range",
+      "endpoint": "/v1/schema/{className}",
+      "precondition": "collection created with specific config",
+      "assertion_script": "GET schema → stored config matches requested config"
+    },
+    {
+      "name": "multi_tenant_requires_tenant",
+      "check_type": "existence_check",
+      "endpoint": "/v1/objects",
+      "precondition": "multi-tenant collection exists",
+      "assertion_script": "POST /v1/objects without tenant → returns 4xx"
+    },
+    {
+      "name": "duplicate_class_rejected",
+      "check_type": "existence_check",
+      "endpoint": "/v1/schema",
+      "precondition": "class already exists",
+      "assertion_script": "POST /v1/schema with duplicate name → returns 4xx"
+    }
+  ],
+  "behavioral_contracts": [],
+  "rejection_policies": {
+    "class": "ignore",
+    "objects.vector": "ignore",
+    "schema.vectorIndexConfig": "ignore",
+    "schema.vectorIndexType": "ignore",
+    "schema.replicationConfig": "ignore",
+    "schema.moduleConfig": "ignore",
+    "schema.invertedIndexConfig": "ignore",
+    "objects.class": "ignore",
+    "objects.id": "ignore",
+    "objects.properties": "ignore",
+    "objects.creationTimeUnix": "ignore",
+    "objects.lastUpdateTimeUnix": "ignore",
+    "objects.tenant": "ignore",
+    "search.nearVector": "reject",
+    "search.nearObject": "reject",
+    "search.nearText": "reject",
+    "search.hybrid": "reject",
+    "search.limit": "reject",
+    "search.offset": "reject",
+    "search.autocut": "ignore",
+    "search.filters": "ignore",
+    "search.properties": "ignore",
+    "search.groupBy": "ignore"
+  },
+  "nested_params": {
+    "schema/create": {
+      "vectorIndexConfig": ["ef", "maxConnections", "efConstruction", "dynamicEfMin", "dynamicEfMax", "dynamicEfFactor", "flatSearchCutoff", "cleanupIntervalSeconds", "vectorCacheMaxObjects", "distance"],
+      "replicationConfig": ["factor"],
+      "moduleConfig": ["text2vec-openai", "text2vec-cohere", "text2vec-huggingface"],
+      "invertedIndexConfig": ["cleanupIntervalSeconds", "bm25", "indexNullState", "indexPropertyLength"],
+      "multiTenancyConfig": ["enabled"]
+    }
+  }
 }

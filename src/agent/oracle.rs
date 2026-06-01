@@ -3,6 +3,7 @@ use crate::contract::schema::{CheckType, MutationRule, StateInvariant};
 use crate::sandbox::manager::Sandbox;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,6 +25,20 @@ pub enum InvariantSource {
     DerivedFromMutation,
 }
 
+impl InvariantSource {
+    pub fn priority(&self) -> u8 {
+        match self {
+            InvariantSource::DerivedFromMutation => 10,
+            InvariantSource::ContractExplicit => 9,
+            InvariantSource::DerivedFromAssertion => 8,
+            InvariantSource::DerivedFromState => 7,
+            InvariantSource::DerivedFromRange => 6,
+            InvariantSource::DerivedFromType => 5,
+            InvariantSource::DerivedFromBehavior => 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OracleFinding {
     pub invariant_name: String,
@@ -41,10 +56,32 @@ pub struct Oracle {
 
 impl Oracle {
     pub fn new(checks: Vec<InvariantCheck>) -> Self {
+        let checks = Self::deduplicate_and_sort(checks);
         info!("Oracle initialized with {} invariant checks", checks.len());
         Oracle {
             checks,
             checks_run: 0,
+        }
+    }
+
+    fn deduplicate_and_sort(mut checks: Vec<InvariantCheck>) -> Vec<InvariantCheck> {
+        let mut seen: HashSet<String> = HashSet::new();
+        checks.retain(|check| {
+            let key = Self::dedup_key(check);
+            seen.insert(key)
+        });
+        checks.sort_by(|a, b| b.source.priority().cmp(&a.source.priority()));
+        checks
+    }
+
+    fn dedup_key(check: &InvariantCheck) -> String {
+        let defect_pattern = regex::Regex::new(r"\[DEFECT:\s*(\w+)\]")
+            .ok()
+            .and_then(|re| re.captures(&check.script))
+            .and_then(|caps| caps.get(1).map(|m| m.as_str().to_string()));
+        match defect_pattern {
+            Some(defect) => format!("{:?}|{}", check.check_type, defect),
+            None => format!("{:?}|{}", check.check_type, check.name.split('_').nth(1).unwrap_or(&check.name)),
         }
     }
 
@@ -85,6 +122,7 @@ impl Oracle {
         sandbox: &Sandbox,
         db_url: &str,
         batch_size: usize,
+        auth_header: &str,
     ) -> Vec<OracleFinding> {
         let mut findings = Vec::new();
         let end = usize::min(self.checks_run + batch_size, self.checks.len());
@@ -96,7 +134,8 @@ impl Oracle {
             let script = check
                 .script
                 .replace("{{TESTVDB_DB_URL}}", db_url)
-                .replace("{TESTVDB_DB_URL}", db_url);
+                .replace("{TESTVDB_DB_URL}", db_url)
+                .replace("{{TESTVDB_AUTH_HEADER}}", auth_header);
             let script_b64 = base64::engine::general_purpose::STANDARD.encode(&script);
             let script_path = format!("/tmp/oracle_{}.py", check.name);
             let decode_script = format!(
@@ -165,9 +204,10 @@ impl Oracle {
         &mut self,
         sandbox: &Sandbox,
         db_url: &str,
+        auth_header: &str,
     ) -> Vec<OracleFinding> {
         let remaining = self.checks.len() - self.checks_run;
-        self.run_next_batch(sandbox, db_url, remaining).await
+        self.run_next_batch(sandbox, db_url, remaining, auth_header).await
     }
 
     fn classify_check_result(
@@ -209,9 +249,9 @@ impl Oracle {
         if exit_code != 0 {
             return OracleFinding {
                 invariant_name: check.name.clone(),
-                violated: true,
+                violated: false,
                 evidence: format!("Non-zero exit code ({}) without explicit defect marker. stdout: {} stderr: {}", exit_code, stdout.chars().take(200).collect::<String>(), stderr.chars().take(200).collect::<String>()),
-                defect_type: Some(DefectType::PoorDiagnostics),
+                defect_type: None,
                 script: check.script.clone(),
             };
         }
@@ -254,7 +294,7 @@ pub fn build_oracle_findings_message(findings: &[OracleFinding]) -> String {
             msg.push_str(&format!(
                 "- {} [{:?}]: {}\n",
                 f.invariant_name,
-                f.defect_type.as_ref().unwrap_or(&DefectType::Pass),
+                f.defect_type.as_ref().unwrap_or(&DefectType::IllegalSuccess),
                 f.evidence.chars().take(500).collect::<String>()
             ));
         }
@@ -361,8 +401,8 @@ mod tests {
             source: InvariantSource::DerivedFromRange,
         };
         let finding = Oracle::classify_check_result(&check, "some output without defect", "some error", 1);
-        assert!(finding.violated);
-        assert_eq!(finding.defect_type, Some(DefectType::PoorDiagnostics));
+        assert!(!finding.violated);
+        assert_eq!(finding.defect_type, None);
     }
 
     #[test]
@@ -431,5 +471,70 @@ mod tests {
         assert_eq!(oracle.checks_completed(), 0);
         assert_eq!(oracle.pending_checks().len(), 2);
         assert!(oracle.has_pending());
+    }
+
+    #[test]
+    fn test_dedup_by_defect_pattern() {
+        let checks = vec![
+            InvariantCheck {
+                name: "behavior_count_after_upsert".to_string(),
+                check_type: CheckType::CountConsistency,
+                script: "print('[DEFECT: STATE_LOGIC_VIOLATION] count mismatch')".to_string(),
+                source: InvariantSource::DerivedFromBehavior,
+            },
+            InvariantCheck {
+                name: "behavior_count_after_delete".to_string(),
+                check_type: CheckType::CountConsistency,
+                script: "print('[DEFECT: STATE_LOGIC_VIOLATION] count mismatch')".to_string(),
+                source: InvariantSource::DerivedFromBehavior,
+            },
+            InvariantCheck {
+                name: "behavior_score_ordering".to_string(),
+                check_type: CheckType::ValueRange,
+                script: "print('[DEFECT: ILLEGAL_SUCCESS] bad score')".to_string(),
+                source: InvariantSource::DerivedFromBehavior,
+            },
+        ];
+        let oracle = Oracle::new(checks);
+        assert!(oracle.total_checks() <= 2, "should deduplicate checks with same (check_type, defect_type), got {}", oracle.total_checks());
+    }
+
+    #[test]
+    fn test_priority_sorting_mutation_first() {
+        let checks = vec![
+            InvariantCheck {
+                name: "behavior_check".to_string(),
+                check_type: CheckType::ValueRange,
+                script: "print('[DEFECT: STATE_LOGIC_VIOLATION] test')".to_string(),
+                source: InvariantSource::DerivedFromBehavior,
+            },
+            InvariantCheck {
+                name: "mutation_check".to_string(),
+                check_type: CheckType::ValueRange,
+                script: "print('[DEFECT: ILLEGAL_SUCCESS] test')".to_string(),
+                source: InvariantSource::DerivedFromMutation,
+            },
+            InvariantCheck {
+                name: "range_check".to_string(),
+                check_type: CheckType::CountConsistency,
+                script: "print('[DEFECT: STATE_LOGIC_VIOLATION] test')".to_string(),
+                source: InvariantSource::DerivedFromRange,
+            },
+        ];
+        let oracle = Oracle::new(checks);
+        let pending = oracle.pending_checks();
+        assert_eq!(pending[0].source, InvariantSource::DerivedFromMutation);
+    }
+
+    #[test]
+    fn test_dedup_key_fallback_to_name_prefix() {
+        let check = InvariantCheck {
+            name: "oracle_range_limit_zero".to_string(),
+            check_type: CheckType::ValueRange,
+            script: "print('no defect marker')".to_string(),
+            source: InvariantSource::DerivedFromRange,
+        };
+        let key = Oracle::dedup_key(&check);
+        assert!(key.contains("range"), "fallback key should use name prefix");
     }
 }

@@ -83,6 +83,8 @@ impl SemanticGateProvider for QdrantSemanticGate {
             sidecars,
             db_env,
             db_command,
+            None,
+            "",
         )
         .await
         {
@@ -125,11 +127,12 @@ fn extract_create_json(mre_code: &str) -> Option<String> {
 }
 
 fn generate_qdrant_verification_script(create_json: &str) -> String {
+    let escaped = create_json.replace('\\', "\\\\").replace("'", "\\'");
     format!(
-        r#"import requests, sys, uuid, time
+        r#"import requests, sys, uuid, time, json
 BASE = '{{TESTVDB_DB_URL}}'
 c = 'sg_' + uuid.uuid4().hex[:8]
-request_body = {create_json}
+request_body = json.loads('{escaped}')
 r = requests.put(f'{{BASE}}/collections/{{c}}', json=request_body)
 if r.status_code != 200:
     print(f'SEMANTIC_GATE: REJECTED (status {{r.status_code}})')
@@ -177,7 +180,7 @@ elif not any_applied:
 else:
     print('SEMANTIC_GATE: AMBIGUOUS')
 "#,
-        create_json = create_json,
+        escaped = escaped,
     )
 }
 
@@ -284,5 +287,25 @@ mod tests {
         assert!(script.contains("{TESTVDB_DB_URL}"));
         assert!(script.contains("SEMANTIC_GATE:"));
         assert!(script.contains("shard_number"));
+        assert!(script.contains("json.loads("));
+    }
+
+    #[test]
+    fn test_generate_verification_script_handles_json_literals() {
+        let script = generate_qdrant_verification_script(
+            r#"{"vectors":{"size":4,"distance":"Cosine"},"on_disk":true,"nullable_field":null}"#,
+        );
+        assert!(script.contains("json.loads("));
+        assert!(script.contains("on_disk"));
+        assert!(!script.contains("request_body = {"));
+    }
+
+    #[test]
+    fn test_generate_verification_script_escapes_single_quotes() {
+        let script = generate_qdrant_verification_script(
+            r#"{"vectors":{"size":4,"distance":"Cosine"}}"#,
+        );
+        assert!(script.contains("json.loads('"));
+        assert!(!script.contains("request_body = {"));
     }
 }

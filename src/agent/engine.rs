@@ -11,6 +11,7 @@ use crate::contract::store::{Confidence, ConstraintSource, ContractStore};
 use crate::sandbox::manager::Sandbox;
 use anyhow::Result;
 use serde::Deserialize;
+use std::collections::HashMap;
 use tracing::{info, warn};
 
 /// Build the system prompt for the Knowledge Agent that extracts constraints from docs + source.
@@ -165,6 +166,8 @@ pub async fn knowledge_exploration_loop(
                             state_constraints: vec![],
                             state_invariants: vec![],
                             behavioral_contracts: vec![],
+                            rejection_policies: HashMap::new(),
+                            nested_params: HashMap::new(),
                         });
                     } else {
                         return Ok(StructuredContract {
@@ -176,6 +179,8 @@ pub async fn knowledge_exploration_loop(
                             state_constraints: vec![],
                             state_invariants: vec![],
                             behavioral_contracts: vec![],
+                            rejection_policies: HashMap::new(),
+                            nested_params: HashMap::new(),
                         });
                     }
                 }
@@ -394,6 +399,8 @@ pub async fn knowledge_exploration_loop(
                         state_constraints: vec![],
                         state_invariants: vec![],
                         behavioral_contracts: vec![],
+                        rejection_policies: HashMap::new(),
+                        nested_params: HashMap::new(),
                     };
                     
                     return Ok(contract);
@@ -425,6 +432,8 @@ pub async fn knowledge_exploration_loop(
         state_constraints: vec![],
         state_invariants: vec![],
         behavioral_contracts: vec![],
+        rejection_policies: HashMap::new(),
+        nested_params: HashMap::new(),
     })
 }
 
@@ -538,6 +547,8 @@ fn parse_structured_contract_from_text(
         state_constraints,
         state_invariants: vec![],
         behavioral_contracts: vec![],
+        rejection_policies: HashMap::new(),
+        nested_params: HashMap::new(),
     })
 }
 
@@ -778,6 +789,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: HashMap::new(),
+            nested_params: HashMap::new(),
         };
 
         let store = knowledge_contracts_to_store(&[contract], "milvus", "2.4");
@@ -806,11 +819,124 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: HashMap::new(),
+            nested_params: HashMap::new(),
         };
 
         let store = knowledge_contracts_to_store(&[contract], "milvus", "2.4");
 
         assert_eq!(store.type_constraints[0].source, ConstraintSource::ExplicitDoc);
         assert_eq!(store.type_constraints[0].confidence, Confidence::Medium);
+    }
+
+    #[test]
+    fn test_parse_structured_contract_invalid_json() {
+        let result = parse_structured_contract_from_text("not json at all", "search", "https://docs.io");
+        assert!(result.is_err(), "Invalid JSON should return error");
+    }
+
+    #[test]
+    fn test_parse_structured_contract_missing_fields() {
+        // Minimal valid JSON with missing optional fields defaulting
+        let json = r#"{"api_endpoint": "create"}"#;
+        let contract = parse_structured_contract_from_text(json, "create", "https://docs.io").unwrap();
+        assert_eq!(contract.api_endpoint, "create");
+        assert!(contract.assertions.is_empty());
+        assert!(contract.type_constraints.is_empty());
+        assert!(contract.range_constraints.is_empty());
+        assert!(contract.behavioral_contracts.is_empty());
+    }
+
+    #[test]
+    fn test_parse_type_constraints_from_json() {
+        let args: serde_json::Value = serde_json::json!({
+            "type_constraints": [
+                {"param_name": "limit", "expected_type": "integer"},
+                {"param_name": "collectionName", "expected_type": "string"},
+                {"param_name": "", "expected_type": "integer"},  // empty param_name: skipped
+                {"param_name": "dim", "expected_type": ""},      // empty expected_type: skipped
+            ]
+        });
+        let result = parse_type_constraints_from_json(&args);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].param_name, "limit");
+        assert_eq!(result[0].expected_type, "integer");
+        assert_eq!(result[1].param_name, "collectionName");
+        assert_eq!(result[1].expected_type, "string");
+    }
+
+    #[test]
+    fn test_parse_range_constraints_from_json() {
+        let args: serde_json::Value = serde_json::json!({
+            "range_constraints": [
+                {"param_name": "limit", "description": "limit range", "min": 1, "max": 16384},
+                {"param_name": "offset", "description": "offset range", "min": 0},
+                {"param_name": "", "description": "empty name"},  // empty param_name: skipped
+            ]
+        });
+        let result = parse_range_constraints_from_json(&args);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].param_name, "limit");
+        assert_eq!(result[0].min, Some(1.0));
+        assert_eq!(result[0].max, Some(16384.0));
+        assert_eq!(result[1].param_name, "offset");
+        assert_eq!(result[1].min, Some(0.0));
+        assert!(result[1].max.is_none());
+    }
+
+    #[test]
+    fn test_parse_enum_values_from_json() {
+        let args: serde_json::Value = serde_json::json!({
+            "enum_values": {
+                "metricType": ["COSINE", "L2", "IP"],
+                "indexType": ["IVF_FLAT", "HNSW"]
+            }
+        });
+        let result = parse_enum_values_from_json(&args);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains_key("metricType"));
+        assert_eq!(result["metricType"].len(), 3);
+        assert!(result.contains_key("indexType"));
+        assert_eq!(result["indexType"].len(), 2);
+    }
+
+    #[test]
+    fn test_parse_enum_values_from_json_empty() {
+        let args: serde_json::Value = serde_json::json!({"enum_values": {}});
+        let result = parse_enum_values_from_json(&args);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_json_from_text_code_block() {
+        // Code block without json tag
+        let text = "```\n{\"key\": \"value\"}\n```";
+        assert_eq!(extract_json_from_text(text), r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn test_extract_json_from_text_embedded_json() {
+        // JSON embedded in prose text
+        let text = "Here is the result:\n{\"api_endpoint\": \"search\", \"assertions\": []}\nDone.";
+        let result = extract_json_from_text(text);
+        assert!(result.contains("\"api_endpoint\""));
+        assert!(result.contains("\"search\""));
+    }
+
+    #[test]
+    fn test_parse_string_array_from_json() {
+        let args: serde_json::Value = serde_json::json!({
+            "required_params": ["collectionName", "data", "vector"],
+            "other_field": ["not_this"]
+        });
+        let result = parse_string_array_from_json(&args, "required_params");
+        assert_eq!(result, vec!["collectionName", "data", "vector"]);
+    }
+
+    #[test]
+    fn test_parse_string_array_from_json_missing_key() {
+        let args: serde_json::Value = serde_json::json!({"other_field": ["a"]});
+        let result = parse_string_array_from_json(&args, "required_params");
+        assert!(result.is_empty());
     }
 }

@@ -1,5 +1,5 @@
-use crate::contract::store::{AnnotatedRangeConstraint, AnnotatedTypeConstraint, ContractStore, ObservedBehavior};
-use crate::contract::schema::{RangeConstraint, TypeConstraint};
+use crate::contract::store::{AnnotatedTypeConstraint, ContractStore, ObservedBehavior};
+use crate::contract::schema::{RejectionPolicy, TypeConstraint};
 use crate::contract::store::{Confidence, ConstraintSource};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,15 +30,6 @@ pub struct DefectCluster {
     pub likely_benign: bool,
     pub benign_rationale: String,
 }
-
-/// Known benign patterns: defect signals that are expected/design behavior, not real bugs.
-/// (endpoint_substring, param_substring_or_empty, rationale)
-const BENIGN_PATTERNS: &[(&str, &str, &str)] = &[
-    // Qdrant/Milvus search silently drops unknown JSON keys — BUT only for non-search-params.
-    // Real defects on search endpoint (hnsw_ef, score_threshold, limit, offset) must NOT be flagged.
-    ("search", "", "Search endpoint silently ignores unrecognized JSON keys — expected design. HOWEVER, hnsw_ef=0, score_threshold out-of-range, and similar param violations on recognized keys are REAL defects."),
-    ("list", "", "list/describe endpoints returning success for nonexistent resources is standard REST idempotency."),
-];
 
 /// Parameters that, when violated on the search endpoint, indicate a REAL defect (not benign param injection).
 const SEARCH_REAL_DEFECT_PARAMS: &[&str] = &[
@@ -123,9 +114,8 @@ impl ResultAnalyzer {
     }
 
     /// Collapse raw defects into root-cause clusters, marking known benign patterns.
-    pub fn cluster_defects(defects: &[BatchDefect]) -> Vec<DefectCluster> {
-        // Group by (kind, endpoint, param_name) — same endpoint + same param = same root cause.
-        let mut groups: HashMap<(DefectKind, String, String), Vec<&BatchDefect>> = HashMap::new();
+    pub fn cluster_defects(defects: &[BatchDefect], store: &ContractStore) -> Vec<DefectCluster> {
+        let mut groups: HashMap<(DefectKind, String, String, String), Vec<&BatchDefect>> = HashMap::new();
         for d in defects {
             let kind = DefectKind::from_defect_line(&d.defect_line);
             let (endpoint, param_name) = if let (Some(ep), Some(pn)) = (&d.endpoint, &d.param_name) {
@@ -135,31 +125,28 @@ impl ResultAnalyzer {
             } else {
                 Self::extract_context(&d.test_name, &d.test_prefix)
             };
-            // Normalize endpoint: strip host/port, keep path
             let short_ep = endpoint
                 .split('/')
                 .filter(|s| !s.is_empty())
                 .last()
                 .unwrap_or(&endpoint)
                 .to_string();
-            groups.entry((kind, short_ep, param_name)).or_default().push(d);
+            groups.entry((kind, short_ep, param_name, endpoint)).or_default().push(d);
         }
 
         let mut clusters: Vec<DefectCluster> = Vec::new();
-        for ((kind, ep, param), instances) in &groups {
+        for ((kind, ep, param, full_ep), instances) in &groups {
             let count = instances.len();
-            let exemplar = (*instances.first().unwrap()).clone();
+            let exemplar = (*instances.first().expect("group is non-empty so first() exists")).clone();
 
-            // Check if this is a known benign pattern — but override for recognized real-defect params.
-            let benign_match = BENIGN_PATTERNS.iter().find(|(p, _, _)| ep.contains(p));
-            let likely_benign = if let Some((_, _, _)) = benign_match {
-                // If param is a known REAL defect param on search endpoint, override benign.
+            let policy = store.get_rejection_policy(param, full_ep);
+            let likely_benign = if policy == RejectionPolicy::Ignore {
                 !SEARCH_REAL_DEFECT_PARAMS.iter().any(|rp| param.contains(rp))
             } else {
                 false
             };
             let benign_rationale = if likely_benign {
-                benign_match.map(|(_, _, r)| r.to_string()).unwrap_or_default()
+                format!("Param '{}' has Ignore rejection policy on endpoint '{}'", param, full_ep)
             } else {
                 String::new()
             };
@@ -253,7 +240,7 @@ impl ResultAnalyzer {
         } else {
             "unknown"
         };
-        (format!("/{}", endpoint), param.to_string())
+        (endpoint.to_string(), param.to_string())
     }
 
     fn extract_context(test_name: &str, prefix: &str) -> (String, String) {
@@ -324,50 +311,7 @@ impl ResultAnalyzer {
             let kind = DefectKind::from_defect_line(&obs.description);
 
             match kind {
-                DefectKind::IllegalSuccess => {
-                    if obs.param_name == "dim" {
-                        let dim_val = Self::extract_dim_from_description(&obs.description);
-                        if let Some(val) = dim_val {
-                            store.range_constraints.push(AnnotatedRangeConstraint {
-                                constraint: RangeConstraint {
-                                    param_name: "dim".to_string(),
-                                    description: format!("dim must be < {} (observed: {}-dim accepted)", val, val),
-                                    min: Some(1.0),
-                                    max: Some((val - 1) as f64),
-                                    violation_examples: vec![val.to_string()],
-                                },
-                                endpoint: obs.endpoint.clone(),
-                                source: ConstraintSource::ObservedBehavior,
-                                confidence: Confidence::High,
-                            });
-                        }
-                    } else if obs.param_name == "collectionName" {
-                        store.type_constraints.push(AnnotatedTypeConstraint {
-                            constraint: TypeConstraint {
-                                param_name: "collectionName".to_string(),
-                                expected_type: "string_with_max_length".to_string(),
-                                violation_examples: vec!["256_char_name".to_string()],
-                            },
-                            endpoint: obs.endpoint.clone(),
-                            source: ConstraintSource::ObservedBehavior,
-                            confidence: Confidence::High,
-                        });
-                    } else {
-                        store.type_constraints.push(AnnotatedTypeConstraint {
-                            constraint: TypeConstraint {
-                                param_name: obs.param_name.clone(),
-                                expected_type: format!(
-                                    "observed: {} should {} but actually {}",
-                                    obs.param_name, obs.expected_behavior, obs.actual_behavior
-                                ),
-                                violation_examples: vec![obs.observed_value.clone()],
-                            },
-                            endpoint: obs.endpoint.clone(),
-                            source: ConstraintSource::ObservedBehavior,
-                            confidence: Confidence::High,
-                        });
-                    }
-                }
+                DefectKind::IllegalSuccess => {}
                 DefectKind::SequenceViolation | DefectKind::DifferentialMismatch | DefectKind::MetamorphicViolation | DefectKind::StateLogicViolation => {
                     store.type_constraints.push(AnnotatedTypeConstraint {
                         constraint: TypeConstraint {
@@ -378,9 +322,10 @@ impl ResultAnalyzer {
                             ),
                             violation_examples: vec![obs.observed_value.clone()],
                         },
-                        endpoint: obs.endpoint.clone(),
+                        endpoint: Some(obs.endpoint.clone()),
                         source: ConstraintSource::ObservedBehavior,
                         confidence: Confidence::High,
+                        rejection_policy: Some(RejectionPolicy::Reject),
                     });
                 }
                 DefectKind::Unknown => {}
@@ -393,11 +338,6 @@ impl ResultAnalyzer {
         new_count
     }
 
-    fn extract_dim_from_description(desc: &str) -> Option<usize> {
-        let re = regex::Regex::new(r"(\d+)-dim").ok()?;
-        let caps = re.captures(desc)?;
-        caps.get(1)?.as_str().parse::<usize>().ok()
-    }
 }
 
 #[cfg(test)]
@@ -495,10 +435,7 @@ mod tests {
         }];
         let new_count = ResultAnalyzer::assimilate_batch(&mut store, &defects);
         assert_eq!(new_count, 1);
-        assert!(store.range_constraints.iter().any(|arc| {
-            arc.constraint.param_name == "dim"
-                && arc.source == ConstraintSource::ObservedBehavior
-        }));
+        assert!(store.range_constraints.is_empty());
         assert_eq!(store.observed_behaviors.len(), 1);
     }
 
@@ -532,17 +469,10 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_dim_from_description() {
-        assert_eq!(ResultAnalyzer::extract_dim_from_description("32768-dim collection created"), Some(32768));
-        assert_eq!(ResultAnalyzer::extract_dim_from_description("0-dim collection created"), Some(0));
-        assert_eq!(ResultAnalyzer::extract_dim_from_description("no dimension info"), None);
-    }
-
-    #[test]
     fn test_parse_from_script_boundary_search_offset() {
         let script = r#"body["offset"] = 0; r = requests.post(f'{BASE}/collections/{c}/points/search', json=body)"#;
         let (ep, param) = ResultAnalyzer::parse_from_script(script);
-        assert_eq!(ep, "/search");
+        assert_eq!(ep, "search");
         assert_eq!(param, "offset");
     }
 
@@ -550,7 +480,7 @@ mod tests {
     fn test_parse_from_script_boundary_create_size() {
         let script = r#"r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":0,"distance":"Cosine"}})"#;
         let (ep, param) = ResultAnalyzer::parse_from_script(script);
-        assert_eq!(ep, "/create_collection");
+        assert_eq!(ep, "create_collection");
         assert_eq!(param, "vectors.size");
     }
 
@@ -582,7 +512,8 @@ mod tests {
                 exit_success: false,
             },
         ];
-        let clusters = ResultAnalyzer::cluster_defects(&defects);
+        let store = ContractStore::new("test", "1.0");
+        let clusters = ResultAnalyzer::cluster_defects(&defects, &store);
         // offset cluster (2 instances) + limit cluster (1 instance) = 2 clusters
         assert_eq!(clusters.len(), 2);
         let offset_cluster = clusters.iter().find(|c| c.exemplar.param_name.as_deref() == Some("offset")).unwrap();

@@ -1,6 +1,7 @@
 pub mod classifier;
 pub mod engine;
 pub mod executor;
+pub mod harness;
 pub mod llm;
 pub mod oracle;
 pub mod orchestrator;

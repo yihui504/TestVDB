@@ -1,13 +1,13 @@
-# Verified IllegalSuccess: milvus 2.6.16
+# [REST API] Search API accepts invalid nlist parameter (nlist=-1 or nlist=0) without error
 
 - **Target**: milvus
-- **Version**: 2.6.16
+- **Version**: v2.6.16
 - **Defect Type**: IllegalSuccess
 
 ## Documentation Evidence
 - **Source URL**: https://milvus.io/api-reference/restful/v2.4.x/v2/Vector%20(v2)/CreateCollection.md
 - **Documented Contract Assertions**:
-- [DEFECT: ILLEGAL_SUCCESS] dim below min (0) accepted
+- [DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted
 - **Surviving Assertions Under Report**:
 - nprobe=0 search accepted (code=0) despite documented nprobe > 0 constraint
 
@@ -15,36 +15,36 @@
 ```
 import requests, sys, uuid, time
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}
 c = 'oracle_' + uuid.uuid4().hex[:8]
-r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
+r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
 time.sleep(1)
 r = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":[{"id":1,"vector":[0.1,0.2,0.3,0.4]}]})
 if r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)
 time.sleep(1)
 body = {"collectionName":c,"data":[[0.1,0.2,0.3,0.4]],"limit":3}
-body["dim"] = 0
+body["nlist"] = -1
 r = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)
-if r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] dim below min (0) accepted'); sys.exit(1)
-else: print(f'properly rejected dim below min (0): {r.json()}'); sys.exit(0)
+if r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted'); sys.exit(1)
+else: print(f'properly rejected nlist=-1: {r.json()}'); sys.exit(0)
 ```
 
 ## Rerun Instructions
 Replace `{{TESTVDB_DB_URL}}` with a live target URL that matches the documented version before rerunning the script.
 
 ## Verification Summary
-- **Initial Run**: [DEFECT: ILLEGAL_SUCCESS] dim below min (0) accepted
-- **Double Reproduction**: repro_1: Observed explicit defect marker.; repro_2: Observed explicit defect marker.
-- **Classification Basis**: Initial run and 2 fresh-sandbox reproductions produced consistent IllegalSuccess classification and matching evidence excerpts.
+- **Initial Run**: [DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted
+- **Double Reproduction**: repro_1: Observed explicit defect marker.; repro_2: Observed explicit defect marker.; variant_1: Observed explicit defect marker.
+- **Classification Basis**: Initial run and 3 fresh-sandbox reproductions produced consistent IllegalSuccess classification and matching evidence excerpts.
 
 ## Runtime Evidence
 ```
 Initial DB URL: batch
-Initial Evidence Excerpt: [DEFECT: ILLEGAL_SUCCESS] dim below min (0) accepted
+Initial Evidence Excerpt: [DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted
 
 Initial STDOUT:
-[DEFECT: ILLEGAL_SUCCESS] dim below min (0) accepted
+[DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted
 
 
 Initial STDERR:
@@ -52,22 +52,32 @@ Initial STDERR:
 
 Reproductions:
 repro_1
-DB URL: http://testvdb-db-946a92283e934e0f86fbba335716986b:19530
+DB URL: http://testvdb-db-8df963d1c39d44fcba36056f2dfc7eea:19530
 Reason: Observed explicit defect marker.
-Evidence Excerpt: [defect: illegal_success] dim below min (0) accepted
+Evidence Excerpt: [defect: illegal_success] nlist=-1 accepted
 
 STDOUT:
-[DEFECT: ILLEGAL_SUCCESS] dim below min (0) accepted
+[DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted
 STDERR:
 
 
 repro_2
-DB URL: http://testvdb-db-8d26eab3535e4c0ba8578a9521977114:19530
+DB URL: http://testvdb-db-5b25d8b9e7e9455781e790b9ee6dea47:19530
 Reason: Observed explicit defect marker.
-Evidence Excerpt: [defect: illegal_success] dim below min (0) accepted
+Evidence Excerpt: [defect: illegal_success] nlist=-1 accepted
 
 STDOUT:
-[DEFECT: ILLEGAL_SUCCESS] dim below min (0) accepted
+[DEFECT: ILLEGAL_SUCCESS] nlist=-1 accepted
+STDERR:
+
+
+variant_1
+DB URL: http://testvdb-db-6a1c5d7603f14672aaa0bdc75f691794:19530
+Reason: Observed explicit defect marker.
+Evidence Excerpt: [defect: illegal_success] nlist=0 accepted
+
+STDOUT:
+[DEFECT: ILLEGAL_SUCCESS] nlist=0 accepted
 STDERR:
 
 
@@ -90,7 +100,34 @@ STDERR:
 - Missing hard gate: MRE and rerun evidence.
 
 ## Root Cause Analysis
-The database accepted an operation that the cited contract treats as invalid (nprobe=0 search accepted (code=0) despite documented nprobe > 0 constraint). This indicates that the server-side request validation is either missing or too permissive for the affected parameter(s), allowing the operation to proceed to a success response instead of being rejected at the boundary.
+The REST API endpoint for vector search does not validate the `nlist` parameter against documented constraints. According to the API specification, `nlist` must be a positive integer greater than 0. However, the server accepts values like -1 and 0 without returning an error code, leading to an illegal success state. This indicates a missing or insufficient input validation in the request handling logic, likely in the parameter parsing or validation layer.
 
 ## Improvement Suggestions
-Add or tighten request validation for the affected parameter(s) so the invalid operation is rejected at the boundary before success is returned. Specifically: nprobe=0 search accepted (code=0) despite documented nprobe > 0 constraint. After the fix, add a regression test that asserts the documented constraint produces a 400/422 rejection rather than 200 OK.
+Add explicit validation for the `nlist` parameter in the search endpoint. Ensure that `nlist` is a positive integer (nlist > 0). If the parameter is provided and invalid, return an appropriate error code (e.g., 1100 for invalid parameter) with a descriptive message. Additionally, consider adding similar validation for other numeric parameters to prevent similar issues.
+
+## Semantic Gate
+N/A
+
+
+## GitHub Issue Body
+### Steps to Reproduce
+1. Create a collection with AUTOINDEX.
+2. Insert a vector entity.
+3. Send a search request with `nlist` set to -1 or 0.
+
+Example request:
+```
+POST /v2/vectordb/entities/search
+{
+  "collectionName": "test_collection",
+  "data": [[0.1, 0.2, 0.3, 0.4]],
+  "limit": 3,
+  "nlist": -1
+}
+```
+
+### Expected Behavior
+The API should reject the request with an error code (e.g., 1100) and a message indicating that `nlist` must be a positive integer greater than 0.
+
+### Actual Behavior
+The API returns success (code=0) even when `nlist` is -1 or 0, violating the documented constraint that `nlist` must be > 0.

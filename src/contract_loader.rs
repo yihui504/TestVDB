@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 use std::collections::{HashMap, HashSet};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use anyhow::Context;
 
 use crate::agent::llm::{DeepSeekClient, Message};
@@ -681,11 +681,15 @@ Your task is to read the provided Markdown documentation and parameter list, the
 - "[CREATE] metricType must be one of: L2, IP, COSINE, HAMMING, JACCARD"
 - "[SEARCH] offset must be >= 0"
 - "[INSERT] vector dimension must match collection dimension"
+- "[SEARCH] nprobe rejection_policy=ignore (server silently ignores invalid nprobe)"
+- "[CREATE] dimension rejection_policy=reject (server rejects invalid dimension)"
+- "[SEARCH] searchParams nested: [nprobe, ef]"
 
 ### INCORRECT (do NOT extract):
 - "it is recommended to use nlist=128" → SOFT RECOMMENDATION (skip)
 - "you can set limit to 10" → CODE EXAMPLE inference (skip)
 - "typically offset defaults to 0" → default behavior description (skip)
+- "nprobe can be set to any value" → no constraint, just a description (skip)
 
 ## Schema
 Do NOT wrap the JSON in Markdown code blocks.
@@ -701,14 +705,20 @@ The JSON must exactly match the following schema:
     },
     "assertions": [
         "string (HARD constraints only, e.g., 'limit must be > 0')"
-    ]
+    ],
+    "rejection_policies": {
+        "param_name": "reject or ignore - whether the server rejects invalid values (reject) or silently ignores them (ignore). Default is reject. Use ignore for search/query params that the server silently ignores when invalid."
+    },
+    "nested_params": {
+        "parent_param": ["child_param1", "child_param2"] - nested JSON structure, e.g., searchParams contains nprobe, ef"
+    }
 }
 
 ## Confidence
 For each assertion, ask yourself: "Is this constraint explicitly stated in the prose, or am I inferring it from a code example?" If you are inferring, do NOT include it.
 "#;
 
-pub async fn run_extract(target: &str, docs_url: &str, out_dir: &str) -> anyhow::Result<()> {
+pub async fn run_extract(target: &str, docs_url: &str, out_dir: &str, llm_client: &DeepSeekClient) -> anyhow::Result<()> {
     info!("Starting contract extraction for target: {}", target);
     fs::create_dir_all(out_dir)?;
 
@@ -810,8 +820,7 @@ pub async fn run_extract(target: &str, docs_url: &str, out_dir: &str) -> anyhow:
         .collect::<Vec<_>>()
         .join("\n\n---\n\n");
 
-    let llm_client = DeepSeekClient::new()
-        .map_err(|e| anyhow::anyhow!("Failed to initialize LLM client: {}. Please set DEEPSEEK_API_KEY.", e))?;
+    // llm_client is now provided by the caller via parameter
 
     // ── Phase 1: Extract parameter list ──
     info!("Phase 1: Extracting parameter list from {} pages...", all_pages.len());
@@ -1055,6 +1064,66 @@ pub fn build_contract_store(
         }
     }
 
+    let mut ignore_count = 0u32;
+    let mut total_checked = 0u32;
+    for atc in store.type_constraints.iter_mut() {
+        if atc.rejection_policy == Some(contract::schema::RejectionPolicy::Reject) {
+            total_checked += 1;
+            if let Some(ep) = &atc.endpoint {
+                let ep_short = ep.rsplit('/').next().unwrap_or(ep);
+                let param_short = atc.constraint.param_name.rsplit('.').next().unwrap_or(&atc.constraint.param_name);
+                let qualified = format!("{}.{}", ep_short, param_short);
+                if let Some(policy) = contract.rejection_policies.get(&qualified)
+                    .or_else(|| contract.rejection_policies.get(&atc.constraint.param_name))
+                    .or_else(|| contract.rejection_policies.get(param_short))
+                {
+                    if *policy == contract::schema::RejectionPolicy::Ignore {
+                        ignore_count += 1;
+                    }
+                    atc.rejection_policy = Some(policy.clone());
+                }
+            }
+        }
+    }
+
+    for arc in store.range_constraints.iter_mut() {
+        if arc.rejection_policy == Some(contract::schema::RejectionPolicy::Reject) {
+            total_checked += 1;
+            if let Some(ep) = &arc.endpoint {
+                let ep_short = ep.rsplit('/').next().unwrap_or(ep);
+                let param_short = arc.constraint.param_name.rsplit('.').next().unwrap_or(&arc.constraint.param_name);
+                let qualified = format!("{}.{}", ep_short, param_short);
+                if let Some(policy) = contract.rejection_policies.get(&qualified)
+                    .or_else(|| contract.rejection_policies.get(&arc.constraint.param_name))
+                    .or_else(|| contract.rejection_policies.get(param_short))
+                {
+                    if *policy == contract::schema::RejectionPolicy::Ignore {
+                        ignore_count += 1;
+                    }
+                    arc.rejection_policy = Some(policy.clone());
+                }
+            }
+        }
+    }
+    debug!("Rejection policy propagation: {}/{} constraints updated to Ignore after OpenAPI merge", ignore_count, total_checked);
+
+    let mut filtered_required = 0u32;
+    let filtered: std::collections::HashMap<String, Vec<String>> = store.required_params.iter()
+        .map(|(endpoint, params)| {
+            let kept: Vec<String> = params.iter()
+                .filter(|param| store.get_rejection_policy(param, endpoint) != contract::schema::RejectionPolicy::Ignore)
+                .cloned()
+                .collect();
+            filtered_required += (params.len() - kept.len()) as u32;
+            (endpoint.clone(), kept)
+        })
+        .filter(|(_, params)| !params.is_empty())
+        .collect();
+    store.required_params = filtered;
+    if filtered_required > 0 {
+        debug!("Filtered {} required_params with rejection_policy=Ignore", filtered_required);
+    }
+
     store
 }
 
@@ -1112,6 +1181,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let report = cross_validate_with_openapi(&mut contract, "test", &openapi_path);
@@ -1166,6 +1237,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let report = cross_validate_with_openapi(&mut contract, "test", &openapi_path);
@@ -1215,6 +1288,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let report = cross_validate_with_openapi(&mut contract, "test", &openapi_path);
@@ -1260,6 +1335,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let report = cross_validate_with_openapi(&mut contract, "test", &openapi_path);

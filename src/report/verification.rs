@@ -1,15 +1,50 @@
 use crate::agent::classifier::{ClassificationDisposition, analyze_execution_result};
 use crate::agent::sandbox_runner::{run_script_in_fresh_sandbox, refresh_candidate_evidence_with_mre, run_additional_reproduction};
 use crate::report::generator::{BugReport, CandidateDefect, CandidateStatus};
+use crate::agent::llm::DeepSeekClient;
 use crate::report::llm_analysis::{analyze_defect_with_llm, generate_verification_variant, optimize_defect_report};
 use crate::report::semantic_gate::{self, ParamEffect};
 use crate::sandbox::manager::SidecarSpec;
 use crate::target::TargetPlugin;
 use crate::review::IndependentReviewer;
 use crate::sandbox::manager::Sandbox;
+use std::fs::OpenOptions;
+use std::io::Write;
 use tracing::{info, warn};
 
+struct ReviewerLog;
+
+impl ReviewerLog {
+    fn log_entry(target: &str, defect_type: &str, phase: &str, passed: bool, detail: &str) {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        let status = if passed { "PASS" } else { "FAIL" };
+        let line = format!(
+            "[{}] [{}] [{}] {} | {}: {}\n",
+            timestamp, target, defect_type, phase, status, detail
+        );
+        if let Ok(mut file) = OpenOptions::new().create(true).append(true).open("reviewer.log") {
+            let _ = writeln!(file, "{}", line.trim_end());
+        }
+        info!("ReviewerLog: {}", line.trim_end());
+    }
+
+    fn log_variant(target: &str, defect_type: &str, variant_desc: &str, confirmed: bool) {
+        let status = if confirmed { "CONFIRMED" } else { "NOT_CONFIRMED" };
+        Self::log_entry(target, defect_type, "variant_test", confirmed, &format!("variant_desc={}, result={}", variant_desc, status));
+    }
+
+    fn log_independent_review(target: &str, defect_type: &str, passed: bool, summary: &str) {
+        Self::log_entry(target, defect_type, "independent_review", passed, summary);
+    }
+
+    fn log_final_verdict(target: &str, defect_type: &str, passed: bool, reason: &str) {
+        let verdict = if passed { "ISSUE_GENERATED" } else { "NEEDS_REVIEW" };
+        Self::log_entry(target, defect_type, "final_verdict", passed, &format!("verdict={}, reason={}", verdict, reason));
+    }
+}
+
 pub async fn verify_candidate_defect(
+    llm_client: &DeepSeekClient,
     candidate: &mut CandidateDefect,
     script_code: &str,
     db_image: &str,
@@ -74,15 +109,14 @@ pub async fn verify_candidate_defect(
         }
     }
 
-    if candidate.initial_run.exit_success
-        && defect_type != crate::agent::classifier::DefectType::Pass
-        && defect_type != crate::agent::classifier::DefectType::ScriptError
-    {
+    if candidate.initial_run.exit_success {
         warn!(
             "MRE effectiveness gate: initial run classified as {:?} but script exited with code 0 (exit_success=true). MRE may not effectively demonstrate the defect.",
             defect_type
         );
     }
+
+    let auth_header = plugin.auth_header_value().unwrap_or("");
 
     for phase in ["repro_1", "repro_2"] {
         let run = run_script_in_fresh_sandbox(
@@ -94,9 +128,11 @@ pub async fn verify_candidate_defect(
             sidecars,
             db_env,
             db_command,
+            None,
+            auth_header,
         )
         .await?;
-        let repro_classification = analyze_execution_result(&run.stdout, &run.stderr);
+        let repro_classification = analyze_execution_result(&run.stdout, &run.stderr, None);
 
         if repro_classification.disposition != ClassificationDisposition::CandidateDefect
             || repro_classification.defect_type.as_ref() != Some(&defect_type)
@@ -105,6 +141,7 @@ pub async fn verify_candidate_defect(
                 info!("repro_1 failed deterministic classification. Invoking LLM root cause analysis...");
                 let defect_type_str = format!("{:?}", defect_type);
                 let llm_analysis = analyze_defect_with_llm(
+                    llm_client,
                     &run.stdout, &run.stderr, &defect_type_str, &effective_script,
                 ).await;
 
@@ -143,6 +180,7 @@ pub async fn verify_candidate_defect(
             info!("repro_1 passed but stderr contains Traceback. Invoking LLM analysis to fix script...");
             let defect_type_str = format!("{:?}", defect_type);
             let llm_analysis = analyze_defect_with_llm(
+                llm_client,
                 &run.stdout, &run.stderr, &defect_type_str, &effective_script,
             ).await;
 
@@ -167,21 +205,54 @@ pub async fn verify_candidate_defect(
     info!("Generating LLM verification variant for enhanced reproducibility check...");
     let defect_type_str = format!("{:?}", candidate.defect_type);
     let evidence_excerpt = candidate.initial_run.classifier_evidence_excerpt.clone();
-    if let Ok(variant) = generate_verification_variant(
+    let variant_result = generate_verification_variant(
+        llm_client,
         &candidate.mre_code, &defect_type_str, &evidence_excerpt,
-    ).await {
-        info!("LLM generated verification variant: {}", variant.variant_description);
-        let variant_run = run_script_in_fresh_sandbox(
-            db_image, pip_packages, db_port, &variant.variant_script,
-            "variant_1", sidecars, db_env, db_command,
-        ).await?;
-        let variant_classification = analyze_execution_result(&variant_run.stdout, &variant_run.stderr);
-        if variant_classification.disposition == ClassificationDisposition::CandidateDefect {
-            info!("Variant verification CONFIRMED the defect with different parameters!");
-            candidate.reproduction_runs.push(variant_run);
-        } else {
-            info!("Variant verification did not confirm defect (may be different manifestation). Continuing with original reproducibility.");
+    ).await;
+    match variant_result {
+        Ok(variant) => {
+            info!("LLM generated verification variant: {}", variant.variant_description);
+            let variant_run = run_script_in_fresh_sandbox(
+                db_image, pip_packages, db_port, &variant.variant_script,
+                "variant_1", sidecars, db_env, db_command, None, auth_header,
+            ).await?;
+            let variant_classification = analyze_execution_result(&variant_run.stdout, &variant_run.stderr, None);
+            if variant_classification.disposition == ClassificationDisposition::CandidateDefect {
+                info!("Variant verification CONFIRMED the defect with different parameters!");
+                candidate.reproduction_runs.push(variant_run);
+                ReviewerLog::log_variant(target, &defect_type_str, &variant.variant_description, true);
+            } else {
+                info!("Variant verification did not confirm defect (may be different manifestation). Continuing with original reproducibility.");
+                ReviewerLog::log_variant(target, &defect_type_str, &variant.variant_description, false);
+            }
         }
+        Err(e) => {
+            warn!("Failed to generate verification variant: {}. Continuing without variant test.", e);
+            ReviewerLog::log_entry(target, &defect_type_str, "variant_test", false, &format!("generation_failed: {}", e));
+        }
+    }
+
+    if let Some(corrected) = plugin.correct_mre_api_params(&effective_script, &defect_type) {
+        info!("ApiParamGate: corrected MRE script generated, running in fresh sandbox to check for false positive...");
+        let corrected_run = run_script_in_fresh_sandbox(
+            db_image, pip_packages, db_port, &corrected,
+            "api_param_gate", sidecars, db_env, db_command, None, auth_header,
+        ).await?;
+        let corrected_classification = analyze_execution_result(&corrected_run.stdout, &corrected_run.stderr, None);
+        if corrected_classification.disposition != ClassificationDisposition::CandidateDefect {
+            candidate.status = CandidateStatus::Rejected;
+            candidate.downgrade_reason = Some(
+                "ApiParamGate: corrected script (with proper API parameters) no longer reproduces the defect. Likely false positive from missing API parameters.".to_string(),
+            );
+            let candidate_path = format!("{}_candidate_defect.md", target);
+            BugReport::export_candidate_to_markdown(candidate, &candidate_path)?;
+            warn!(
+                "Candidate rejected by ApiParamGate. Corrected script did not reproduce defect. Saved to {}",
+                candidate_path
+            );
+            return Ok(VerificationOutcome::Rejected(candidate.downgrade_reason.clone().unwrap_or_default()));
+        }
+        info!("ApiParamGate: corrected script still reproduces defect. Continuing normal verification.");
     }
 
     let reviewer_opt: Option<Box<dyn IndependentReviewer>> = plugin.create_reviewer();
@@ -198,36 +269,41 @@ pub async fn verify_candidate_defect(
         let probe_result = match reviewer.run_probe(&review_sandbox, db_port).await {
             Ok(v) => v,
             Err(err) => {
-                candidate.status = CandidateStatus::Rejected;
-                candidate.downgrade_reason = Some(format!(
+                candidate.status = CandidateStatus::NeedsReview;
+                let reason = format!(
                     "Independent developer-side review could not complete cleanly: {}",
                     err
-                ));
+                );
+                candidate.downgrade_reason = Some(reason.clone());
+                ReviewerLog::log_independent_review(target, &defect_type_str, false, &reason);
+                ReviewerLog::log_final_verdict(target, &defect_type_str, false, "independent_review_probe_failed");
+
                 let candidate_path = format!("{}_candidate_defect.md", target);
                 BugReport::export_candidate_to_markdown(candidate, &candidate_path)?;
                 warn!(
-                    "Candidate defect downgraded because independent review could not complete cleanly. Saved candidate artifact to {}",
+                    "Candidate defect marked NEEDS_REVIEW because independent review could not complete cleanly. Saved candidate artifact to {}",
                     candidate_path
                 );
                 return Ok(VerificationOutcome::Rejected(candidate.downgrade_reason.clone().unwrap_or_default()));
             }
         };
         let independent_review = reviewer.summarize_findings(&probe_result);
-        let Some((reviewed_defect_type, validated_issues)) = independent_review else {
-            candidate.status = CandidateStatus::Rejected;
-            candidate.downgrade_reason = Some(
-                "Independent developer-side review did not confirm any remaining issue.".to_string(),
-            );
+        let Some((_reviewed_defect_type, validated_issues)) = independent_review else {
+            candidate.status = CandidateStatus::NeedsReview;
+            let reason = "Independent developer-side review did not confirm any remaining issue.".to_string();
+            candidate.downgrade_reason = Some(reason.clone());
+            ReviewerLog::log_independent_review(target, &defect_type_str, false, &reason);
+            ReviewerLog::log_final_verdict(target, &defect_type_str, false, "independent_review_no_issues_confirmed");
+
             let candidate_path = format!("{}_candidate_defect.md", target);
             BugReport::export_candidate_to_markdown(candidate, &candidate_path)?;
             warn!(
-                "Candidate defect downgraded after independent review rejected the conclusion. Saved candidate artifact to {}",
+                "Candidate defect marked NEEDS_REVIEW after independent review rejected the conclusion. Saved candidate artifact to {}",
                 candidate_path
             );
             return Ok(VerificationOutcome::Rejected(candidate.downgrade_reason.clone().unwrap_or_default()));
         };
-        candidate.defect_type = reviewed_defect_type;
-        candidate.surviving_assertions = validated_issues;
+        candidate.surviving_assertions = validated_issues.clone();
         candidate.independent_review_summary = Some(format!(
             "Independent developer-side replay confirmed the surviving issue subset: {}.",
             candidate.surviving_assertions.join("; ")
@@ -235,6 +311,7 @@ pub async fn verify_candidate_defect(
         candidate.review_scope = Some(
             format!("Fresh independent replay covered collection creation, seed insert, and the narrowed {} search assertions outside the LLM-generated script.", candidate.target)
         );
+        ReviewerLog::log_independent_review(target, &defect_type_str, true, &format!("surviving_assertions={}", validated_issues.len()));
         if candidate.defect_type == crate::agent::classifier::DefectType::PoorDiagnostics {
             candidate.mre_code =
                 crate::review::qdrant::build_qdrant_search_poor_diagnostics_mre(&candidate.surviving_assertions);
@@ -246,6 +323,8 @@ pub async fn verify_candidate_defect(
                 sidecars,
                 db_env,
                 db_command,
+                None,
+                auth_header,
             )
             .await?
             {
@@ -268,6 +347,8 @@ pub async fn verify_candidate_defect(
             sidecars,
             db_env,
             db_command,
+            None,
+            auth_header,
         )
         .await?
         {
@@ -289,6 +370,7 @@ pub async fn verify_candidate_defect(
     let defect_type_str = format!("{:?}", report.defect_type);
     let evidence_excerpt = report.runtime_evidence.chars().take(2000).collect::<String>();
     if let Ok(optimized) = optimize_defect_report(
+        llm_client,
         &defect_type_str,
         &report.surviving_assertions,
         &report.mre_code,
@@ -310,6 +392,8 @@ pub async fn verify_candidate_defect(
     for reason in &report.submission_grade_review.direct_fail_reasons {
         warn!("Submission-grade review fail reason: {}", reason);
     }
+
+    ReviewerLog::log_final_verdict(target, &defect_type_str, true, "issue_generated");
 
     Ok(VerificationOutcome::Verified(report))
 }

@@ -1,4 +1,5 @@
 use super::{SafetyNet, TargetPlugin, TargetStyle};
+use crate::agent::classifier::DefectType;
 use crate::agent::oracle::{InvariantCheck, InvariantSource};
 use crate::agent::probe::{
     classify_endpoint_type, count_consistency_check, create_probe,
@@ -1048,10 +1049,58 @@ print(f'large limit OK: {len(results)} <= 3'); sys.exit(0)"#.to_string(),
     fn probe_template(&self) -> &dyn ProbeTemplate {
         &QdrantProbeTemplate
     }
+
+    fn correct_mre_api_params(&self, mre_code: &str, defect_type: &DefectType) -> Option<String> {
+        if !matches!(defect_type, DefectType::StateLogicViolation | DefectType::PoorDiagnostics) {
+            return None;
+        }
+
+        let has_search = mre_code.contains("/points/search") || mre_code.contains("/points/scroll");
+        if !has_search {
+            return None;
+        }
+
+        let lower = mre_code.to_lowercase();
+        let accesses_payload = lower.contains(".get('payload'") || lower.contains(".get(\"payload\"") || lower.contains("['payload']") || lower.contains("[\"payload\"]") || lower.contains("payload") && (lower.contains("none") || lower.contains("missing") || lower.contains("absent") || lower.contains("null") || lower.contains("empty"));
+        let accesses_vector = lower.contains(".get('vector'") || lower.contains(".get(\"vector\"") || lower.contains("['vector']") || lower.contains("[\"vector\"]") || lower.contains("vector") && (lower.contains("none") || lower.contains("missing") || lower.contains("absent") || lower.contains("null"));
+
+        if !accesses_payload && !accesses_vector {
+            return None;
+        }
+
+        let mut corrected = mre_code.to_string();
+
+        if accesses_payload && !lower.contains("with_payload") {
+            corrected = insert_before_key(&corrected, "limit", "\"with_payload\": True");
+        }
+
+        if accesses_vector && !lower.contains("with_vector") {
+            corrected = insert_before_key(&corrected, "limit", "\"with_vector\": True");
+        }
+
+        if corrected != mre_code {
+            Some(corrected)
+        } else {
+            None
+        }
+    }
 }
 
 fn check_key(check: &InvariantCheck) -> String {
     check.name.to_lowercase()
+}
+
+fn insert_before_key(code: &str, key: &str, insertion: &str) -> String {
+    let pattern = format!("\"{}\"", key);
+    if let Some(pos) = code.find(&pattern) {
+        let mut result = code[..pos].to_string();
+        result.push_str(insertion);
+        result.push_str(", ");
+        result.push_str(&code[pos..]);
+        result
+    } else {
+        code.to_string()
+    }
 }
 
 struct OracleCheckDeriver;
@@ -1357,6 +1406,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let checks = OracleCheckDeriver::from_range_constraints(&contract);
@@ -1383,6 +1434,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let checks = OracleCheckDeriver::from_range_constraints(&contract);
@@ -1408,6 +1461,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let checks = OracleCheckDeriver::from_range_constraints(&contract);
@@ -1435,6 +1490,8 @@ mod tests {
                 supersedes: None,
                 mutation_rules: vec![],
             }],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
 
         };
 
@@ -1463,6 +1520,8 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let checks = plugin.derive_oracle_checks(&contract);
@@ -1497,6 +1556,8 @@ mod tests {
                 supersedes: Some("count_check".to_string()),
                 mutation_rules: vec![],
             }],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
 
         let checks = plugin.derive_oracle_checks(&contract);
@@ -1532,6 +1593,53 @@ mod tests {
         assert_eq!(format_boundary(1.0), "1");
         assert_eq!(format_boundary(-1.0), "-1");
         assert_eq!(format_boundary(2.5), "2.5");
+    }
+
+    #[test]
+    fn test_correct_mre_api_params_detects_get_with_default() {
+        let plugin = QdrantPlugin;
+        let mre_with_default = r#"import requests, sys, uuid, time
+BASE = '{{TESTVDB_DB_URL}}'
+c = 'test_' + uuid.uuid4().hex[:8]
+r = requests.post(f'{BASE}/collections/{c}/points/search', json={"vector":[0.5,0.5,0.5,0.5], "limit":10, "filter":{"must":[{"key":"color","match":{"value":"red"}}]}})
+results = r.json().get('result', [])
+for h in results:
+    if h.get('payload', {}).get('color') != 'red':
+        print(f'[DEFECT: STATE_LOGIC_VIOLATION] filter color=red returned point with color={h.get("payload",{}).get("color")}')
+"#;
+        let result = plugin.correct_mre_api_params(mre_with_default, &DefectType::StateLogicViolation);
+        assert!(result.is_some(), "should detect .get('payload', {{}}) pattern and add with_payload");
+        let corrected = result.unwrap();
+        assert!(corrected.contains("with_payload"), "corrected script should contain with_payload: True");
+        assert!(!mre_with_default.contains("with_payload"), "original script should NOT contain with_payload");
+    }
+
+    #[test]
+    fn test_correct_mre_api_params_detects_get_without_default() {
+        let plugin = QdrantPlugin;
+        let mre_without_default = r#"import requests, sys, uuid, time
+BASE = '{{TESTVDB_DB_URL}}'
+c = 'test_' + uuid.uuid4().hex[:8]
+r = requests.post(f'{BASE}/collections/{c}/points/search', json={"vector":[0.5,0.5,0.5,0.5], "limit":10})
+results = r.json().get('result', [])
+for h in results:
+    if h.get('payload').get('color') != 'red':
+        print('[DEFECT: STATE_LOGIC_VIOLATION]')
+"#;
+        let result = plugin.correct_mre_api_params(mre_without_default, &DefectType::StateLogicViolation);
+        assert!(result.is_some(), "should detect .get('payload') pattern and add with_payload");
+    }
+
+    #[test]
+    fn test_correct_mre_api_params_no_search_no_correction() {
+        let plugin = QdrantPlugin;
+        let mre_no_search = r#"import requests, sys
+r = requests.put(f'{BASE}/collections/{c}/points', json={"points": points})
+if h.get('payload', {}).get('color') != 'red':
+    print('[DEFECT]')
+"#;
+        let result = plugin.correct_mre_api_params(mre_no_search, &DefectType::StateLogicViolation);
+        assert!(result.is_none(), "no search/scroll endpoint => no correction needed");
     }
 }
 

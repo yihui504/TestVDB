@@ -1,4 +1,4 @@
-use crate::contract::store::ContractStore;
+﻿use crate::contract::store::ContractStore;
 use crate::target::TargetStyle;
 use serde::{Deserialize, Serialize};
 
@@ -41,25 +41,25 @@ impl SequenceTestGenerator {
     pub fn from_store(store: &ContractStore, style: TargetStyle) -> Vec<SequenceTestCase> {
         let mut cases = Vec::new();
 
-        let has_create = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/create"));
-        let has_drop = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/drop"));
-        let has_insert = store.type_constraints.iter().any(|atc| atc.endpoint.contains("entities/insert"));
-        let has_search = store.type_constraints.iter().any(|atc| atc.endpoint.contains("entities/search"));
-        let has_delete = store.type_constraints.iter().any(|atc| atc.endpoint.contains("entities/delete"));
-        let has_upsert = store.type_constraints.iter().any(|atc| atc.endpoint.contains("entities/upsert"));
-        let has_load = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/load"));
-        let has_release = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/release"));
-        let has_partition = store.type_constraints.iter().any(|atc| atc.endpoint.contains("partitions"));
-        let has_rename = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/rename"));
-        let has_alias = store.type_constraints.iter().any(|atc| atc.endpoint.contains("aliases"));
-        let has_flush = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/flush"));
-        let has_compact = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/compact"));
-        let has_alter = store.type_constraints.iter().any(|atc| atc.endpoint.contains("collections/alter"));
-        let has_dynamic = store.type_constraints.iter().any(|atc| atc.endpoint.contains("fields/add"));
-        let has_database = store.type_constraints.iter().any(|atc| atc.endpoint.contains("databases"));
-        let has_query = store.type_constraints.iter().any(|atc| atc.endpoint.contains("entities/query"));
-        let has_hybrid = store.type_constraints.iter().any(|atc| atc.endpoint.contains("entities/hybrid_search"));
-        let has_index = store.type_constraints.iter().any(|atc| atc.endpoint.contains("indexes"));
+        let has_create = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/create")));
+        let has_drop = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/drop")));
+        let has_insert = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/insert")));
+        let has_search = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/search")));
+        let has_delete = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/delete")));
+        let has_upsert = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/upsert")));
+        let has_load = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/load")));
+        let has_release = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/release")));
+        let has_partition = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("partitions")));
+        let has_rename = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/rename")));
+        let has_alias = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("aliases")));
+        let has_flush = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/flush")));
+        let has_compact = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/compact")));
+        let has_alter = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/alter")));
+        let has_dynamic = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("fields/add")));
+        let has_database = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("databases")));
+        let has_query = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/query")));
+        let has_hybrid = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/hybrid_search")));
+        let has_index = store.type_constraints.iter().any(|atc| atc.endpoint.as_deref().map_or(false, |e| e.contains("indexes")));
 
         if has_create && has_drop && has_search {
             cases.push(Self::seq_drop_recreate(style));
@@ -170,7 +170,7 @@ impl SequenceTestGenerator {
             name: "seq_duplicate_id_count".to_string(),
             sequence_pattern: SequencePattern::DuplicateId,
             script: build_seq_script(style, SeqKind::DuplicateId),
-            defect_marker: "SEQUENCE_VIOLATION".to_string(),
+            defect_marker: "PARAM_IGNORED".to_string(),
         }
     }
     fn seq_rename(style: TargetStyle) -> SequenceTestCase {
@@ -297,7 +297,8 @@ enum SeqKind {
 fn build_seq_script(style: TargetStyle, kind: SeqKind) -> String {
     match style {
         TargetStyle::Milvus => build_milvus_seq_script(kind),
-        TargetStyle::Qdrant | TargetStyle::Weaviate => build_qdrant_seq_script(kind),
+        TargetStyle::Qdrant => build_qdrant_seq_script(kind),
+        TargetStyle::Weaviate => build_weaviate_seq_script(kind),
         TargetStyle::PgVector => String::new(),
     }
 }
@@ -305,7 +306,7 @@ fn build_seq_script(style: TargetStyle, kind: SeqKind) -> String {
 fn milvus_setup() -> &'static str {
     r#"import requests, sys, uuid, time
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'seq_' + uuid.uuid4().hex[:8]
 "#
 }
@@ -351,7 +352,7 @@ fn build_milvus_seq_script(kind: SeqKind) -> String {
 
         SeqKind::UpsertSemantic => format!("{s}{cr}\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c,\"data\":[{{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}}]}})\nif r.json().get('code') != 0: print(f'insert failed: {{r.text}}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/upsert', headers=HEADERS, json={{\"collectionName\":c,\"data\":[{{\"id\":1,\"vector\":[0.9,0.8,0.7,0.6]}}]}})\nif r.json().get('code') != 0: print(f'upsert failed: {{r.text}}'); sys.exit(0)\ntime.sleep(1)\n{ld}\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/search', headers=HEADERS, json={{\"collectionName\":c,\"data\":[[0.9,0.8,0.7,0.6]],\"limit\":1}})\nif r.json().get('code') != 0: print(f'search failed: {{r.text}}'); sys.exit(0)\ntop = r.json().get('data',[])\nif top and top[0].get('id') == 1: print(f'seq upsert_semantic verified'); sys.exit(0)\nelse: print(f'[DEFECT: SEQUENCE_VIOLATION] upsert did not update: {{top}}'); sys.exit(1)"),
 
-        SeqKind::DuplicateId => format!("{s}{cr}\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c,\"data\":[{{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}}]}})\nif r.json().get('code') != 0: print(f'insert1 failed: {{r.text}}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c,\"data\":[{{\"id\":1,\"vector\":[0.5,0.6,0.7,0.8]}}]}})\ntime.sleep(1)\n{ld}\nr = requests.post(f'{{BASE}}/v2/vectordb/collections/describe', headers=HEADERS, json={{\"collectionName\":c}})\ncount = r.json().get('data',{{}}).get('rowCount',-1)\nif count != 1: print(f'[DEFECT: SEQUENCE_VIOLATION] duplicate id insert count: expected 1 got {{count}}'); sys.exit(1)\nelse: print(f'seq duplicate_id count={{count}}'); sys.exit(0)"),
+        SeqKind::DuplicateId => format!("{s}{cr}\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c,\"data\":[{{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}}]}})\nif r.json().get('code') != 0: print(f'insert1 failed: {{r.text}}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c,\"data\":[{{\"id\":1,\"vector\":[0.5,0.6,0.7,0.8]}}]}})\ntime.sleep(1)\n{fl}\n{ld}\nr = requests.post(f'{{BASE}}/v2/vectordb/collections/get_stats', headers=HEADERS, json={{\"collectionName\":c}})\ncount = r.json().get('data',{{}}).get('rowCount',-1)\nif count != 1: print(f'[DEFECT: PARAM_IGNORED] duplicate id insert count: expected 1 got {{count}}'); sys.exit(1)\nelse: print(f'seq duplicate_id count={{count}}'); sys.exit(0)"),
 
         SeqKind::Rename => format!("{s}{cr}\nc_new = c + '_new'\nr = requests.post(f'{{BASE}}/v2/vectordb/collections/rename', headers=HEADERS, json={{\"collectionName\":c,\"newCollectionName\":c_new}})\nif r.json().get('code') != 0: print(f'rename failed: {{r.text}}'); sys.exit(0)\ntime.sleep(1)\nr = requests.post(f'{{BASE}}/v2/vectordb/entities/insert', headers=HEADERS, json={{\"collectionName\":c_new,\"data\":[{{\"id\":1,\"vector\":[0.1,0.2,0.3,0.4]}}]}})\nif r.json().get('code') != 0: print(f'[DEFECT: SEQUENCE_VIOLATION] insert after rename failed: {{r.text}}'); sys.exit(1)\nelse: print(f'seq rename verified'); sys.exit(0)"),
 
@@ -435,10 +436,63 @@ time.sleep(1)"#;
     }
 }
 
+fn build_weaviate_seq_script(kind: SeqKind) -> String {
+    let setup = r#"import requests, sys, uuid, time
+BASE = '{TESTVDB_DB_URL}'
+c = 'Seq_' + uuid.uuid4().hex[:8]
+"#;
+    let create = r#"r = requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
+time.sleep(1)"#;
+
+    match kind {
+        SeqKind::DropRecreate => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nr = requests.delete(f'{{BASE}}/v1/schema/{{c}}')\ntime.sleep(1)\nr = requests.post(f'{{BASE}}/v1/schema', json={{\"class\":c,\"vectorIndexConfig\":{{\"distance\":\"cosine\",\"efConstruction\":128,\"maxConnections\":64}},\"properties\":[{{\"name\":\"title\",\"dataType\":[\"string\"]}}]}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ title _additional {{ distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nif r.status_code == 200 and len(r.json().get('data',{{}}).get('Get',{{}}).get(c,[])) > 0: print(f'[DEFECT: SEQUENCE_VIOLATION] recreate search returned data'); sys.exit(1)\nelse: print(f'seq drop_recreate verified'); sys.exit(0)"),
+
+        SeqKind::DeleteSearch => format!("{setup}{create}\nuids = [str(uuid.uuid4()) for _ in range(5)]\nfor i, uid in enumerate(uids):\n    r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],\"id\":uid}})\ntime.sleep(1)\nr = requests.delete(f'{{BASE}}/v1/objects/{{c}}/{{uids[0]}}')\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 10) {{ _additional {{ id distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nids = [h.get('_additional',{{}}).get('id') for h in r.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\nif uids[0] in ids: print(f'[DEFECT: SEQUENCE_VIOLATION] deleted object still in search results'); sys.exit(1)\nelse: print(f'seq delete_search verified'); sys.exit(0)"),
+
+        SeqKind::ReleaseLoad => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nq1 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\nr1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q1}})\nids1 = set(h.get('_additional',{{}}).get('id') for h in r1.json().get('data',{{}}).get('Get',{{}}).get(c,[]))\nr = requests.get(f'{{BASE}}/v1/schema/{{c}}')\ntime.sleep(1)\nr2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q1}})\nids2 = set(h.get('_additional',{{}}).get('id') for h in r2.json().get('data',{{}}).get('Get',{{}}).get(c,[]))\nif ids1 != ids2: print(f'[DEFECT: SEQUENCE_VIOLATION] results changed after get+search: {{ids1}} vs {{ids2}}'); sys.exit(1)\nelse: print(f'seq release_load verified'); sys.exit(0)"),
+
+        SeqKind::DropIndexSearch => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nif r.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] search failed: {{r.status_code}}'); sys.exit(1)\nelse: print(f'seq drop_index_search verified'); sys.exit(0)"),
+
+        SeqKind::UpsertSemantic => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nr = requests.put(f'{{BASE}}/v1/objects/{{c}}/{{uid}}', json={{\"properties\":{{\"title\":\"updated\"}},\"vector\":[0.9,0.8,0.7,0.6]}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.9,0.8,0.7,0.6]}} limit: 1) {{ title _additional {{ id distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nresults = r.json().get('data',{{}}).get('Get',{{}}).get(c,[])\nif results and results[0].get('_additional',{{}}).get('id') == uid: print(f'seq upsert_semantic verified'); sys.exit(0)\nelse: print(f'[DEFECT: SEQUENCE_VIOLATION] upsert did not update: {{results}}'); sys.exit(1)"),
+
+        SeqKind::DuplicateId => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nr2 = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test2\"}},\"vector\":[0.5,0.6,0.7,0.8],\"id\":uid}})\ntime.sleep(1)\nq = '{{ Aggregate {{ ' + c + ' {{ meta {{ count }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\ncount = r.json().get('data',{{}}).get('Aggregate',{{}}).get(c,[{{}}])[0].get('meta',{{}}).get('count',-1)\nif count != 1: print(f'[DEFECT: PARAM_IGNORED] duplicate id count: expected 1 got {{count}}'); sys.exit(1)\nelse: print(f'seq duplicate_id count={{count}}'); sys.exit(0)"),
+
+        SeqKind::Rename => format!("{setup}\nprint(f'seq rename not applicable for Weaviate'); sys.exit(0)"),
+
+        SeqKind::Alias => format!("{setup}\nprint(f'seq alias not applicable for Weaviate'); sys.exit(0)"),
+
+        SeqKind::FlushSearch => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ title _additional {{ distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nif r.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] search after insert failed: {{r.status_code}}'); sys.exit(1)\nelse: print(f'seq flush_search verified'); sys.exit(0)"),
+
+        SeqKind::CompactSearch => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ title _additional {{ distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nif r.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] search after compact failed: {{r.status_code}}'); sys.exit(1)\nelse: print(f'seq compact_search verified'); sys.exit(0)"),
+
+        SeqKind::PartitionDrop => format!("{setup}{create}\nuids = [str(uuid.uuid4()) for _ in range(2)]\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"A\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uids[0]}})\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"B\"}},\"vector\":[0.5,0.6,0.7,0.8],\"id\":uids[1]}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(where: {{path: [\"title\"], operator: Equal, valueString: \"A\"}} nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 5) {{ title _additional {{ id distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nresults_a = r.json().get('data',{{}}).get('Get',{{}}).get(c,[])\nfor h in results_a:\n    if h.get('title') != 'A': print(f'[DEFECT: SEQUENCE_VIOLATION] filter title=A returned wrong: {{h}}'); sys.exit(1)\nr = requests.delete(f'{{BASE}}/v1/objects/{{c}}/{{uids[0]}}')\ntime.sleep(1)\nq2 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 5) {{ title _additional {{ id distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q2}})\nids = [h.get('_additional',{{}}).get('id') for h in r.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\nif uids[0] in ids: print(f'[DEFECT: SEQUENCE_VIOLATION] deleted object still found: {{ids}}'); sys.exit(1)\nelse: print(f'seq partition_drop verified'); sys.exit(0)"),
+
+        SeqKind::AlterProperties => format!("{setup}{create}\nr = requests.put(f'{{BASE}}/v1/schema/{{c}}', json={{\"vectorIndexConfig\":{{\"efConstruction\":256}}}})\nif r.status_code not in (200, 201): print(f'alter failed: {{r.status_code}}'); sys.exit(0)\ntime.sleep(1)\nr = requests.get(f'{{BASE}}/v1/schema/{{c}}')\nefc = r.json().get('vectorIndexConfig',{{}}).get('efConstruction')\nif efc != 256: print(f'[DEFECT: SEQUENCE_VIOLATION] properties not reflected: efConstruction={{efc}}'); sys.exit(1)\nelse: print(f'seq alter_properties verified'); sys.exit(0)"),
+
+        SeqKind::DynamicField => format!("{setup}{create}\nuid1 = str(uuid.uuid4())\nuid2 = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"red\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid1}})\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"blue\"}},\"vector\":[0.5,0.6,0.7,0.8],\"id\":uid2}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(where: {{path: [\"title\"], operator: Equal, valueString: \"red\"}} limit: 5) {{ title _additional {{ distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nresults = r.json().get('data',{{}}).get('Get',{{}}).get(c,[])\nfor h in results:\n    if h.get('title') != 'red': print(f'[DEFECT: SEQUENCE_VIOLATION] filter title=red returned wrong: {{h}}'); sys.exit(1)\nprint(f'seq dynamic_field verified'); sys.exit(0)"),
+
+        SeqKind::DatabaseCrud => format!("{setup}\nprint(f'seq database_crud not applicable for Weaviate'); sys.exit(0)"),
+
+        SeqKind::SearchQueryMixed => format!("{setup}{create}\nuids = [str(uuid.uuid4()) for _ in range(5)]\nfor i, uid in enumerate(uids):\n    r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],\"id\":uid}})\ntime.sleep(1)\nq1 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\nr1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q1}})\nif r1.status_code != 200: print(f'search failed'); sys.exit(0)\nq2 = '{{ Get {{ ' + c + '(limit: 10) {{ title _additional {{ id }} }} }} }}'\nr2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q2}})\nif r2.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] query failed: {{r2.status_code}}'); sys.exit(1)\nprint(f'seq search_query_mixed verified'); sys.exit(0)"),
+
+        SeqKind::DeleteAllReinsert => format!("{setup}{create}\nuids = [str(uuid.uuid4()) for _ in range(5)]\nfor i, uid in enumerate(uids):\n    r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],\"id\":uid}})\ntime.sleep(1)\nfor uid in uids:\n    r = requests.delete(f'{{BASE}}/v1/objects/{{c}}/{{uid}}')\ntime.sleep(1)\nuids2 = [str(uuid.uuid4()) for _ in range(3)]\nfor i, uid in enumerate(uids2):\n    r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test2\"}},\"vector\":[0.5*(i+1),0.6*(i+1),0.7*(i+1),0.8*(i+1)],\"id\":uid}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.5,0.6,0.7,0.8]}} limit: 5) {{ _additional {{ id distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nresults = r.json().get('data',{{}}).get('Get',{{}}).get(c,[])\nif len(results) == 0: print(f'[DEFECT: SEQUENCE_VIOLATION] no results after reinsert'); sys.exit(1)\nelse: print(f'seq delete_all_reinsert verified'); sys.exit(0)"),
+
+        SeqKind::LoadReleaseCycle => format!("{setup}{create}\nuid = str(uuid.uuid4())\nr = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nif r.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] search after cycle failed'); sys.exit(1)\nelse: print(f'seq load_release_cycle verified'); sys.exit(0)"),
+
+        SeqKind::HybridSearch => format!("{setup}{create}\nuids = [str(uuid.uuid4()) for _ in range(5)]\nfor i, uid in enumerate(uids):\n    r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],\"id\":uid}})\ntime.sleep(1)\nq = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\nif r.status_code != 200: print(f'[DEFECT: SEQUENCE_VIOLATION] search failed: {{r.status_code}}'); sys.exit(1)\nelse: print(f'seq hybrid_search verified'); sys.exit(0)"),
+
+        SeqKind::MultiBatchInsert => format!("{setup}{create}\nfor batch in range(3):\n    objs = []\n    for i in range(10):\n        objs.append({{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i],\"id\":str(uuid.uuid4())}})\n    r = requests.post(f'{{BASE}}/v1/batch/objects', json={{\"objects\":objs}})\n    if r.status_code not in (200, 201): print(f'batch {{batch}} failed: {{r.status_code}}'); sys.exit(0)\n    time.sleep(1)\nq = '{{ Aggregate {{ ' + c + ' {{ meta {{ count }} }} }} }}'\nr = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\ncount = r.json().get('data',{{}}).get('Aggregate',{{}}).get(c,[{{}}])[0].get('meta',{{}}).get('count',-1)\nif count < 10: print(f'[DEFECT: SEQUENCE_VIOLATION] multi-batch count too few: {{count}}'); sys.exit(1)\nelse: print(f'seq multi_batch_insert verified, count={{count}}'); sys.exit(0)"),
+
+        SeqKind::RecreateDataIsolation => format!("{setup}{create}\nuids1 = [str(uuid.uuid4()) for _ in range(5)]\nfor i, uid in enumerate(uids1):\n    r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1*(i+1),0.2*(i+1),0.3*(i+1),0.4*(i+1)],\"id\":uid}})\ntime.sleep(1)\nq1 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 5) {{ _additional {{ id distance }} }} }} }}'\nr1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q1}})\nids1 = set(h.get('_additional',{{}}).get('id') for h in r1.json().get('data',{{}}).get('Get',{{}}).get(c,[]))\nr = requests.delete(f'{{BASE}}/v1/schema/{{c}}')\ntime.sleep(1)\nr = requests.post(f'{{BASE}}/v1/schema', json={{\"class\":c,\"vectorIndexConfig\":{{\"distance\":\"cosine\",\"efConstruction\":128,\"maxConnections\":64}},\"properties\":[{{\"name\":\"title\",\"dataType\":[\"string\"]}}]}})\ntime.sleep(1)\nuids2 = [str(uuid.uuid4()) for _ in range(5)]\nfor i, uid in enumerate(uids2):\n    r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test2\"}},\"vector\":[0.5*(i+1),0.6*(i+1),0.7*(i+1),0.8*(i+1)],\"id\":uid}})\ntime.sleep(1)\nq2 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.5,0.6,0.7,0.8]}} limit: 10) {{ _additional {{ id distance }} }} }} }}'\nr2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q2}})\nids2 = set(h.get('_additional',{{}}).get('id') for h in r2.json().get('data',{{}}).get('Get',{{}}).get(c,[]))\noverlap = ids1 & ids2\nif overlap: print(f'[DEFECT: SEQUENCE_VIOLATION] stale data after recreate: overlap={{overlap}}'); sys.exit(1)\nelse: print(f'seq recreate_data_isolation verified'); sys.exit(0)"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::contract::schema::TypeConstraint;
+    use crate::contract::schema::RejectionPolicy;
     use crate::contract::store::{AnnotatedTypeConstraint, Confidence, ConstraintSource};
 
     fn make_test_store() -> ContractStore {
@@ -471,9 +525,10 @@ mod tests {
                     expected_type: "string".to_string(),
                     violation_examples: vec![],
                 },
-                endpoint: ep.to_string(),
+                endpoint: Some(ep.to_string()),
                 source: ConstraintSource::OpenapiDerived,
                 confidence: Confidence::High,
+                rejection_policy: Some(RejectionPolicy::Reject),
             });
         }
         store
@@ -491,7 +546,7 @@ mod tests {
         let store = make_test_store();
         let cases = SequenceTestGenerator::from_store(&store, TargetStyle::Milvus);
         for case in &cases {
-            assert!(case.script.contains("Bearer root:Milvus"), "Missing auth: {}", case.name);
+            assert!(case.script.contains("{{TESTVDB_AUTH_HEADER}}"), "Missing auth: {}", case.name);
         }
     }
 

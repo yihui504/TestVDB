@@ -1,5 +1,5 @@
 {
-  "api_endpoint": "search+create_collection",
+  "api_endpoint": "search+create_collection+entities+collections+databases",
   "doc_url": "https://milvus.io/docs/v2.6.x/",
   "parameters": {
     "search.collectionName": "string (required)",
@@ -132,5 +132,74 @@
     "[UPSERT:MUTATION] null data must be rejected",
     "[UPSERT:MUTATION] oversized data payload must be rejected",
     "[UPSERT:MUTATION] boundary float in vector data must be rejected"
-  ]
+  ],
+  "rejection_policies": {
+    "search.dimension": "reject",
+    "search.nlist": "reject",
+    "search.efConstruction": "reject",
+    "search.metricType": "ignore",
+    "search.indexType": "ignore",
+    "search.schema": "ignore",
+    "search.indexParams": "ignore",
+    "search.fieldName": "ignore",
+    "search.elementTypeParams": "ignore",
+    "search.autoID": "ignore",
+    "search.enableDynamicField": "ignore",
+    "search.isPrimary": "ignore",
+    "search.dataType": "ignore",
+    "search.M": "ignore",
+    "search.nprobe": "reject",
+    "search.ef": "reject",
+    "search.radius": "ignore",
+    "search.range_filter": "ignore",
+    "search.level": "ignore",
+    "create.nprobe": "ignore",
+    "create.ef": "ignore",
+    "create.radius": "ignore",
+    "create.range_filter": "ignore",
+    "create.level": "ignore",
+    "create.offset": "ignore",
+    "create.limit": "ignore",
+    "create.filter": "ignore",
+    "create.outputFields": "ignore",
+    "create.groupByField": "ignore",
+    "create.data": "ignore",
+    "insert.dimension": "reject",
+    "insert.nlist": "reject",
+    "insert.efConstruction": "reject",
+    "insert.metricType": "ignore",
+    "insert.indexType": "ignore",
+    "insert.nprobe": "reject",
+    "insert.ef": "ignore",
+    "insert.limit": "ignore",
+    "insert.offset": "ignore",
+    "insert.searchParams": "ignore",
+    "upsert.dimension": "reject",
+    "upsert.nlist": "reject",
+    "upsert.efConstruction": "reject",
+    "upsert.metricType": "ignore",
+    "upsert.indexType": "ignore",
+    "upsert.nprobe": "reject",
+    "upsert.ef": "ignore",
+    "upsert.limit": "ignore",
+    "upsert.offset": "ignore",
+    "upsert.searchParams": "ignore",
+    "query.dimension": "reject",
+    "query.nlist": "reject",
+    "query.efConstruction": "reject",
+    "query.metricType": "ignore",
+    "query.indexType": "ignore",
+    "query.nprobe": "reject",
+    "query.ef": "ignore",
+    "query.data": "reject",
+    "query.searchParams": "ignore"
+  },
+  "nested_params": {
+    "entities/search": {
+      "searchParams": ["nprobe", "ef", "radius", "range_filter", "level"]
+    },
+    "collections/create": {
+      "indexParams": ["indexType", "metricType", "fieldName", "nlist", "M", "efConstruction"]
+    }
+  }
 }

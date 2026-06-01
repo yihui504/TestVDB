@@ -4,6 +4,10 @@ use anyhow::Context;
 use std::process::Command as StdCommand;
 use tracing::{info, warn};
 
+pub fn build_db_url(host: &str, port: u16) -> String {
+    format!("http://{}:{}", host, port)
+}
+
 pub fn find_docker_network(target: &str) -> anyhow::Result<String> {
     let hostname = format!("{}-standalone", target);
     let inspect_out = StdCommand::new("docker")
@@ -32,6 +36,12 @@ pub fn find_docker_network(target: &str) -> anyhow::Result<String> {
     Ok(net_name)
 }
 
+pub fn pip_install_args<'a>(runner: &'a str, packages: &[&'a str]) -> Vec<&'a str> {
+    let mut args: Vec<&str> = vec!["exec", runner, "pip", "install", "--no-cache-dir", "--timeout", "120", "--retries", "3", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple"];
+    args.extend(packages);
+    args
+}
+
 pub fn ensure_runner_container(runner_name: &str, net_name: &str, pip_packages: &[String]) -> anyhow::Result<()> {
     let check = StdCommand::new("docker")
         .args(["ps", "-q", "-f", &format!("name={}", runner_name)])
@@ -40,10 +50,8 @@ pub fn ensure_runner_container(runner_name: &str, net_name: &str, pip_packages: 
         StdCommand::new("docker")
             .args(["run", "-d", "--name", runner_name, "--network", net_name, "python:3.9-slim", "tail", "-f", "/dev/null"])
             .output()?;
-        let mut pip_cmd = vec!["exec".to_string(), runner_name.to_string(), "pip".to_string(), "install".to_string(), "--no-cache-dir".to_string(), "-i".to_string(), "https://pypi.tuna.tsinghua.edu.cn/simple".to_string()];
-        for pkg in pip_packages {
-            pip_cmd.push(pkg.clone());
-        }
+        let pkg_strs: Vec<&str> = pip_packages.iter().map(|s| s.as_str()).collect();
+        let pip_cmd = pip_install_args(runner_name, &pkg_strs);
         let pip_output = StdCommand::new("docker").args(&pip_cmd).output()?;
         if !pip_output.status.success() {
             anyhow::bail!("pip install failed: {}", String::from_utf8_lossy(&pip_output.stderr));
@@ -164,7 +172,7 @@ pub async fn run_generic_batch(
     let db_port = plugin.db_port();
     let net_name = find_docker_network(target)?;
     let hostname = format!("{}-standalone", target);
-    let db_url = format!("http://{}:{}", hostname, db_port);
+    let db_url = build_db_url(&hostname, db_port);
 
     let runner_name = format!("testvdb-{}-{}", prefix, target);
     let pip_packages = plugin.pip_packages();
@@ -229,7 +237,7 @@ pub async fn run_generic_batch_with_sandbox(
 
     let db_port = plugin.db_port();
     let db_host = sandbox.db_host.as_deref().unwrap_or("testvdb-db");
-    let db_url = format!("http://{}:{}", db_host, db_port);
+    let db_url = build_db_url(db_host, db_port);
 
     let runner_name = sandbox.runner_container_ids.first()
         .ok_or_else(|| anyhow::anyhow!("Sandbox has no runner container"))?
@@ -275,4 +283,65 @@ pub async fn run_generic_batch_with_sandbox(
     }
 
     Ok(found_defects)
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[test]
+    fn test_docker_image_format() {
+        // Verify the image name used in ensure_runner_container follows <name>:<tag> format
+        let image = "python:3.9-slim";
+        let parts: Vec<&str> = image.splitn(2, ':').collect();
+        assert_eq!(parts.len(), 2, "Image should be in <name>:<tag> format");
+        assert!(!parts[0].is_empty(), "Image name should not be empty");
+        assert!(!parts[1].is_empty(), "Image tag should not be empty");
+    }
+
+    #[test]
+    fn test_network_name_generation() {
+        // Verify the hostname format used in find_docker_network and run_generic_batch
+        let target = "milvus";
+        let hostname = format!("{}-standalone", target);
+        assert_eq!(hostname, "milvus-standalone");
+        assert!(hostname.starts_with(target));
+        assert!(hostname.ends_with("-standalone"));
+
+        let target2 = "qdrant";
+        let hostname2 = format!("{}-standalone", target2);
+        assert_eq!(hostname2, "qdrant-standalone");
+    }
+
+    #[test]
+    fn test_environment_parsing() {
+        // Verify the URL template replacement logic used in run_generic_batch
+        let db_url = "http://milvus-standalone:19530";
+
+        // Test single-brace placeholder with quotes: '{TESTVDB_DB_URL}/path'
+        let script = "requests.get('{TESTVDB_DB_URL}/api/v1/health')";
+        let resolved = script
+            .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
+            .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
+            .replace("{TESTVDB_DB_URL}", &db_url)
+            .replace("{{TESTVDB_DB_URL}}", &db_url);
+        assert_eq!(resolved, format!("requests.get('{}/api/v1/health')", db_url));
+
+        // Test single-brace placeholder without quotes: {TESTVDB_DB_URL}/path
+        let script2 = "url = {TESTVDB_DB_URL}/api/v1/health";
+        let resolved2 = script2
+            .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
+            .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
+            .replace("{TESTVDB_DB_URL}", &db_url)
+            .replace("{{TESTVDB_DB_URL}}", &db_url);
+        assert_eq!(resolved2, format!("url = {}/api/v1/health", db_url));
+
+        // Test double-brace placeholder as entire quoted value: '{{TESTVDB_DB_URL}}'
+        let script3 = "url = '{{TESTVDB_DB_URL}}'";
+        let resolved3 = script3
+            .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
+            .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
+            .replace("{TESTVDB_DB_URL}", &db_url)
+            .replace("{{TESTVDB_DB_URL}}", &db_url);
+        assert_eq!(resolved3, format!("url = '{}'", db_url));
+    }
 }

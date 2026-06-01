@@ -1,5 +1,7 @@
+use crate::agent::classifier::DefectType;
 use crate::agent::oracle::InvariantCheck;
 use crate::agent::probe::ProbeTemplate;
+use crate::agent::vdbfuzz::coverage::ApiEndpoint;
 use crate::contract::schema::StructuredContract;
 use crate::review::IndependentReviewer;
 use crate::sandbox::manager::SidecarSpec;
@@ -60,6 +62,49 @@ pub trait TargetPlugin: Send + Sync {
     fn default_repo_url(&self) -> Option<&str> { None }
     /// Default documentation URL for Knowledge Agent auto-trigger.
     fn default_docs_url(&self) -> Option<&str> { None }
+    /// Authentication header value for the target (e.g., "Bearer root:Milvus").
+    /// Returns None if no auth is needed.
+    fn auth_header_value(&self) -> Option<&str> { None }
+
+    // ── Script generation helpers (US-2.2: moved from orchestrator match branches) ──
+
+    /// HTTP headers line for generated Python scripts.
+    fn script_headers(&self) -> &'static str {
+        "HEADERS = {'Content-Type': 'application/json'}"
+    }
+
+    /// Python expression that evaluates to True when the API call failed.
+    fn script_success_check(&self, var: &str) -> String {
+        format!("{}.status_code != 200", var)
+    }
+
+    /// The success status code/indicator used in generated scripts.
+    fn script_success_code(&self) -> &'static str {
+        "200"
+    }
+
+    /// Python `api()` helper function for generated scripts.
+    fn script_api_helper(&self) -> String {
+        "def api(method, path, body=None):\n    r = requests.request(method, f'{BASE}{path}', headers=HEADERS, json=body)\n    return r\n\n".to_string()
+    }
+
+    /// Python expression to call `api()` for a POST request.
+    fn script_api_call(&self, path: &str, body_expr: &str) -> String {
+        format!("api('POST', '{}', {})", path, body_expr)
+    }
+
+    /// Python expression to call `api()` for a POST request with a variable result.
+    fn script_api_call_assign(&self, var: &str, path: &str, body_expr: &str) -> String {
+        format!("{} = {}", var, self.script_api_call(path, body_expr))
+    }
+
+    fn all_api_endpoints(&self) -> Vec<ApiEndpoint> {
+        Vec::new()
+    }
+
+    fn correct_mre_api_params(&self, _mre_code: &str, _defect_type: &DefectType) -> Option<String> {
+        None
+    }
 }
 
 pub struct TargetRegistry {

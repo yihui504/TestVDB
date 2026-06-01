@@ -1,4 +1,4 @@
-use crate::contract::store::ContractStore;
+﻿use crate::contract::store::ContractStore;
 use crate::target::TargetStyle;
 use serde::{Deserialize, Serialize};
 
@@ -28,25 +28,25 @@ impl StateTestGenerator {
         let mut cases = Vec::new();
 
         let has_insert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/insert") || atc.endpoint.contains("entities/upsert")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/insert")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/upsert"))
         });
         let has_search = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/search") || atc.endpoint.contains("entities/query")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/search")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/query"))
         });
         let has_delete = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/delete")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/delete"))
         });
         let has_create = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("collections/create")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/create"))
         });
         let has_drop = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("collections/drop")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("collections/drop"))
         });
         let has_upsert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/upsert")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/upsert"))
         });
         let has_partition = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("partitions/create") || atc.endpoint.contains("partitions/drop")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("partitions/create")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("partitions/drop"))
         });
 
         if has_insert && has_search && has_delete {
@@ -60,7 +60,9 @@ impl StateTestGenerator {
 
         if has_create && has_drop {
             cases.push(Self::generate_create_drop_create_dim(style));
-            cases.push(Self::generate_duplicate_collection(style));
+            if style != TargetStyle::Milvus {
+                cases.push(Self::generate_duplicate_collection(style));
+            }
         }
 
         if has_create && has_drop && has_search {
@@ -82,7 +84,7 @@ impl StateTestGenerator {
                 }
             }
             if desc.contains("unique") || desc.contains("duplicate") || desc.contains("already exist") {
-                if desc.contains("collection") {
+                if desc.contains("collection") && style != TargetStyle::Milvus {
                     cases.push(Self::generate_duplicate_collection(style));
                 }
             }
@@ -174,12 +176,18 @@ impl StateTestGenerator {
     }
 
     fn generate_insert_without_collection(style: TargetStyle) -> StateTestCase {
+        let marker = match style {
+            TargetStyle::Weaviate => "PARAM_IGNORED",
+            _ => "ILLEGAL_SUCCESS",
+        };
+        let script = build_state_script(style, StateScriptKind::InsertWithoutCollection);
+        let script = script.replace("[DEFECT: ILLEGAL_SUCCESS]", &format!("[DEFECT: {}]", marker));
         StateTestCase {
             name: "state_insert_without_collection".to_string(),
             state_pattern: StatePattern::ResourceNotExist,
             endpoint: "/v2/vectordb/entities/insert".to_string(),
-            script: build_state_script(style, StateScriptKind::InsertWithoutCollection),
-            defect_marker: "ILLEGAL_SUCCESS".to_string(),
+            script,
+            defect_marker: marker.to_string(),
         }
     }
 }
@@ -199,7 +207,8 @@ enum StateScriptKind {
 fn build_state_script(style: TargetStyle, kind: StateScriptKind) -> String {
     match style {
         TargetStyle::Milvus => build_milvus_state_script(kind),
-        TargetStyle::Qdrant | TargetStyle::Weaviate => build_qdrant_state_script(kind),
+        TargetStyle::Qdrant => build_qdrant_state_script(kind),
+        TargetStyle::Weaviate => build_weaviate_state_script(kind),
         TargetStyle::PgVector => String::new(),
     }
 }
@@ -207,7 +216,7 @@ fn build_state_script(style: TargetStyle, kind: StateScriptKind) -> String {
 fn build_milvus_state_script(kind: StateScriptKind) -> String {
     let setup = r#"import requests, sys, uuid, time
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'state_' + uuid.uuid4().hex[:8]
 "#;
 
@@ -525,10 +534,176 @@ time.sleep(1)"#;
     }
 }
 
+fn build_weaviate_state_script(kind: StateScriptKind) -> String {
+    let setup = r#"import requests, sys, uuid, time
+BASE = '{TESTVDB_DB_URL}'
+c = 'State_' + uuid.uuid4().hex[:8]
+"#;
+
+    let create = r#"r = requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
+time.sleep(1)"#;
+
+    match kind {
+        StateScriptKind::InsertSearchDeleteSearch => format!(
+            "{setup}{create}\n\
+             uid = str(uuid.uuid4())\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\n\
+             if r.status_code not in (200, 201): print(f'insert failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             q1 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q1}})\n\
+             if r.status_code != 200: print(f'search1 failed: {{r.status_code}}'); sys.exit(0)\n\
+             ids1 = [h.get('_additional',{{}}).get('id') for h in r.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             if uid not in ids1: print(f'[DEFECT: SEQUENCE_VIOLATION] insert+search: uid not found after insert'); sys.exit(1)\n\
+             r = requests.delete(f'{{BASE}}/v1/objects/{{c}}/{{uid}}')\n\
+             time.sleep(1)\n\
+             q2 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q2}})\n\
+             if r.status_code != 200: print(f'search2 failed: {{r.status_code}}'); sys.exit(0)\n\
+             ids2 = [h.get('_additional',{{}}).get('id') for h in r.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             if uid in ids2: print(f'[DEFECT: SEQUENCE_VIOLATION] delete+search: uid still found after delete'); sys.exit(1)\n\
+             else: print(f'state insert_search_delete_search verified'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        StateScriptKind::InsertDeleteInsertSearch => format!(
+            "{setup}{create}\n\
+             uid = str(uuid.uuid4())\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\n\
+             if r.status_code not in (200, 201): print(f'insert1 failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             r = requests.delete(f'{{BASE}}/v1/objects/{{c}}/{{uid}}')\n\
+             time.sleep(1)\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test2\"}},\"vector\":[0.5,0.6,0.7,0.8],\"id\":uid}})\n\
+             if r.status_code not in (200, 201): print(f'insert2 failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.5,0.6,0.7,0.8]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             if r.status_code != 200: print(f'search failed: {{r.status_code}}'); sys.exit(0)\n\
+             ids = [h.get('_additional',{{}}).get('id') for h in r.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             if uid not in ids: print(f'[DEFECT: SEQUENCE_VIOLATION] re-insert+search: uid not found after re-insert'); sys.exit(1)\n\
+             else: print(f'state insert_delete_insert_search verified'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        StateScriptKind::UpsertChangesVector => format!(
+            "{setup}{create}\n\
+             uid = str(uuid.uuid4())\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\n\
+             if r.status_code not in (200, 201): print(f'insert failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             q1 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 1) {{ _additional {{ id distance }} }} }} }}'\n\
+             r1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q1}})\n\
+             if r1.status_code != 200: print(f'search1 failed: {{r1.status_code}}'); sys.exit(0)\n\
+             dist1 = r1.json().get('data',{{}}).get('Get',{{}}).get(c,[{{}}])[0].get('_additional',{{}}).get('distance') if r1.json().get('data',{{}}).get('Get',{{}}).get(c) else None\n\
+             r = requests.put(f'{{BASE}}/v1/objects/{{c}}/{{uid}}', json={{\"properties\":{{\"title\":\"updated\"}},\"vector\":[0.9,0.8,0.7,0.6]}})\n\
+             if r.status_code not in (200, 201): print(f'upsert failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             q2 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 1) {{ _additional {{ id distance }} }} }} }}'\n\
+             r2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q2}})\n\
+             if r2.status_code != 200: print(f'search2 failed: {{r2.status_code}}'); sys.exit(0)\n\
+             dist2 = r2.json().get('data',{{}}).get('Get',{{}}).get(c,[{{}}])[0].get('_additional',{{}}).get('distance') if r2.json().get('data',{{}}).get('Get',{{}}).get(c) else None\n\
+             if dist1 is not None and dist2 is not None and dist1 == dist2: print(f'[DEFECT: METAMORPHIC_VIOLATION] upsert did not change distance: before={{dist1}} after={{dist2}}'); sys.exit(1)\n\
+             else: print(f'state upsert_changes_vector verified: dist1={{dist1}} dist2={{dist2}}'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        StateScriptKind::CreateDropCreateDim => format!(
+            "{setup}{create}\n\
+             r = requests.delete(f'{{BASE}}/v1/schema/{{c}}')\n\
+             if r.status_code not in (200, 201): print(f'drop failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(2)\n\
+             recreate_ok = False\n\
+             for attempt in range(3):\n\
+                 r = requests.post(f'{{BASE}}/v1/schema', json={{\"class\":c,\"vectorIndexConfig\":{{\"distance\":\"cosine\",\"efConstruction\":256,\"maxConnections\":32}},\"properties\":[{{\"name\":\"title\",\"dataType\":[\"string\"]}}]}})\n\
+                 if r.status_code in (200, 201):\n\
+                     recreate_ok = True\n\
+                     break\n\
+                 time.sleep(2)\n\
+             if not recreate_ok: print(f'recreate failed after 3 attempts: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             r = requests.get(f'{{BASE}}/v1/schema/{{c}}')\n\
+             efc = r.json().get('vectorIndexConfig',{{}}).get('efConstruction')\n\
+             if efc != 256: print(f'[DEFECT: SEQUENCE_VIOLATION] recreate config: expected efConstruction=256 got {{efc}}'); sys.exit(1)\n\
+             else: print(f'state create_drop_create_different_dim verified: efConstruction={{efc}}'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        StateScriptKind::DuplicateCollection => format!(
+            "{setup}{create}\n\
+             r2 = requests.post(f'{{BASE}}/v1/schema', json={{\"class\":c,\"vectorIndexConfig\":{{\"distance\":\"cosine\",\"efConstruction\":128,\"maxConnections\":64}},\"properties\":[{{\"name\":\"title\",\"dataType\":[\"string\"]}}]}})\n\
+             if r2.status_code in (200, 201): print(f'[DEFECT: ILLEGAL_SUCCESS] duplicate class accepted'); sys.exit(1)\n\
+             else: print(f'duplicate class properly rejected'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        StateScriptKind::DropThenSearch => format!(
+            "{setup}{create}\n\
+             uid = str(uuid.uuid4())\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid}})\n\
+             if r.status_code not in (200, 201): print(f'insert failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             r = requests.delete(f'{{BASE}}/v1/schema/{{c}}')\n\
+             if r.status_code not in (200, 201): print(f'drop failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(2)\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             if r.status_code == 200 and r.json().get('data',{{}}).get('Get',{{}}).get(c) is not None: print(f'[DEFECT: ILLEGAL_SUCCESS] search on dropped class succeeded'); sys.exit(1)\n\
+             else: print(f'search on dropped class properly rejected'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        StateScriptKind::PartitionDataIsolation => format!(
+            "{setup}{create}\n\
+             uid_a = str(uuid.uuid4())\n\
+             uid_b = str(uuid.uuid4())\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"A\"}},\"vector\":[0.1,0.2,0.3,0.4],\"id\":uid_a}})\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"B\"}},\"vector\":[0.5,0.6,0.7,0.8],\"id\":uid_b}})\n\
+             if r.status_code not in (200, 201): print(f'insert failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             qa = '{{ Get {{ ' + c + '(where: {{path: [\"title\"], operator: Equal, valueString: \"A\"}} nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ title _additional {{ id distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":qa}})\n\
+             if r.status_code != 200: print(f'search A failed: {{r.status_code}}'); sys.exit(0)\n\
+             results_a = r.json().get('data',{{}}).get('Get',{{}}).get(c,[])\n\
+             for h in results_a:\n\
+                 if h.get('title') != 'A': print(f'[DEFECT: SEQUENCE_VIOLATION] filter title=A returned wrong: {{h}}'); sys.exit(1)\n\
+             qb = '{{ Get {{ ' + c + '(where: {{path: [\"title\"], operator: Equal, valueString: \"B\"}} nearVector: {{vector: [0.5,0.6,0.7,0.8]}} limit: 3) {{ title _additional {{ id distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":qb}})\n\
+             if r.status_code != 200: print(f'search B failed: {{r.status_code}}'); sys.exit(0)\n\
+             results_b = r.json().get('data',{{}}).get('Get',{{}}).get(c,[])\n\
+             for h in results_b:\n\
+                 if h.get('title') != 'B': print(f'[DEFECT: SEQUENCE_VIOLATION] filter title=B returned wrong: {{h}}'); sys.exit(1)\n\
+             else: print(f'state partition_data_isolation verified'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        StateScriptKind::SearchWithoutCollection => format!(
+            "{setup}\n\
+             fake_c = 'Nonexistent_' + uuid.uuid4().hex[:8]\n\
+             q = '{{ Get {{ ' + fake_c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             data = r.json().get('data',{{}}).get('Get',{{}}).get(fake_c)\n\
+             if data is not None and len(data) > 0: print(f'[DEFECT: ILLEGAL_SUCCESS] search on nonexistent class succeeded'); sys.exit(1)\n\
+             else: print(f'search on nonexistent class properly rejected'); sys.exit(0)",
+            setup=setup,
+        ),
+
+        StateScriptKind::InsertWithoutCollection => format!(
+            "{setup}\n\
+             fake_c = 'Nonexistent_' + uuid.uuid4().hex[:8]\n\
+             r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":fake_c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1,0.2,0.3,0.4]}})\n\
+             if r.status_code in (200, 201): print(f'[DEFECT: ILLEGAL_SUCCESS] insert on nonexistent class succeeded'); sys.exit(1)\n\
+             else: print(f'insert on nonexistent class properly rejected'); sys.exit(0)",
+            setup=setup,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::schema::TypeConstraint;
+    use crate::contract::schema::{RejectionPolicy, TypeConstraint};
     use crate::contract::store::{AnnotatedTypeConstraint, Confidence, ConstraintSource};
 
     fn make_test_store() -> ContractStore {
@@ -540,9 +715,10 @@ mod tests {
                 expected_type: "integer".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/entities/search".to_string(),
+            endpoint: Some("/v2/vectordb/entities/search".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -551,9 +727,10 @@ mod tests {
                 expected_type: "array".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/entities/insert".to_string(),
+            endpoint: Some("/v2/vectordb/entities/insert".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -562,9 +739,10 @@ mod tests {
                 expected_type: "array".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/entities/upsert".to_string(),
+            endpoint: Some("/v2/vectordb/entities/upsert".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -573,9 +751,10 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/entities/delete".to_string(),
+            endpoint: Some("/v2/vectordb/entities/delete".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -584,9 +763,10 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/collections/create".to_string(),
+            endpoint: Some("/v2/vectordb/collections/create".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -595,9 +775,10 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/collections/drop".to_string(),
+            endpoint: Some("/v2/vectordb/collections/drop".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -606,9 +787,10 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/partitions/create".to_string(),
+            endpoint: Some("/v2/vectordb/partitions/create".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store
@@ -626,7 +808,7 @@ mod tests {
         assert!(names.contains(&"state_insert_delete_insert_search"), "Missing insert_delete_insert_search");
         assert!(names.contains(&"state_upsert_changes_vector"), "Missing upsert_changes_vector");
         assert!(names.contains(&"state_create_drop_create_different_dim"), "Missing create_drop_create_dim");
-        assert!(names.contains(&"state_duplicate_collection"), "Missing duplicate_collection");
+        assert!(!names.contains(&"state_duplicate_collection"), "Milvus should not generate duplicate_collection (by-design idempotent)");
     }
 
     #[test]
@@ -636,7 +818,7 @@ mod tests {
 
         assert!(!cases.is_empty());
         for case in &cases {
-            assert!(case.script.contains("Bearer root:Milvus"), "Milvus state script missing auth: {}", case.name);
+            assert!(case.script.contains("{{TESTVDB_AUTH_HEADER}}"), "Milvus state script missing auth: {}", case.name);
         }
     }
 
@@ -657,7 +839,7 @@ mod tests {
 
         assert!(!cases.is_empty());
         for case in &cases {
-            assert!(!case.script.contains("Bearer root:Milvus"), "Qdrant state script should not have auth: {}", case.name);
+            assert!(!case.script.contains("{{TESTVDB_AUTH_HEADER}}"), "Qdrant state script should not have auth: {}", case.name);
         }
     }
 

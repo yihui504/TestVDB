@@ -14,7 +14,7 @@ impl IndependentReviewer for WeaviateIndependentReviewer {
     }
 
     async fn run_probe(&self, sandbox: &Sandbox, port: u16) -> Result<ReviewResult> {
-        let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), port);
+        let db_url = crate::infra::build_db_url(sandbox.db_host.as_ref().ok_or_else(|| anyhow::anyhow!("sandbox db_host missing"))?, port);
         let probe_script = WEAVIATE_REVIEW_PROBE_TEMPLATE.replace("__DB_URL__", &db_url);
         let output = sandbox.exec_script(
             &probe_script,
@@ -60,7 +60,7 @@ obj2_resp = requests.post(f"{BASE_URL}/v1/objects", json={
 time.sleep(0.5)
 
 # Search with nearVector
-search_resp = requests.get(f"{BASE_URL}/v1/objects?class={col}&nearVector={{'vector':[0.1,0.2,0.3,0.4]}}&limit=5")
+search_resp = requests.post(f"{BASE_URL}/v1/graphql", json={"query": f"{{Get {{{col}(nearVector: {{vector: [0.1,0.2,0.3,0.4]}}, limit: 5) {{text}}}}}}"})
 bad_dim_resp = requests.post(f"{BASE_URL}/v1/objects", json={
     "class": col, "id": str(uuid.uuid4()), "vector": [0.1, 0.2, 0.3], "properties": {"text": "bad"}})
 
@@ -101,8 +101,8 @@ for i in range(5):
         "class": state_coll, "id": str(uuid.uuid4()),
         "vector": [0.1*i, 0.2*i, 0.3*i, 0.4*i], "properties": {"text": f"item{i}"}})
 time.sleep(1.0)
-state_count_resp = requests.get(f"{BASE_URL}/v1/schema/{state_coll}")
-state_count = state_count_resp.json().get("class", {}).get("objectCount", -1)
+state_count_resp = requests.get(f"{BASE_URL}/v1/objects?class={state_coll}&limit=1")
+state_count = state_count_resp.json().get("totalResults", -1)
 
 # Cleanup
 requests.delete(f"{BASE_URL}/v1/schema/{col}")

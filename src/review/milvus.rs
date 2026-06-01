@@ -1,4 +1,4 @@
-use anyhow::Result;
+﻿use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::Value;
 use crate::agent::classifier::DefectType;
@@ -14,7 +14,7 @@ impl IndependentReviewer for MilvusIndependentReviewer {
     }
 
     async fn run_probe(&self, sandbox: &Sandbox, port: u16) -> Result<ReviewResult> {
-        let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), port);
+        let db_url = crate::infra::build_db_url(sandbox.db_host.as_ref().ok_or_else(|| anyhow::anyhow!("sandbox db_host missing"))?, port);
         let probe_script = MILVUS_REVIEW_PROBE_TEMPLATE.replace("__DB_URL__", &db_url);
         let output = sandbox.exec_script(
             &probe_script,
@@ -42,7 +42,7 @@ import requests
 import time
 
 BASE_URL = "__DB_URL__"
-HEADERS = {"Authorization": "Bearer root:Milvus", "Content-Type": "application/json"}
+HEADERS = {"Authorization": "{{TESTVDB_AUTH_HEADER}}", "Content-Type": "application/json"}
 
 def milvus_post(path, body):
     return requests.post(f"{BASE_URL}{path}", headers=HEADERS, json=body)
@@ -78,7 +78,7 @@ def search(name, vector, **kwargs):
     return milvus_post("/v2/vectordb/entities/search", body)
 
 def get_row_count(name):
-    resp = milvus_post("/v2/vectordb/collections/describe", {"collectionName": name})
+    resp = milvus_post("/v2/vectordb/collections/get_stats", {"collectionName": name})
     return resp.json().get("data", {}).get("rowCount", -1)
 
 coll = "review_test_coll"

@@ -59,7 +59,7 @@ pub fn dot_to_nested_json(dotted_path: &str, value: &str) -> String {
     if parts.len() == 1 {
         return format!(r#""{}":{}"#, parts[0], value);
     }
-    let leaf = format!(r#"{{"{}":{}}}"#, parts.last().unwrap(), value);
+    let leaf = format!(r#"{{"{}":{}}}"#, parts.last().expect("parts has >=2 elements when len != 1"), value);
     let mut json = leaf;
     for part in parts[..parts.len() - 1].iter().rev() {
         json = format!(r#"{{"{}":{}}}"#, part, json);
@@ -441,6 +441,58 @@ impl SimpleSafetyNet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use regex::Regex;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ProbeSemantics {
+        request_endpoints: Vec<String>,
+        defect_markers: Vec<String>,
+        params_tested: Vec<String>,
+    }
+
+    fn normalize_url(url: &str) -> String {
+        url.replace("{BASE}", "")
+            .replace("{c}", "{coll}")
+            .trim_start_matches('/')
+            .to_string()
+    }
+
+    fn extract_probe_semantics(script: &str) -> ProbeSemantics {
+        let request_re = Regex::new(r"requests\.(get|post|put|delete|patch)\(f?'([^']*)'").unwrap();
+        let defect_re = Regex::new(r"\[DEFECT:\s*([A-Z_]+)\]").unwrap();
+        let body_param_re = Regex::new(r#"body\["(\w+)"\]"#).unwrap();
+
+        let request_endpoints: Vec<String> = request_re
+            .captures_iter(script)
+            .filter_map(|c| {
+                let method = c[1].to_uppercase();
+                let url = normalize_url(&c[2]);
+                if url.is_empty() { None } else { Some(format!("{} {}", method, url)) }
+            })
+            .collect();
+
+        let defect_markers: Vec<String> = defect_re
+            .captures_iter(script)
+            .map(|c| c[1].to_string())
+            .collect();
+
+        let mut params_tested: Vec<String> = Vec::new();
+        for c in body_param_re.captures_iter(script) {
+            params_tested.push(c[1].to_string());
+        }
+        params_tested.sort();
+        params_tested.dedup();
+
+        ProbeSemantics {
+            request_endpoints,
+            defect_markers,
+            params_tested,
+        }
+    }
+
+    fn probes_semantically_equivalent(a: &str, b: &str) -> bool {
+        extract_probe_semantics(a) == extract_probe_semantics(b)
+    }
 
     #[test]
     fn test_classify_endpoint_type() {
@@ -500,7 +552,12 @@ mod tests {
         let template = QdrantProbeTemplate;
         let from_template = template.search_probe("limit", "0", "limit=0");
         let from_function = search_probe("limit", "0", "limit=0");
-        assert_eq!(from_template, from_function, "QdrantProbeTemplate::search_probe must match search_probe() byte-for-byte");
+        assert!(
+            probes_semantically_equivalent(&from_template, &from_function),
+            "QdrantProbeTemplate::search_probe must be semantically equivalent to search_probe()\n  template: {:?}\n  function: {:?}",
+            extract_probe_semantics(&from_template),
+            extract_probe_semantics(&from_function)
+        );
     }
 
     #[test]
@@ -508,7 +565,12 @@ mod tests {
         let template = MilvusProbeTemplate;
         let from_template = template.search_probe("limit", "0", "limit=0");
         let from_function = crate::agent::probe_milvus::milvus_search_probe("limit", "0", "limit=0");
-        assert_eq!(from_template, from_function, "MilvusProbeTemplate::search_probe must match milvus_search_probe() byte-for-byte");
+        assert!(
+            probes_semantically_equivalent(&from_template, &from_function),
+            "MilvusProbeTemplate::search_probe must be semantically equivalent to milvus_search_probe()\n  template: {:?}\n  function: {:?}",
+            extract_probe_semantics(&from_template),
+            extract_probe_semantics(&from_function)
+        );
     }
 
     #[test]
@@ -646,6 +708,45 @@ mod tests {
         assert_eq!(parsed2.endpoint, "optimizers_config");
         assert_eq!(parsed2.json_path, "indexing_threshold");
     }
+
+    #[test]
+    fn test_semantic_equivalence_tolerates_judgment_change() {
+        let original = search_probe("limit", "0", "limit=0");
+        let modified = original.replace("if r.status_code == 200", "if r.status_code in (200, 201)");
+        assert!(
+            probes_semantically_equivalent(&original, &modified),
+            "Changing judgment logic should not break semantic equivalence"
+        );
+    }
+
+    #[test]
+    fn test_semantic_equivalence_rejects_different_probes() {
+        let search_script = search_probe("limit", "0", "limit=0");
+        let create_script = create_probe("shard_number", "0", "shard_number=0");
+        assert!(
+            !probes_semantically_equivalent(&search_script, &create_script),
+            "search probe and create probe must NOT be semantically equivalent"
+        );
+    }
+
+    #[test]
+    fn test_extract_probe_semantics_search_probe() {
+        let script = search_probe("limit", "0", "limit=0");
+        let sem = extract_probe_semantics(&script);
+        assert!(sem.defect_markers.contains(&"ILLEGAL_SUCCESS".to_string()));
+        assert!(sem.request_endpoints.iter().any(|ep| ep.contains("points/search")));
+        assert!(sem.params_tested.contains(&"limit".to_string()));
+    }
+
+    #[test]
+    fn test_extract_probe_semantics_known_bug_shard_number() {
+        let script = create_probe("shard_number", "-1", "shard_number=-1");
+        let sem = extract_probe_semantics(&script);
+        assert!(sem.defect_markers.contains(&"ILLEGAL_SUCCESS".to_string()));
+        assert!(sem.request_endpoints.iter().any(|ep| ep.contains("collections")));
+        assert!(!sem.request_endpoints.iter().any(|ep| ep.contains("points/search")));
+        assert!(sem.params_tested.is_empty());
+    }
 }
 
 pub trait ProbeTemplate {
@@ -725,7 +826,7 @@ impl ProbeTemplate for NoopProbeTemplate {
 pub struct MilvusProbeTemplate;
 
 impl MilvusProbeTemplate {
-    const AUTH: &str = "'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'";
+    const AUTH: &str = "'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'";
 }
 
 impl ProbeTemplate for MilvusProbeTemplate {

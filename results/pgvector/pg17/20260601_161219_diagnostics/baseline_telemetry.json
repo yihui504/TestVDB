@@ -1,0 +1,140 @@
+[
+  {
+    "turn": 0,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "error"
+  },
+  {
+    "turn": 1,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 2,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 3,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 4,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 5,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 6,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 7,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "rejection"
+  },
+  {
+    "turn": 7,
+    "tool_name": "execute_stateful_test",
+    "state_check_present": true,
+    "result_category": "error"
+  },
+  {
+    "turn": 8,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 9,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 10,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "defect_found"
+  },
+  {
+    "turn": 11,
+    "tool_name": "submit_mre",
+    "state_check_present": false,
+    "result_category": "error"
+  },
+  {
+    "turn": 11,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 12,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "defect_found"
+  },
+  {
+    "turn": 13,
+    "tool_name": "submit_mre",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 13,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 14,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 15,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 16,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "defect_found"
+  },
+  {
+    "turn": 17,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 18,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "success"
+  },
+  {
+    "turn": 19,
+    "tool_name": "execute_test_script",
+    "state_check_present": false,
+    "result_category": "defect_found"
+  }
+]

@@ -11,22 +11,24 @@ pub async fn run_script_in_fresh_sandbox(
     sidecars: &[SidecarSpec],
     db_env: &[(String, String)],
     db_command: &[String],
+    rejection_policy: Option<&str>,
+    auth_header: &str,
 ) -> anyhow::Result<RunEvidence> {
     use crate::sandbox::manager::Sandbox;
 
     let pip_refs: Vec<&str> = pip_packages.iter().map(|s| s.as_str()).collect();
     let sandbox = Sandbox::create_network_and_containers(db_image, &pip_refs, db_port, sidecars, db_env, db_command).await?;
-    let db_url = format!("http://{}:{}", sandbox.db_host.as_ref().unwrap(), db_port);
+    let db_url = crate::infra::build_db_url(sandbox.db_host.as_ref().ok_or_else(|| anyhow::anyhow!("sandbox db_host missing"))?, db_port);
     let rebound_script = script_code
         .replace("'{TESTVDB_DB_URL}'", &format!("'{}'", db_url))
         .replace("'{{TESTVDB_DB_URL}}'", &format!("'{}'", db_url))
         .replace("{{TESTVDB_DB_URL}}", &db_url)
-        .replace("{TESTVDB_DB_URL}", &db_url);
+        .replace("{TESTVDB_DB_URL}", &db_url)
+        .replace("{{TESTVDB_AUTH_HEADER}}", auth_header);
     let output = sandbox.exec_script(&rebound_script, &[("TESTVDB_DB_URL", &db_url)]).await?;
     let normalized_stdout = normalize_observed_output(&output.stdout);
     let normalized_stderr = normalize_observed_output(&output.stderr);
-    let classification = analyze_execution_result(&normalized_stdout, &normalized_stderr);
-
+    let classification = analyze_execution_result(&normalized_stdout, &normalized_stderr, rejection_policy);
     Ok(RunEvidence {
         phase: phase.to_string(),
         db_url,
@@ -46,6 +48,8 @@ pub async fn refresh_candidate_evidence_with_mre(
     sidecars: &[SidecarSpec],
     db_env: &[(String, String)],
     db_command: &[String],
+    rejection_policy: Option<&str>,
+    auth_header: &str,
 ) -> anyhow::Result<Option<String>> {
     let phases = ["initial", "repro_1", "repro_2"];
     let mut refreshed_runs = Vec::new();
@@ -61,6 +65,8 @@ pub async fn refresh_candidate_evidence_with_mre(
             sidecars,
             db_env,
             db_command,
+            rejection_policy,
+            auth_header,
         )
         .await
         {
@@ -78,7 +84,7 @@ pub async fn refresh_candidate_evidence_with_mre(
                 return Ok(candidate.downgrade_reason.clone());
             }
         };
-        let classification = analyze_execution_result(&run.stdout, &run.stderr);
+        let classification = analyze_execution_result(&run.stdout, &run.stderr, rejection_policy);
 
         if classification.disposition != ClassificationDisposition::CandidateDefect
             || classification.defect_type.as_ref() != Some(&candidate.defect_type)
@@ -127,6 +133,8 @@ pub async fn run_additional_reproduction(
     sidecars: &[SidecarSpec],
     db_env: &[(String, String)],
     db_command: &[String],
+    rejection_policy: Option<&str>,
+    auth_header: &str,
 ) -> anyhow::Result<Option<String>> {
     let run = match run_script_in_fresh_sandbox(
         db_image,
@@ -137,6 +145,8 @@ pub async fn run_additional_reproduction(
         sidecars,
         db_env,
         db_command,
+        rejection_policy,
+        auth_header,
     )
     .await
     {
@@ -148,7 +158,7 @@ pub async fn run_additional_reproduction(
             )));
         }
     };
-    let classification = analyze_execution_result(&run.stdout, &run.stderr);
+    let classification = analyze_execution_result(&run.stdout, &run.stderr, rejection_policy);
     if classification.disposition != ClassificationDisposition::CandidateDefect
         || classification.defect_type.as_ref() != Some(&candidate.defect_type)
     {

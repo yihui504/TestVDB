@@ -1,4 +1,13 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RejectionPolicy {
+    #[default]
+    Reject,
+    Ignore,
+}
 
 fn deserialize_f64_or_string<'de, D>(deserializer: D) -> Result<Option<f64>, D::Error>
 where
@@ -53,6 +62,10 @@ pub struct StructuredContract {
     pub state_invariants: Vec<StateInvariant>,
     #[serde(default)]
     pub behavioral_contracts: Vec<BehavioralContract>,
+    #[serde(default)]
+    pub rejection_policies: HashMap<String, RejectionPolicy>,
+    #[serde(default)]
+    pub nested_params: HashMap<String, HashMap<String, Vec<String>>>,
 }
 
 /// Layer 1: Parameter JSON type must match the expected type.

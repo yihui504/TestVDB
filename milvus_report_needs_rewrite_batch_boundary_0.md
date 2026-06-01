@@ -1,13 +1,13 @@
-# Verified IllegalSuccess: milvus 2.6.16
+# [REST API] Search API accepts nprobe=0 despite documented constraint nprobe > 0
 
 - **Target**: milvus
-- **Version**: 2.6.16
+- **Version**: v2.6.16
 - **Defect Type**: IllegalSuccess
 
 ## Documentation Evidence
 - **Source URL**: https://milvus.io/api-reference/restful/v2.4.x/v2/Vector%20(v2)/CreateCollection.md
 - **Documented Contract Assertions**:
-- [DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted
+- [DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted
 - **Surviving Assertions Under Report**:
 - nprobe=0 search accepted (code=0) despite documented nprobe > 0 constraint
 
@@ -15,36 +15,36 @@
 ```
 import requests, sys, uuid, time
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{TESTVDB_AUTH_HEADER}', 'Content-Type': 'application/json'}
 c = 'oracle_' + uuid.uuid4().hex[:8]
-r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
+r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers={'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
 time.sleep(1)
 r = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json={"collectionName":c,"data":[{"id":1,"vector":[0.1,0.2,0.3,0.4]}]})
 if r.json().get('code') != 0: print(f'insert failed: {r.text}'); sys.exit(0)
 time.sleep(1)
 body = {"collectionName":c,"data":[[0.1,0.2,0.3,0.4]],"limit":3}
-body["offset"] = 0
+body["nprobe"] = 0
 r = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json=body)
-if r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted'); sys.exit(1)
-else: print(f'properly rejected offset below min (0): {r.json()}'); sys.exit(0)
+if r.json().get('code') == 0: print(f'[DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted'); sys.exit(1)
+else: print(f'properly rejected nprobe below min (0): {r.json()}'); sys.exit(0)
 ```
 
 ## Rerun Instructions
 Replace `{{TESTVDB_DB_URL}}` with a live target URL that matches the documented version before rerunning the script.
 
 ## Verification Summary
-- **Initial Run**: [DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted
-- **Double Reproduction**: repro_1: Observed explicit defect marker.; repro_2: Observed explicit defect marker.
-- **Classification Basis**: Initial run and 2 fresh-sandbox reproductions produced consistent IllegalSuccess classification and matching evidence excerpts.
+- **Initial Run**: [DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted
+- **Double Reproduction**: repro_1: Observed explicit defect marker.; repro_2: Observed explicit defect marker.; variant_1: Observed explicit defect marker.
+- **Classification Basis**: Initial run and 3 fresh-sandbox reproductions produced consistent IllegalSuccess classification and matching evidence excerpts.
 
 ## Runtime Evidence
 ```
 Initial DB URL: batch
-Initial Evidence Excerpt: [DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted
+Initial Evidence Excerpt: [DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted
 
 Initial STDOUT:
-[DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted
+[DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted
 
 
 Initial STDERR:
@@ -52,22 +52,32 @@ Initial STDERR:
 
 Reproductions:
 repro_1
-DB URL: http://testvdb-db-8908b57420e643f48f5ce47841d29e81:19530
+DB URL: http://testvdb-db-22f9fc39fd69473fbf5c8ff60f63f35b:19530
 Reason: Observed explicit defect marker.
-Evidence Excerpt: [defect: illegal_success] offset below min (0) accepted
+Evidence Excerpt: [defect: illegal_success] nprobe below min (0) accepted
 
 STDOUT:
-[DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted
+[DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted
 STDERR:
 
 
 repro_2
-DB URL: http://testvdb-db-4c5693a4e4a14b3e92ef95a683866efc:19530
+DB URL: http://testvdb-db-47a64ce17dd34a7a84c6df90eac9ac1f:19530
 Reason: Observed explicit defect marker.
-Evidence Excerpt: [defect: illegal_success] offset below min (0) accepted
+Evidence Excerpt: [defect: illegal_success] nprobe below min (0) accepted
 
 STDOUT:
-[DEFECT: ILLEGAL_SUCCESS] offset below min (0) accepted
+[DEFECT: ILLEGAL_SUCCESS] nprobe below min (0) accepted
+STDERR:
+
+
+variant_1
+DB URL: http://testvdb-db-1b60b6455a5c4ffaad95f09c75fe5962:19530
+Reason: Observed explicit defect marker.
+Evidence Excerpt: [defect: illegal_success] nprobe below min (-1) accepted
+
+STDOUT:
+[DEFECT: ILLEGAL_SUCCESS] nprobe below min (-1) accepted
 STDERR:
 
 
@@ -90,7 +100,23 @@ STDERR:
 - Missing hard gate: MRE and rerun evidence.
 
 ## Root Cause Analysis
-The database accepted an operation that the cited contract treats as invalid (nprobe=0 search accepted (code=0) despite documented nprobe > 0 constraint). This indicates that the server-side request validation is either missing or too permissive for the affected parameter(s), allowing the operation to proceed to a success response instead of being rejected at the boundary.
+The search endpoint does not validate the nprobe parameter against its minimum allowed value. The API documentation specifies that nprobe must be greater than 0, but the server accepts nprobe=0 (and even negative values) without returning an error. This indicates a missing input validation check in the request handling logic for the search operation.
 
 ## Improvement Suggestions
-Add or tighten request validation for the affected parameter(s) so the invalid operation is rejected at the boundary before success is returned. Specifically: nprobe=0 search accepted (code=0) despite documented nprobe > 0 constraint. After the fix, add a regression test that asserts the documented constraint produces a 400/422 rejection rather than 200 OK.
+Add input validation for the nprobe parameter in the search endpoint. Specifically, check that nprobe is an integer greater than 0. If nprobe is less than 1, return an appropriate error response (e.g., code 1100 with message 'nprobe must be greater than 0'). This validation should be applied before processing the search request.
+
+## Semantic Gate
+N/A
+
+
+## GitHub Issue Body
+## Steps to Reproduce
+1. Create a collection with a vector field and insert a vector.
+2. Send a search request with nprobe set to 0.
+3. Observe that the API returns success (code=0) instead of an error.
+
+## Expected Behavior
+The API should reject nprobe=0 with an error message indicating that nprobe must be greater than 0.
+
+## Actual Behavior
+The API accepts nprobe=0 and returns a successful search response, violating the documented constraint.

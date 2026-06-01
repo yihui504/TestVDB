@@ -1,8 +1,12 @@
 use anyhow::{bail, Context};
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 use uuid::Uuid;
+
+const DB_READY_TIMEOUT_SECS: u64 = 60;
+const DB_PROBE_INTERVAL_MS: u64 = 500;
+const SIDECAR_WAIT_SECS: u64 = 5;
 
 #[derive(Debug, Clone)]
 pub struct SidecarSpec {
@@ -26,6 +30,12 @@ pub struct Sandbox {
     pub runner_container_ids: Vec<String>,
     pub db_host: Option<String>,
     pub sidecar_container_ids: Vec<String>,
+    db_image: String,
+    db_port: u16,
+    pip_packages: Vec<String>,
+    sidecar_specs: Vec<SidecarSpec>,
+    db_env: Vec<(String, String)>,
+    db_command: Vec<String>,
 }
 
 struct CleanupGuard {
@@ -60,6 +70,11 @@ impl Sandbox {
         let network_name = format!("testvdb-net-{}", Uuid::new_v4().simple());
         let db_name = format!("testvdb-db-{}", Uuid::new_v4().simple());
         let runner_name = format!("testvdb-runner-{}", Uuid::new_v4().simple());
+        let db_image = db_image.to_string();
+        let pip_packages_owned: Vec<String> = pip_packages.iter().map(|s| s.to_string()).collect();
+        let sidecar_specs = sidecars.to_vec();
+        let db_env = db_env.to_vec();
+        let db_command = db_command.to_vec();
 
         info!("Creating Docker network: {}", network_name);
         let out = Command::new("docker").args(["network", "create", &network_name]).output().await?;
@@ -100,12 +115,12 @@ impl Sandbox {
 
         if !sidecar_container_ids.is_empty() {
             info!("Waiting 5s for sidecar containers to initialize...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(SIDECAR_WAIT_SECS)).await;
         }
 
         info!("Starting DB container: {} as {}", db_image, db_name);
         let mut db_args: Vec<String> = vec!["run".to_string(), "-d".to_string(), "--name".to_string(), db_name.clone(), "--network".to_string(), network_name.clone()];
-        for (key, value) in db_env {
+        for (key, value) in &db_env {
             db_args.push("-e".to_string());
             db_args.push(format!("{}={}", key, value));
         }
@@ -130,8 +145,7 @@ impl Sandbox {
 
         if !pip_packages.is_empty() {
             info!("Installing pip packages in Runner...");
-            let mut pip_cmd = vec!["exec", &runner_container_id, "pip", "install", "--no-cache-dir", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple"];
-            pip_cmd.extend(pip_packages);
+            let pip_cmd = crate::infra::pip_install_args(&runner_container_id, pip_packages);
             let out = Command::new("docker").args(&pip_cmd).output().await?;
             if !out.status.success() { 
                 bail!("Failed to install pip packages: {}", String::from_utf8_lossy(&out.stderr)); 
@@ -139,7 +153,7 @@ impl Sandbox {
         }
 
         // Wait for DB to be ready by polling TCP connectivity from the runner container
-        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(60);
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(DB_READY_TIMEOUT_SECS);
         loop {
             let probe_script = format!(
                 "import socket; s=socket.socket(); s.settimeout(0.5); s.connect(('{}', {})); s.close()",
@@ -160,7 +174,7 @@ impl Sandbox {
                     String::from_utf8_lossy(&out.stderr).trim()
                 );
             }
-            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            tokio::time::sleep(tokio::time::Duration::from_millis(DB_PROBE_INTERVAL_MS)).await;
         }
 
         // Success! Disarm the guard
@@ -172,6 +186,12 @@ impl Sandbox {
             runner_container_ids: vec![runner_container_id],
             db_host: Some(db_name),
             sidecar_container_ids,
+            db_image,
+            db_port,
+            pip_packages: pip_packages_owned,
+            sidecar_specs,
+            db_env,
+            db_command,
         })
     }
 
@@ -226,6 +246,12 @@ impl Sandbox {
             runner_container_ids: vec![runner_container_id],
             db_host: None,
             sidecar_container_ids: Vec::new(),
+            db_image: String::new(),
+            db_port: 0,
+            pip_packages: Vec::new(),
+            sidecar_specs: Vec::new(),
+            db_env: Vec::new(),
+            db_command: Vec::new(),
         })
     }
 
@@ -239,8 +265,7 @@ impl Sandbox {
         }
         let container_id = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !pip_packages.is_empty() {
-            let mut pip_cmd = vec!["exec", &container_id, "pip", "install", "--no-cache-dir", "-i", "https://pypi.tuna.tsinghua.edu.cn/simple"];
-            pip_cmd.extend(pip_packages);
+            let pip_cmd = crate::infra::pip_install_args(&container_id, pip_packages);
             let out = Command::new("docker").args(&pip_cmd).output().await?;
             if !out.status.success() {
                 bail!("Failed to install pip packages in shared Runner: {}", String::from_utf8_lossy(&out.stderr));
@@ -335,6 +360,125 @@ impl Sandbox {
         }
         let _ = Command::new("docker").args(["network", "rm", &self.network_name]).output().await;
         Ok(())
+    }
+
+    pub async fn health_check(&self) -> bool {
+        let container_ids: Vec<&str> = self.runner_container_ids.iter()
+            .chain(self.db_container_id.iter())
+            .chain(self.sidecar_container_ids.iter())
+            .map(|s| s.as_str())
+            .collect();
+
+        for id in &container_ids {
+            let out = Command::new("docker")
+                .args(["inspect", "-f", "{{.State.Running}}", id])
+                .output()
+                .await;
+            match out {
+                Ok(o) if o.status.success() => {
+                    let status = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if status != "true" {
+                        warn!("Sandbox container {} is not running (status: {})", id, status);
+                        return false;
+                    }
+                }
+                _ => {
+                    warn!("Sandbox container {} not found or unreachable", id);
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    pub async fn pollution_check(&self) -> anyhow::Result<bool> {
+        for runner_id in &self.runner_container_ids {
+            let df_out = Command::new("docker")
+                .args(["exec", runner_id, "df", "/"])
+                .output()
+                .await?;
+            if df_out.status.success() {
+                let df_str = String::from_utf8_lossy(&df_out.stdout);
+                for line in df_str.lines().skip(1) {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 5 {
+                        let use_pct = parts[4].trim_end_matches('%');
+                        if let Ok(pct) = use_pct.parse::<u32>() {
+                            if pct > 95 {
+                                warn!("Sandbox runner {} disk usage at {}%, considered polluted", runner_id, pct);
+                                return Ok(true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for runner_id in &self.runner_container_ids {
+            let ps_out = Command::new("docker")
+                .args(["exec", runner_id, "ps", "-eo", "stat,comm"])
+                .output()
+                .await?;
+            if ps_out.status.success() {
+                let ps_str = String::from_utf8_lossy(&ps_out.stdout);
+                let zombie_count = ps_str.lines().filter(|l| l.starts_with('Z')).count();
+                if zombie_count > 10 {
+                    warn!("Sandbox runner {} has {} zombie processes, considered polluted", runner_id, zombie_count);
+                    return Ok(true);
+                }
+            }
+        }
+
+        Ok(false)
+    }
+
+    pub async fn ensure_healthy(&mut self) -> anyhow::Result<bool> {
+        if !self.health_check().await {
+            warn!("Sandbox health check failed, attempting restore...");
+            self.force_cleanup().await;
+            let restored = Sandbox::create_network_and_containers(
+                &self.db_image,
+                &self.pip_packages.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                self.db_port,
+                &self.sidecar_specs,
+                &self.db_env,
+                &self.db_command,
+            ).await?;
+            *self = restored;
+            info!("Sandbox restored successfully");
+            return Ok(true);
+        }
+
+        if self.pollution_check().await? {
+            warn!("Sandbox pollution detected, recreating...");
+            self.force_cleanup().await;
+            let restored = Sandbox::create_network_and_containers(
+                &self.db_image,
+                &self.pip_packages.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                self.db_port,
+                &self.sidecar_specs,
+                &self.db_env,
+                &self.db_command,
+            ).await?;
+            *self = restored;
+            info!("Sandbox recreated after pollution detection");
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    async fn force_cleanup(&self) {
+        for id in &self.runner_container_ids {
+            let _ = Command::new("docker").args(["rm", "-f", id]).output().await;
+        }
+        if let Some(ref db_id) = self.db_container_id {
+            let _ = Command::new("docker").args(["rm", "-f", db_id]).output().await;
+        }
+        for id in &self.sidecar_container_ids {
+            let _ = Command::new("docker").args(["rm", "-f", id]).output().await;
+        }
+        let _ = Command::new("docker").args(["network", "rm", &self.network_name]).output().await;
     }
 }
 

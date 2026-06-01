@@ -1,3 +1,4 @@
+﻿use crate::contract::schema::RejectionPolicy;
 use crate::contract::store::{ContractStore, ViolationTarget, ViolationType};
 use crate::target::TargetStyle;
 use serde::{Deserialize, Serialize};
@@ -78,10 +79,11 @@ impl PromptGenerator {
                     test_value: target.test_value.clone(),
                     description: describe_violation(target),
                     pre_condition: derive_pre_condition(endpoint),
-                    expected_behavior: format!(
-                        "Server should reject {}={}",
-                        param, target.test_value
-                    ),
+                    expected_behavior: if target.rejection_policy == RejectionPolicy::Ignore {
+                        format!("Server may ignore {}={}", param, target.test_value)
+                    } else {
+                        format!("Server should reject {}={}", param, target.test_value)
+                    },
                     defect_marker: target.defect_marker.clone(),
                     strategy: classify_strategy(&target.violation_type),
                 });
@@ -102,7 +104,7 @@ impl PromptGenerator {
                 .unwrap_or("unknown");
             scenarios.push(ViolationScenario {
                 name: format!("state_{}", keyword),
-                endpoint: asc.endpoint.clone(),
+                endpoint: asc.endpoint.clone().unwrap_or_default(),
                 param_name: "state".to_string(),
                 violation_type: ViolationType::NullInjection,
                 test_value: "violate_precondition".to_string(),
@@ -116,16 +118,16 @@ impl PromptGenerator {
 
         for abc in &self.store.behavioral_contracts {
             let keyword = abc
-                .contract
+                .constraint
                 .name
                 .split_whitespace()
                 .next()
                 .unwrap_or("unknown");
-            let ep = abc.contract.endpoints.first().cloned().unwrap_or_default();
-            let pre = if abc.contract.precondition_script.is_empty() {
+            let ep = abc.constraint.endpoints.first().cloned().unwrap_or_default();
+            let pre = if abc.constraint.precondition_script.is_empty() {
                 derive_pre_condition(&ep)
             } else {
-                abc.contract.precondition_script.clone()
+                abc.constraint.precondition_script.clone()
             };
             scenarios.push(ViolationScenario {
                 name: format!("metamorphic_{}", keyword),
@@ -135,10 +137,10 @@ impl PromptGenerator {
                 test_value: "mutate_and_verify".to_string(),
                 description: format!(
                     "Behavioral: {} — {}",
-                    abc.contract.name, abc.contract.expected_outcome
+                    abc.constraint.name, abc.constraint.expected_outcome
                 ),
                 pre_condition: pre,
-                expected_behavior: abc.contract.expected_outcome.clone(),
+                expected_behavior: abc.constraint.expected_outcome.clone(),
                 defect_marker: "DATA_CORRUPTION".to_string(),
                 strategy: TestStrategy::Metamorphic,
             });
@@ -252,7 +254,7 @@ impl PromptGenerator {
                 "Qdrant (check status_code==200, no auth header, /collections/ paths)"
             }
             TargetStyle::Milvus => {
-                "Milvus (check r.json().get('code')==0, Bearer root:Milvus auth, /v2/vectordb/ paths)"
+                "Milvus (check r.json().get('code')==0, {{TESTVDB_AUTH_HEADER}} auth, /v2/vectordb/ paths)"
             }
             TargetStyle::Weaviate => {
                 "Weaviate (check status_code==200, no auth by default, /v1/schema and /v1/objects REST paths)"
@@ -368,53 +370,58 @@ fn fmt_vtype(vt: &ViolationType) -> &'static str {
 }
 
 fn describe_violation(v: &ViolationTarget) -> String {
+    let verb = if v.rejection_policy == RejectionPolicy::Ignore {
+        "may ignore"
+    } else {
+        "should reject"
+    };
     match &v.violation_type {
         ViolationType::NullInjection => {
-            format!("Set {}=null on {}, server should reject", v.param_name, v.endpoint)
+            format!("Set {}=null on {}, server {}", v.param_name, v.endpoint, verb)
         }
         ViolationType::MissingRequired => {
-            format!("Omit required {} on {}, server should reject", v.param_name, v.endpoint)
+            format!("Omit required {} on {}, server {}", v.param_name, v.endpoint, verb)
         }
         ViolationType::TypeConfusion => {
             format!(
-                "Set {}={} (wrong type) on {}, server should reject",
-                v.param_name, v.test_value, v.endpoint
+                "Set {}={} (wrong type) on {}, server {}",
+                v.param_name, v.test_value, v.endpoint, verb
             )
         }
         ViolationType::BelowMin => {
             format!(
-                "Set {}={} (below min) on {}, server should reject",
-                v.param_name, v.test_value, v.endpoint
+                "Set {}={} (below min) on {}, server {}",
+                v.param_name, v.test_value, v.endpoint, verb
             )
         }
         ViolationType::AboveMax => {
             format!(
-                "Set {}={} (above max) on {}, server should reject",
-                v.param_name, v.test_value, v.endpoint
+                "Set {}={} (above max) on {}, server {}",
+                v.param_name, v.test_value, v.endpoint, verb
             )
         }
         ViolationType::ZeroValue => {
-            format!("Set {}=0 on {}, server should reject", v.param_name, v.endpoint)
+            format!("Set {}=0 on {}, server {}", v.param_name, v.endpoint, verb)
         }
         ViolationType::NegativeValue => {
-            format!("Set {}=-1 on {}, server should reject", v.param_name, v.endpoint)
+            format!("Set {}=-1 on {}, server {}", v.param_name, v.endpoint, verb)
         }
         ViolationType::InvalidEnum => {
             format!(
-                "Set {}={} (invalid enum) on {}, server should reject",
-                v.param_name, v.test_value, v.endpoint
+                "Set {}={} (invalid enum) on {}, server {}",
+                v.param_name, v.test_value, v.endpoint, verb
             )
         }
         ViolationType::EmptyString => {
             format!(
-                "Set {}=\"\" (empty) on {}, server should reject",
-                v.param_name, v.endpoint
+                "Set {}=\"\" (empty) on {}, server {}",
+                v.param_name, v.endpoint, verb
             )
         }
         ViolationType::Oversized => {
             format!(
-                "Set {} to oversized value on {}, server should reject",
-                v.param_name, v.endpoint
+                "Set {} to oversized value on {}, server {}",
+                v.param_name, v.endpoint, verb
             )
         }
     }
@@ -598,6 +605,8 @@ mod tests {
                 supersedes: None,
                 mutation_rules: vec![],
             }],
+            rejection_policies: HashMap::new(),
+            nested_params: HashMap::new(),
         };
 
         let mut store = ContractStore::from_structured_contracts(
@@ -669,13 +678,13 @@ mod tests {
 
         let pgen_milvus = PromptGenerator::new(store.clone(), TargetStyle::Milvus);
         let prompt_milvus = pgen_milvus.generate();
-        assert!(prompt_milvus.system_prompt.contains("Bearer root:Milvus"));
+        assert!(prompt_milvus.system_prompt.contains("{{TESTVDB_AUTH_HEADER}}"));
         assert!(prompt_milvus.system_prompt.contains("r.json().get('code')"));
 
         let pgen_qdrant = PromptGenerator::new(store, TargetStyle::Qdrant);
         let prompt_qdrant = pgen_qdrant.generate();
         assert!(prompt_qdrant.system_prompt.contains("status_code"));
-        assert!(!prompt_qdrant.system_prompt.contains("Bearer root:Milvus"));
+        assert!(!prompt_qdrant.system_prompt.contains("{{TESTVDB_AUTH_HEADER}}"));
     }
 
     #[test]

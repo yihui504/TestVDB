@@ -1,4 +1,4 @@
-use crate::contract::store::ContractStore;
+﻿use crate::contract::store::ContractStore;
 use crate::target::TargetStyle;
 use crate::agent::vdbfuzz::boundary::FuzzTestCase;
 // serde not needed for script generation
@@ -12,10 +12,10 @@ impl ConcurrentStateGenerator {
         let mut cases = Vec::new();
 
         let has_insert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("insert") || atc.endpoint.contains("entities") || atc.endpoint.contains("objects")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("insert")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("entities")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("objects"))
         });
         let has_delete = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("delete") || atc.endpoint.contains("drop")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("delete")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("drop"))
         });
         // check if search endpoint exists for future use
         if !has_insert {
@@ -30,6 +30,7 @@ impl ConcurrentStateGenerator {
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("insert".into(), "concurrent_count".into(), "parallel".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         // 2. Concurrent insert + delete
@@ -41,6 +42,7 @@ impl ConcurrentStateGenerator {
                 defect_marker: "STATE_LOGIC_VIOLATION".into(),
                 coverage_entry: Some(("insert+delete".into(), "concurrent_mixed".into(), "parallel".into())),
                 semantic_assertion: None,
+                rejection_policy: None,
             });
         }
 
@@ -49,9 +51,10 @@ impl ConcurrentStateGenerator {
             name: "concurrent_upsert_same_id".into(),
             script: build_concurrent_upsert_script(style),
             expected_rejection: false,
-            defect_marker: "STATE_LOGIC_VIOLATION".into(),
+            defect_marker: "PARAM_IGNORED".into(),
             coverage_entry: Some(("upsert".into(), "duplicate_prevention".into(), "parallel".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         // 4. Concurrent drop + insert
@@ -62,6 +65,7 @@ impl ConcurrentStateGenerator {
             defect_marker: "RUNTIME_FAILURE".into(),
             coverage_entry: Some(("create+drop".into(), "no_crash".into(), "parallel".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         cases
@@ -77,7 +81,7 @@ impl SemanticDriftGenerator {
         let mut cases = Vec::new();
 
         let _has_search = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("search") || atc.endpoint.contains("query")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("search")) || atc.endpoint.as_deref().map_or(false, |e| e.contains("query"))
         });
         if !_has_search {
             return cases;
@@ -91,6 +95,7 @@ impl SemanticDriftGenerator {
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "recall".into(), "semantic".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         // 2. Filter precision
@@ -101,6 +106,7 @@ impl SemanticDriftGenerator {
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "filter_precision".into(), "semantic".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         // 3. Distance ordering (L2 ascending)
@@ -111,6 +117,7 @@ impl SemanticDriftGenerator {
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "distance_order".into(), "semantic".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         // 4. Pagination consistency (offset disjointness)
@@ -121,6 +128,7 @@ impl SemanticDriftGenerator {
             defect_marker: "STATE_LOGIC_VIOLATION".into(),
             coverage_entry: Some(("search".into(), "pagination".into(), "semantic".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         cases
@@ -143,6 +151,7 @@ impl ResourceBoundaryGenerator {
             defect_marker: "RUNTIME_FAILURE".into(),
             coverage_entry: Some(("create+drop".into(), "rapid_cycle".into(), "resource".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         // 2. Large dimension
@@ -150,9 +159,10 @@ impl ResourceBoundaryGenerator {
             name: "resource_large_dimension".into(),
             script: build_large_dimension_script(style),
             expected_rejection: true,
-            defect_marker: "ILLEGAL_SUCCESS".into(),
+            defect_marker: "PARAM_IGNORED".into(),
             coverage_entry: Some(("create".into(), "dim".into(), "resource".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         // 3. Many inserts rapidly
@@ -163,6 +173,7 @@ impl ResourceBoundaryGenerator {
             defect_marker: "RUNTIME_FAILURE".into(),
             coverage_entry: Some(("insert".into(), "rapid_bulk".into(), "resource".into())),
             semantic_assertion: None,
+            rejection_policy: None,
         });
 
         cases
@@ -245,7 +256,7 @@ requests.delete(f"{BASE}/v1/schema/{col}")
         _ => { // Qdrant and Milvus
 r#"import requests, threading, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_conc_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -263,7 +274,9 @@ threads = [threading.Thread(target=insert_batch, args=(i*10,10)) for i in range(
 for t in threads: t.start()
 for t in threads: t.join()
 time.sleep(2)
-r2 = requests.post(f'{BASE}/v2/vectordb/collections/describe', headers=HEADERS, json={"collectionName":c})
+r = requests.post(f'{BASE}/v2/vectordb/collections/flush', headers=HEADERS, json={"collectionName":c})
+time.sleep(2)
+r2 = requests.post(f'{BASE}/v2/vectordb/collections/get_stats', headers=HEADERS, json={"collectionName":c})
 count = r2.json().get('data',{}).get('rowCount',-1)
 if count != 40:
     print(f"[DEFECT: STATE_LOGIC_VIOLATION] Concurrent insert: expected 40, got {count}")
@@ -325,7 +338,7 @@ conn.close()
         _ => r#"
 import requests, threading, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_idel_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -346,7 +359,9 @@ t2 = threading.Thread(target=delete_some, args=(1,5))
 t1.start(); t2.start()
 t1.join(); t2.join()
 time.sleep(1)
-r2 = requests.post(f'{BASE}/v2/vectordb/collections/describe', headers=HEADERS, json={"collectionName":c})
+r = requests.post(f'{BASE}/v2/vectordb/collections/flush', headers=HEADERS, json={"collectionName":c})
+time.sleep(2)
+r2 = requests.post(f'{BASE}/v2/vectordb/collections/get_stats', headers=HEADERS, json={"collectionName":c})
 count = r2.json().get('data',{}).get('rowCount',-1)
 if errors:
     print(f"[DEFECT: RUNTIME_FAILURE] Errors: {errors}")
@@ -393,7 +408,7 @@ conn.close()
         _ => r#"
 import requests, threading, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_cups_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -408,10 +423,12 @@ threads = [threading.Thread(target=upsert_same) for _ in range(6)]
 for t in threads: t.start()
 for t in threads: t.join()
 time.sleep(1)
-r2 = requests.post(f'{BASE}/v2/vectordb/collections/describe', headers=HEADERS, json={"collectionName":c})
+r = requests.post(f'{BASE}/v2/vectordb/collections/flush', headers=HEADERS, json={"collectionName":c})
+time.sleep(2)
+r2 = requests.post(f'{BASE}/v2/vectordb/collections/get_stats', headers=HEADERS, json={"collectionName":c})
 count = r2.json().get('data',{}).get('rowCount',-1)
 if count > 1:
-    print(f"[DEFECT: STATE_LOGIC_VIOLATION] Concurrent upsert: expected 1, got {count}")
+    print(f"[DEFECT: PARAM_IGNORED] Concurrent upsert: expected 1, got {count}")
     sys.exit(1)
 print(f"Concurrent upsert OK: {count} rows")
 requests.post(f'{BASE}/v2/vectordb/collections/drop', headers=HEADERS, json={"collectionName":c})
@@ -445,10 +462,41 @@ if errors:
     sys.exit(1)
 print("Concurrent create/drop OK")
 "#.to_string(),
+        TargetStyle::Qdrant => r#"
+import requests, threading, uuid, sys, time
+BASE = '{{TESTVDB_DB_URL}}'
+errors = []
+def create_drop_cycle():
+    try:
+        c = 'testvdb_cd_' + uuid.uuid4().hex[:8]
+        r = requests.put(f'{BASE}/collections/{c}', json={"vectors":{"size":4,"distance":"Cosine"}})
+        if r.status_code not in (200, 201): errors.append(f'create {c}: {r.status_code}'); return
+        time.sleep(0.3)
+        r = requests.delete(f'{BASE}/collections/{c}')
+        if r.status_code not in (200, 404): errors.append(f'delete {c}: {r.status_code}')
+    except Exception as e: errors.append(str(e))
+threads = [threading.Thread(target=create_drop_cycle) for _ in range(10)]
+for t in threads: t.start()
+for t in threads: t.join()
+if errors:
+    time.sleep(2)
+    try:
+        r = requests.get(f'{BASE}/healthz')
+        if r.status_code == 200:
+            print(f"[DEFECT: RUNTIME_FAILURE] Create/drop errors but service healthy: {errors}")
+            sys.exit(1)
+        else:
+            print(f"[DEFECT: RUNTIME_FAILURE] Service unhealthy after concurrent create/drop: healthz={r.status_code}, errors={errors}")
+            sys.exit(1)
+    except Exception as he:
+        print(f"[DEFECT: RUNTIME_FAILURE] Service unreachable after concurrent create/drop: {he}, errors={errors}")
+        sys.exit(1)
+print("Concurrent create/drop OK")
+"#.to_string(),
         _ => r#"
 import requests, threading, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 errors = []
 def create_drop_cycle():
     try:
@@ -519,7 +567,7 @@ requests.delete(f"{BASE}/v1/schema/{col}")
         _ => r#"
 import requests, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_recall_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -590,7 +638,7 @@ requests.delete(f"{BASE}/v1/schema/{col}")
         _ => r#"
 import requests, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_filt_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -639,7 +687,7 @@ conn.close()
         _ => r#"
 import requests, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_dist_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"L2","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -689,7 +737,7 @@ conn.close()
         _ => r#"
 import requests, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_page_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -734,7 +782,7 @@ conn.close()
         _ => r#"
 import requests, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 for cycle in range(30):
     c = f'testvdb_cycle_{cycle}_{uuid.uuid4().hex[:8]}'
     r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
@@ -770,11 +818,11 @@ finally:
         _ => r#"
 import requests, uuid, sys
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_largedim_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":32768}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code')==0:
-    print(f"[DEFECT: ILLEGAL_SUCCESS] 32768-dim collection created (resource risk)")
+    print(f"[DEFECT: PARAM_IGNORED] 32768-dim collection created (documented max)")
     sys.exit(1)
 else:
     print(f"Large dimension correctly rejected: {r.json()}")
@@ -817,7 +865,7 @@ conn.close()
         _ => r#"
 import requests, uuid, sys, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'testvdb_rapid_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -831,7 +879,9 @@ for i in range(200):
     except:
         errors += 1
 time.sleep(1)
-r2 = requests.post(f'{BASE}/v2/vectordb/collections/describe', headers=HEADERS, json={"collectionName":c})
+r = requests.post(f'{BASE}/v2/vectordb/collections/flush', headers=HEADERS, json={"collectionName":c})
+time.sleep(2)
+r2 = requests.post(f'{BASE}/v2/vectordb/collections/get_stats', headers=HEADERS, json={"collectionName":c})
 count = r2.json().get('data',{}).get('rowCount',-1)
 if count != 200:
     print(f"[DEFECT: STATE_LOGIC_VIOLATION] Rapid inserts: expected 200, got {count}")

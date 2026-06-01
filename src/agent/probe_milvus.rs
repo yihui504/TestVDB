@@ -1,8 +1,8 @@
-use crate::target::SafetyNet;
+﻿use crate::target::SafetyNet;
 
 use crate::agent::probe::ProbeTemplate;
 
-const MILVUS_AUTH_HEADER: &str = "'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'";
+const MILVUS_AUTH_HEADER: &str = "'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'";
 
 fn milvus_create_collection_script(name_var: &str, dim: &str, metric: &str, index_type: &str) -> String {
     format!(
@@ -24,7 +24,7 @@ pub fn milvus_search_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -48,7 +48,7 @@ pub fn milvus_search_params_probe(param: &str, value: &str, label: &str) -> Stri
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -68,25 +68,40 @@ else: print(f'properly rejected {label}: {{r.json()}}'); sys.exit(0)"#,
 }
 
 pub fn milvus_create_probe(param: &str, value: &str, label: &str) -> String {
-    let (py_dim, py_metric, py_index) = match param {
-        "dim" | "elementTypeParams.dim" => (value.to_string(), "\"COSINE\"".to_string(), "\"AUTOINDEX\"".to_string()),
-        "metricType" => ("4".to_string(), format!("\"{}\"", value), "\"AUTOINDEX\"".to_string()),
-        "indexType" => ("4".to_string(), "\"COSINE\"".to_string(), format!("\"{}\"", value)),
-        _ => ("4".to_string(), "\"COSINE\"".to_string(), "\"AUTOINDEX\"".to_string()),
+    let injection = match param {
+        "dim" | "elementTypeParams.dim" => format!(r#"body["schema"]["fields"][1]["elementTypeParams"]["dim"] = {}"#, value),
+        "metricType" => format!(r#"body["indexParams"][0]["metricType"] = "{}""#, value),
+        "indexType" => format!(r#"body["indexParams"][0]["indexType"] = "{}""#, value),
+        "efconstruction" | "for" | "nlist" | "m" | "nprobe" | "search_list" => {
+            format!(r#"body["indexParams"][0].setdefault("params", {{}})["{}"] = {}"#, param, value)
+        }
+        "collection.ttl.seconds" | "ttlSeconds" => {
+            format!(r#"body["properties"] = {{"collection.ttl.seconds": {}}}"#, value)
+        }
+        "consistencyLevel" => format!(r#"body["consistencyLevel"] = "{}""#, value),
+        "shardsNum" | "shardsNumber" => format!(r#"body["shardsNum"] = {}"#, value),
+        "partitionsNum" => format!(r#"body["partitionsNum"] = {}"#, value),
+        "autoID" | "schema.autoId" => format!(r#"body["schema"]["autoID"] = {}"#, value),
+        "enableDynamicField" | "schema.enableDynamicField" => format!(r#"body["schema"]["enableDynamicField"] = {}"#, value),
+        "idType" => format!(r#"body["schema"]["fields"][0]["dataType"] = "{}""#, value),
+        "primaryFieldName" => format!(r#"body["schema"]["fields"][0]["fieldName"] = "{}""#, value),
+        "vectorFieldName" => format!(r#"body["schema"]["fields"][1]["fieldName"] = "{}""#, value),
+        "max_length" => format!(r#"body["schema"]["fields"][1]["elementTypeParams"]["max_length"] = {}"#, value),
+        "collectionName" => format!(r#"body["collectionName"] = {}"#, value),
+        _ => format!(r#"body["{}"] = {}"#, param, value),
     };
 
     format!(
         r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
-body = {{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{{"dim":{py_dim}}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":{py_metric},"indexType":{py_index}}}]}}
+body = {{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{{"dim":4}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}}]}}
+{injection}
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json=body)
 if r.json().get('code') == 0: print('[DEFECT: ILLEGAL_SUCCESS] {label} accepted'); sys.exit(1)
 else: print(f'properly rejected {label}: {{r.json()}}'); sys.exit(0)"#,
-        py_dim = py_dim,
-        py_metric = py_metric,
-        py_index = py_index,
+        injection = injection,
         label = label,
     )
 }
@@ -95,7 +110,7 @@ pub fn milvus_insert_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -116,7 +131,7 @@ pub fn milvus_query_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -148,7 +163,7 @@ pub fn milvus_index_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_idx_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -168,7 +183,7 @@ pub fn milvus_partition_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_part_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -189,7 +204,7 @@ pub fn milvus_alias_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_alias_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -210,7 +225,7 @@ pub fn milvus_database_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 db = 'oracle_db_' + uuid.uuid4().hex[:8]
 body = {{"dbName":db}}
 body["{param}"] = {value}
@@ -227,7 +242,7 @@ pub fn milvus_hybrid_search_probe(param: &str, value: &str, label: &str) -> Stri
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_hybrid_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -251,7 +266,7 @@ pub fn milvus_collection_mgmt_probe(param: &str, value: &str, label: &str) -> St
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_mgmt_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -272,7 +287,7 @@ pub fn milvus_partition_drop_probe(param: &str, value: &str, label: &str) -> Str
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_pdrop_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -296,7 +311,7 @@ pub fn milvus_collection_rename_probe(param: &str, value: &str, label: &str) -> 
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_rename_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -317,7 +332,7 @@ pub fn milvus_alter_properties_probe(param: &str, value: &str, label: &str) -> S
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_alter_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -338,7 +353,7 @@ pub fn milvus_add_field_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_addfield_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -359,7 +374,7 @@ pub fn milvus_get_probe(param: &str, value: &str, label: &str) -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_get_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -382,7 +397,7 @@ else: print(f'properly rejected {label}: {{r.json()}}'); sys.exit(0)"#,
 pub fn milvus_drop_nonexistent_partition() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_droppart_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -395,7 +410,7 @@ else: print(f'properly rejected drop nonexistent partition: {r.json()}'); sys.ex
 pub fn milvus_add_vector_field_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_addvec_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -409,7 +424,7 @@ fn milvus_read_probe(endpoint: &str, base_body: &str, param: &str, value: &str, 
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -456,7 +471,7 @@ pub fn milvus_collection_release_probe(param: &str, value: &str, label: &str) ->
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_rel_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -480,7 +495,7 @@ pub fn milvus_alias_alter_probe(param: &str, value: &str, label: &str) -> String
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_alter_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -504,7 +519,7 @@ pub fn milvus_alias_drop_probe(param: &str, value: &str, label: &str) -> String 
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_adrop_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -528,7 +543,7 @@ pub fn milvus_database_drop_probe(param: &str, value: &str, label: &str) -> Stri
     format!(
         r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 db = 'oracle_dbdrop_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/databases/create', headers=HEADERS, json={{"dbName":db}})
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -546,7 +561,7 @@ else: print(f'properly rejected {label}: {{r.json()}}'); sys.exit(0)"#,
 pub fn milvus_drop_nonexistent_database() -> String {
     r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 r = requests.post(f'{BASE}/v2/vectordb/databases/drop', headers=HEADERS, json={"dbName":"nonexistent_db_" + uuid.uuid4().hex[:8]})
 if r.json().get('code') == 0: print('[DEFECT: IDEMPOTENT_SUCCESS] drop nonexistent database accepted'); sys.exit(1)
 else: print(f'properly rejected drop nonexistent database: {r.json()}'); sys.exit(0)"#.to_string()
@@ -556,7 +571,7 @@ pub fn milvus_database_list_probe(param: &str, value: &str, label: &str) -> Stri
     format!(
         r#"import requests, sys
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 body = {{}}
 body["{param}"] = {value}
 r = requests.post(f'{{BASE}}/v2/vectordb/databases/list', headers=HEADERS, json=body)
@@ -572,7 +587,7 @@ pub fn milvus_partition_has_probe(param: &str, value: &str, label: &str) -> Stri
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_phass_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -596,7 +611,7 @@ pub fn milvus_collection_flush_probe(param: &str, value: &str, label: &str) -> S
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_flush_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -623,7 +638,7 @@ pub fn milvus_collection_compact_probe(param: &str, value: &str, label: &str) ->
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_compact_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -644,7 +659,7 @@ pub fn milvus_index_describe_probe(param: &str, value: &str, label: &str) -> Str
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_idxdesc_' + uuid.uuid4().hex[:8]
 {create}
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -664,7 +679,7 @@ else: print(f'properly rejected {label}: {{r.json()}}'); sys.exit(0)"#,
 pub fn milvus_drop_nonexistent_index() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_dropidx_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]}})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -677,7 +692,7 @@ else: print(f'properly rejected drop nonexistent index: {r.json()}'); sys.exit(0
 pub fn milvus_describe_nonexistent_index() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_descidx_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]}})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -690,7 +705,7 @@ else: print(f'properly rejected describe nonexistent index: {r.json()}'); sys.ex
 pub fn milvus_search_nonexistent() -> String {
     r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'nonexistent_' + uuid.uuid4().hex
 r = requests.post(f'{BASE}/v2/vectordb/entities/search', headers=HEADERS, json={"collectionName":c,"data":[[0.1,0.2,0.3,0.4]],"limit":3})
 if r.json().get('code') == 0: print('[DEFECT: ILLEGAL_SUCCESS] search on nonexistent collection returned code=0'); sys.exit(1)
@@ -700,7 +715,7 @@ else: print(f'properly rejected search on nonexistent collection: {r.json()}'); 
 pub fn milvus_count_consistency_check() -> String {
     r#"import requests, sys, json, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_count_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -725,7 +740,7 @@ else:
 pub fn milvus_nan_vector_check() -> String {
     r#"import requests, sys, json, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_nan_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -739,7 +754,7 @@ else: print(f'properly rejected NaN vector: {r.json()}'); sys.exit(0)"#.to_strin
 pub fn milvus_inf_vector_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_inf_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -756,7 +771,7 @@ else: print(f'Infinity vector properly rejected: {r.json()}'); sys.exit(0)"#.to_
 pub fn milvus_empty_vector_search_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_empty_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -772,7 +787,7 @@ else: print(f'empty vector properly rejected: {r.json()}'); sys.exit(0)"#.to_str
 pub fn milvus_duplicate_collection_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_dup_' + uuid.uuid4().hex[:8]
 r1 = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r1.json().get('code') != 0: print(f'setup failed: {r1.text}'); sys.exit(0)
@@ -785,7 +800,7 @@ else: print(f'properly rejected duplicate collection: {r2.json()}'); sys.exit(0)
 pub fn milvus_invalid_metric_check() -> String {
     r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_dist_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"InvalidMetric","indexType":"AUTOINDEX"}]})
 if r.json().get('code') == 0: print('[DEFECT: ILLEGAL_SUCCESS] invalid metricType accepted'); sys.exit(1)
@@ -795,7 +810,7 @@ else: print(f'properly rejected invalid metricType: {r.json()}'); sys.exit(0)"#.
 pub fn milvus_invalid_index_type_check() -> String {
     r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_idx_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"InvalidIndex"}]})
 if r.json().get('code') == 0: print('[DEFECT: ILLEGAL_SUCCESS] invalid indexType accepted'); sys.exit(1)
@@ -805,7 +820,7 @@ else: print(f'properly rejected invalid indexType: {r.json()}'); sys.exit(0)"#.t
 pub fn milvus_upsert_nan_vector_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_upnan_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -819,7 +834,7 @@ else: print(f'NaN vector properly rejected: {r.json()}'); sys.exit(0)"#.to_strin
 pub fn milvus_upsert_inf_vector_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_upinf_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -833,7 +848,7 @@ else: print(f'Infinity vector properly rejected: {r.json()}'); sys.exit(0)"#.to_
 pub fn milvus_wrong_dimension_insert_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_wdim_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -846,7 +861,7 @@ else: print(f'wrong dimension properly rejected: {r.json()}'); sys.exit(0)"#.to_
 pub fn milvus_delete_count_consistency_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_delcnt_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -876,7 +891,7 @@ else:
 pub fn milvus_upsert_idempotency_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_upidem_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -901,7 +916,7 @@ else:
 pub fn milvus_delete_empty_filter_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_delempty_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -914,7 +929,7 @@ else: print(f'properly rejected empty filter delete: {r.json()}'); sys.exit(0)"#
 pub fn milvus_delete_null_filter_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_delnull_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -929,7 +944,7 @@ else: print(f'properly rejected null filter delete: {r.json()}'); sys.exit(0)"#.
 pub fn milvus_delete_nonexistent_id_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_delnonexist_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -942,7 +957,7 @@ print(f'delete nonexistent id returned success (idempotent): {r.json()}'); sys.e
 pub fn milvus_delete_then_query_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_delquery_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -968,7 +983,7 @@ print(f'delete-then-query verified: deleted id gone, other ids present'); sys.ex
 pub fn milvus_drop_nonexistent_collection() -> String {
     r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'nonexistent_coll_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/drop', headers=HEADERS, json={"collectionName":c})
 if r.json().get('code') == 0: print('[DEFECT: IDEMPOTENT_SUCCESS] drop nonexistent collection accepted'); sys.exit(1)
@@ -978,7 +993,7 @@ else: print(f'properly rejected drop nonexistent collection: {r.json()}'); sys.e
 pub fn milvus_drop_then_describe_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_dropdesc_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -994,7 +1009,7 @@ else: print(f'properly rejected describe dropped collection: {r.json()}'); sys.e
 pub fn milvus_describe_nonexistent_collection() -> String {
     r#"import requests, sys, uuid
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'nonexistent_desc_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/describe', headers=HEADERS, json={"collectionName":c})
 if r.json().get('code') == 0: print('[DEFECT: ILLEGAL_SUCCESS] describe nonexistent collection returned success'); sys.exit(1)
@@ -1004,7 +1019,7 @@ else: print(f'properly rejected describe nonexistent collection: {r.json()}'); s
 pub fn milvus_search_score_ordering_check() -> String {
     r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'oracle_score_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 if r.json().get('code') != 0: print(f'setup failed: {r.text}'); sys.exit(0)
@@ -1272,7 +1287,7 @@ pub fn milvus_l2_distance_ordering_check() -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{{"dim":4}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"L2","indexType":"AUTOINDEX"}}]}})
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -1297,7 +1312,7 @@ pub fn milvus_ip_distance_ordering_check() -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{{"dim":4}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"IP","indexType":"AUTOINDEX"}}]}})
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -1322,7 +1337,7 @@ pub fn milvus_hamming_search_check() -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"BinaryVector","elementTypeParams":{{"dim":32}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"HAMMING","indexType":"BIN_IVF_FLAT"}}]}})
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -1347,7 +1362,7 @@ pub fn milvus_jaccard_search_check() -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{"collectionName":c,"schema":{{"autoID":False,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True}},{{"fieldName":"vector","dataType":"BinaryVector","elementTypeParams":{{"dim":32}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"JACCARD","indexType":"BIN_IVF_FLAT"}}]}})
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -1372,7 +1387,7 @@ pub fn milvus_auto_id_check() -> String {
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{{BASE}}/v2/vectordb/collections/create', headers=HEADERS, json={{"collectionName":c,"schema":{{"autoID":True,"enableDynamicField":True,"fields":[{{"fieldName":"id","dataType":"Int64","isPrimary":True,"autoID":True}},{{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{{"dim":4}}}}]}},"indexParams":[{{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}}]}})
 if r.json().get('code') != 0: print(f'setup failed: {{r.text}}'); sys.exit(0)
@@ -1419,7 +1434,7 @@ time.sleep(1)
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 {setup_block}body = {base_body}
 {mutation_line}
@@ -1452,7 +1467,7 @@ time.sleep(1)
     format!(
         r#"import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {{'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}}
+HEADERS = {{'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}}
 c = 'oracle_' + uuid.uuid4().hex[:8]
 {setup_block}body = {base_body}
 {mutation_line}
@@ -1475,10 +1490,29 @@ pub fn generate_missing_field_probe(
     label: &str,
     needs_setup: bool,
 ) -> String {
+    let field_in_body = match target_field {
+        "autoID" | "autoId" | "enableDynamicField" | "fields" | "schema" | "indexParams" | "dim" | "elementTypeParams.dim" | "metricType" | "indexType" | "vector" => true,
+        _ => base_body.contains(&format!("\"{}\"", target_field)),
+    };
+    if !field_in_body {
+        return String::new();
+    }
+    let pop_line = match target_field {
+        "autoID" | "autoId" => format!(r#"body["schema"].pop("autoID", None)"#),
+        "enableDynamicField" => format!(r#"body["schema"].pop("enableDynamicField", None)"#),
+        "fields" => format!(r#"body["schema"].pop("fields", None)"#),
+        "schema" => format!(r#"body.pop("schema", None)"#),
+        "indexParams" => format!(r#"body.pop("indexParams", None)"#),
+        "dim" | "elementTypeParams.dim" => format!(r#"body["schema"]["fields"][1]["elementTypeParams"].pop("dim", None)"#),
+        "metricType" => format!(r#"body["indexParams"][0].pop("metricType", None)"#),
+        "indexType" => format!(r#"body["indexParams"][0].pop("indexType", None)"#),
+        "vector" => format!(r#"body["schema"]["fields"] = [f for f in body["schema"]["fields"] if f.get("fieldName") != "vector"]"#),
+        _ => format!(r#"body.pop("{target_field}", None)"#),
+    };
     generate_mutation_probe(
         endpoint,
         base_body,
-        &format!(r#"body.pop("{target_field}", None)"#),
+        &pop_line,
         label,
         needs_setup,
     )
@@ -1504,7 +1538,7 @@ pub fn milvus_create_mutation_probes() -> Vec<SafetyNet> {
         (r#"body["collectionName"] = None"#, "null_injection_collectionName", "ILLEGAL_SUCCESS"),
         (r#"body.pop("collectionName", None)"#, "missing_required_collectionName", "ILLEGAL_SUCCESS"),
         (r#"body["collectionName"] = "test'; DROP TABLE--""#, "unicode_injection_collectionName", "ILLEGAL_SUCCESS"),
-        (r#"body["schema"]["fields"][1]["elementTypeParams"]["dim"] = 32768"#, "oversized_dimension", "ILLEGAL_SUCCESS"),
+        (r#"body["schema"]["fields"][1]["elementTypeParams"]["dim"] = 32768"#, "oversized_dimension", "PARAM_IGNORED"),
         (r#"body["unknownParam"] = 123"#, "unknown_param", "PERMISSIVE_PARSING"),
         (r#"body["extraField"] = "unexpected""#, "extra_fields", "PERMISSIVE_PARSING"),
         (r#"body["schema"]["fields"][1]["elementTypeParams"]["dim"] = 3.4e38"#, "boundary_float_dimension", "ILLEGAL_SUCCESS"),
@@ -1694,7 +1728,7 @@ mod tests {
     fn test_milvus_search_probe_contains_auth() {
         let script = milvus_search_probe("limit", "0", "limit=0");
         assert!(script.contains("Authorization"));
-        assert!(script.contains("root:Milvus"));
+        assert!(script.contains("{{TESTVDB_AUTH_HEADER}}"));
         assert!(script.contains("ILLEGAL_SUCCESS"));
     }
 

@@ -1,0 +1,28 @@
+[
+  {
+    "turn": 0,
+    "task_endpoint": "/v2/vectordb/entities/search",
+    "task_pattern": "count_consistency",
+    "tool_name": "get_coverage_report",
+    "script_code": null,
+    "result_category": "success",
+    "defect_type": null,
+    "boundary_rejected": false,
+    "state_check_methods": [],
+    "oracle_violations_count": 0,
+    "stdout_preview": null
+  },
+  {
+    "turn": 1,
+    "task_endpoint": "/v2/vectordb/entities/search",
+    "task_pattern": "data_visibility",
+    "tool_name": "execute_test_script",
+    "script_code": "import requests, sys, uuid, time, json\n\nBASE = '{{TESTVDB_DB_URL}}'\nHEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}\n\n# Unique collection name\nc = 'search_vis_' + uuid.uuid4().hex[:8]\n\nprint(f\"=== Test: data_visibility on /v2/vectordb/entities/search ===\")\nprint(f\"Collection: {c}\")\n\n# STEP 1: Create collection\nbody = {\n    \"collectionName\": c,\n    \"schema\": {\n        \"autoID\": False,\n        \"enableDynamicField\": True,\n        \"fields\": [\n            {\"fieldName\": \"id\", \"dataType\": \"Int64\", \"isPrimary\": True},\n            {\"fieldName\": \"vector\", \"dataType\": \"FloatVector\", \"elementTypeParams\": {\"dim\": 4}}\n        ]\n    },\n    \"indexParams\": [\n        {\"fieldName\": \"vector\", \"metricType\": \"COSINE\", \"indexType\": \"AUTOINDEX\"}\n    ],\n    \"params\": {\"shardsNum\": 1}\n}\nr = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json=body)\nprint(f\"Create collection: {r.status_code} {r.json()}\")\nassert r.json().get('code') == 0, f\"Create failed: {r.text}\"\ntime.sleep(0.5)\n\n# STEP 2: Insert 5 entities\nentities = {\n    \"collectionName\": c,\n    \"data\": [\n        {\"id\": 1, \"vector\": [0.1, 0.2, 0.3, 0.4]},\n        {\"id\": 2, \"vector\": [0.2, 0.3, 0.4, 0.5]},\n        {\"id\": 3, \"vector\": [0.3, 0.4, 0.5, 0.6]},\n        {\"id\": 4, \"vector\": [0.4, 0.5, 0.6, 0.7]},\n        {\"id\": 5, \"vector\": [0.5, 0.6, 0.7, 0.8]}\n    ]\n}\nr = requests.post(f'{BASE}/v2/vectordb/entities/insert', headers=HEADERS, json=entities)\nprint(f\"Insert: {r.status_code} {r.json()}\")\nassert r.json().get('code') == 0, f\"Insert failed: {r.text}\"\ntime.sleep(0.3)\n\n# STEP 3: Load collection\nr = requests.post(f'{BASE}/v2/vectordb/collections/load', headers=HEADERS, json={\"collectionName\": c})\nprint(f\"Load: {r.status_code} {r.json()}\")\nassert r.json().get('code') == 0, f\"Load failed: {r.text}\"\ntime.sleep(1)\n\n# STEP 4: Query to verify count\nr = requests.post(f'{BASE}/v2/vectordb/entities/query', headers=HEADERS, json={\n    \"collectionName\": c,\n    \"filter\": \"id >= 0\",\n  ",
+    "result_category": "success",
+    "defect_type": null,
+    "boundary_rejected": false,
+    "state_check_methods": [],
+    "oracle_violations_count": 0,
+    "stdout_preview": "=== Test: data_visibility on /v2/vectordb/entities/search ===\nCollection: search_vis_1abe5e05\nCreate collection: 200 {'code': 0, 'data': {}}\nInsert: 200 {'code': 0, 'cost': 0, 'data': {'insertCount': 5, 'insertIds': [1, 2, 3, 4, 5]}}\nLoad: 200 {'code': 0, 'data': {}}\nQuery: 200 {'code': 0, 'cost': 0, 'data': [{'id': 1, 'vector': [0.1, 0.2, 0.3, 0.4]}, {'id': 2, 'vector': [0.2, 0.3, 0.4, 0.5]}, {'id': 3, 'vector': [0.3, 0.4, 0.5, 0.6]}, {'id': 4, 'vector': [0.4, 0.5, 0.6, 0.7]}, {'id': 5, 'vector"
+  }
+]

@@ -1,0 +1,15 @@
+[
+  {
+    "turn": 0,
+    "task_endpoint": "",
+    "task_pattern": "count_consistency",
+    "tool_name": "execute_test_script",
+    "script_code": "import psycopg2\nimport uuid\nimport time\nimport sys\n\nDB_URL = \"{{TESTVDB_DB_URL}}\"\nconn = psycopg2.connect(DB_URL)\nconn.autocommit = True\ncur = conn.cursor()\n\n# Create extension\ncur.execute(\"CREATE EXTENSION IF NOT EXISTS vector\")\n\n# Create a unique table name\ntable_name = \"test_count_\" + str(uuid.uuid4()).replace(\"-\", \"_\")\n\n# Create table with vector column\ncur.execute(f\"\"\"\n    CREATE TABLE {table_name} (\n        id bigserial PRIMARY KEY,\n        embedding vector(3),\n        metadata text\n    )\n\"\"\")\n\n# Insert entities\nnum_inserts = 10\nfor i in range(num_inserts):\n    cur.execute(\n        f\"INSERT INTO {table_name} (embedding, metadata) VALUES (%s, %s)\",\n        (f\"[{i*0.1}, {i*0.2}, {i*0.3}]\", f\"item_{i}\")\n    )\n\n# Verify row count\ncur.execute(f\"SELECT count(*) FROM {table_name}\")\nactual_count = cur.fetchone()[0]\nprint(f\"Expected count: {num_inserts}, Actual count: {actual_count}\")\n\nif actual_count != num_inserts:\n    print(f\"[DEFECT: DATA_CORRUPTION] Row count mismatch! Expected {num_inserts}, got {actual_count}\")\n    sys.exit(1)\nelse:\n    print(f\"[PASS] Row count matches expected: {num_inserts}\")\n\n# Now test with vector index\ncur.execute(f\"CREATE INDEX ON {table_name} USING hnsw (embedding vector_l2_ops)\")\n\n# Insert more entities after index creation\nmore_inserts = 5\nfor i in range(num_inserts, num_inserts + more_inserts):\n    cur.execute(\n        f\"INSERT INTO {table_name} (embedding, metadata) VALUES (%s, %s)\",\n        (f\"[{i*0.1}, {i*0.2}, {i*0.3}]\", f\"item_{i}\")\n    )\n\ncur.execute(f\"SELECT count(*) FROM {table_name}\")\nactual_count2 = cur.fetchone()[0]\nexpected_total = num_inserts + more_inserts\nprint(f\"After index + more inserts - Expected: {expected_total}, Actual: {actual_count2}\")\n\nif actual_count2 != expected_total:\n    print(f\"[DEFECT: DATA_CORRUPTION] Row count mismatch after index! Expected {expected_total}, got {actual_count2}\")\n    sys.exit(1)\nelse:\n    print(f\"[PASS] Row count matches expected after index: {expected_total}\")\n\n# Test count with vector",
+    "result_category": "error",
+    "defect_type": null,
+    "boundary_rejected": false,
+    "state_check_methods": [],
+    "oracle_violations_count": 0,
+    "stdout_preview": ""
+  }
+]

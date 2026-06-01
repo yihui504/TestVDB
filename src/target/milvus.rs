@@ -1,12 +1,14 @@
-use super::{SafetyNet, TargetPlugin, TargetStyle};
+﻿use super::{SafetyNet, TargetPlugin, TargetStyle};
 use crate::agent::oracle::{InvariantCheck, InvariantSource};
 use crate::agent::probe::{ProbeTemplate, MilvusProbeTemplate};
 use crate::agent::probe_milvus as milvus_probe;
 use crate::agent::probe_milvus_advanced as milvus_advanced;
-use crate::contract::schema::{CheckType, StructuredContract};
+use crate::agent::vdbfuzz::coverage::ApiEndpoint;
+use crate::contract::schema::{BehaviorCategory, CheckType, StructuredContract};
 use crate::review::milvus::MilvusIndependentReviewer;
 use crate::review::IndependentReviewer;
 use crate::sandbox::manager::SidecarSpec;
+use std::collections::HashSet;
 
 pub struct MilvusPlugin;
 
@@ -200,6 +202,32 @@ impl TargetPlugin for MilvusPlugin {
     fn derive_oracle_checks(&self, contract: &StructuredContract) -> Vec<InvariantCheck> {
         let mut checks = Vec::new();
 
+        // Derive from behavioral_contracts first (highest priority)
+        let superseded_names: HashSet<String> = contract
+            .behavioral_contracts
+            .iter()
+            .filter_map(|bc| bc.supersedes.clone())
+            .collect();
+
+        for bc in &contract.behavioral_contracts {
+            if bc.verification_script.is_empty() {
+                continue;
+            }
+            let check_type = match bc.category {
+                BehaviorCategory::StateConsistency => CheckType::CountConsistency,
+                BehaviorCategory::SemanticCorrectness => CheckType::ValueRange,
+                BehaviorCategory::InterfaceConsistency => CheckType::Idempotency,
+                BehaviorCategory::DiagnosticQuality => CheckType::ValueRange,
+            };
+            checks.push(InvariantCheck {
+                name: format!("behavior_{}", bc.name),
+                check_type,
+                script: bc.verification_script.clone(),
+                source: InvariantSource::DerivedFromBehavior,
+            });
+        }
+
+        // Derive from assertions
         for assertion in &contract.assertions {
             let a_lower = assertion.to_lowercase();
 
@@ -367,8 +395,22 @@ impl TargetPlugin for MilvusPlugin {
             }
         }
 
-        let mut seen = std::collections::HashSet::new();
-        checks.retain(|c| seen.insert(c.name.clone()));
+        // Derive from explicit state_invariants (skip those superseded by behavioral_contracts)
+        for si in &contract.state_invariants {
+            if superseded_names.contains(&si.name) {
+                continue;
+            }
+            checks.push(InvariantCheck {
+                name: si.name.clone(),
+                check_type: si.check_type.clone(),
+                script: si.assertion_script.clone(),
+                source: InvariantSource::ContractExplicit,
+            });
+        }
+
+        // Deduplicate by name (case-insensitive)
+        let mut dedup = HashSet::new();
+        checks.retain(|c| dedup.insert(c.name.to_lowercase()));
 
         checks
     }
@@ -425,6 +467,72 @@ impl TargetPlugin for MilvusPlugin {
     fn probe_template(&self) -> &dyn ProbeTemplate {
         &MilvusProbeTemplate
     }
+
+    fn auth_header_value(&self) -> Option<&str> {
+        Some("Bearer root:Milvus")
+    }
+
+    // ── US-2.2: Milvus-specific script generation overrides ──
+
+    fn script_headers(&self) -> &'static str {
+        "HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}"
+    }
+
+    fn script_success_check(&self, var: &str) -> String {
+        format!("{}.get('code') != 0", var)
+    }
+
+    fn script_success_code(&self) -> &'static str {
+        "0"
+    }
+
+    fn script_api_helper(&self) -> String {
+        "def api(path, body):\n    r = requests.post(f'{BASE}{path}', headers=HEADERS, json=body)\n    return r.json()\n\n".to_string()
+    }
+
+    fn script_api_call(&self, path: &str, body_expr: &str) -> String {
+        format!("api('{}', {})", path, body_expr)
+    }
+
+    fn all_api_endpoints(&self) -> Vec<ApiEndpoint> {
+        vec![
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/entities/search".into(), params: vec!["collectionName".into(), "data".into(), "limit".into(), "offset".into(), "filter".into(), "outputFields".into(), "searchParams".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/entities/hybrid_search".into(), params: vec!["collectionName".into(), "search".into(), "rerank".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/entities/query".into(), params: vec!["collectionName".into(), "filter".into(), "limit".into(), "offset".into(), "outputFields".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/entities/get".into(), params: vec!["collectionName".into(), "id".into(), "outputFields".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/entities/insert".into(), params: vec!["collectionName".into(), "data".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/entities/upsert".into(), params: vec!["collectionName".into(), "data".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/entities/delete".into(), params: vec!["collectionName".into(), "filter".into(), "id".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/create".into(), params: vec!["collectionName".into(), "schema".into(), "indexParams".into(), "ttlSeconds".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/drop".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/describe".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/rename".into(), params: vec!["collectionName".into(), "newCollectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/alter_properties".into(), params: vec!["collectionName".into(), "properties".into(), "ttlSeconds".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/fields/add".into(), params: vec!["collectionName".into(), "fieldName".into(), "fieldType".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v2/vectordb/collections/list".into(), params: vec!["dbName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/has".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/get_stats".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/load".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/release".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/flush".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/collections/compact".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/indexes/create".into(), params: vec!["collectionName".into(), "indexName".into(), "indexType".into(), "params".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/indexes/drop".into(), params: vec!["collectionName".into(), "indexName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/indexes/describe".into(), params: vec!["collectionName".into(), "indexName".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v2/vectordb/indexes/list".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/partitions/create".into(), params: vec!["collectionName".into(), "partitionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/partitions/drop".into(), params: vec!["collectionName".into(), "partitionName".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v2/vectordb/partitions/list".into(), params: vec!["collectionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/partitions/has".into(), params: vec!["collectionName".into(), "partitionName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/aliases/create".into(), params: vec!["collectionName".into(), "aliasName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/aliases/alter".into(), params: vec!["collectionName".into(), "aliasName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/aliases/drop".into(), params: vec!["aliasName".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v2/vectordb/aliases/list".into(), params: vec!["dbName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/databases/create".into(), params: vec!["dbName".into()] },
+            ApiEndpoint { method: "POST".into(), path: "/v2/vectordb/databases/drop".into(), params: vec!["dbName".into()] },
+            ApiEndpoint { method: "GET".into(), path: "/v2/vectordb/databases/list".into(), params: Vec::new() },
+        ]
+    }
 }
 
 #[cfg(test)]
@@ -466,9 +574,147 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
         };
         let checks = plugin.derive_oracle_checks(&contract);
         assert!(!checks.is_empty());
+    }
+
+    #[test]
+    fn test_milvus_behavioral_contracts_derivation() {
+        let plugin = MilvusPlugin;
+        let contract = StructuredContract {
+            api_endpoint: "insert".to_string(),
+            doc_url: "https://milvus.io/docs/".to_string(),
+            assertions: vec![],
+            type_constraints: vec![],
+            range_constraints: vec![],
+            state_constraints: vec![],
+            state_invariants: vec![],
+            behavioral_contracts: vec![
+                crate::contract::schema::BehavioralContract {
+                    name: "insert_count_consistency".to_string(),
+                    category: BehaviorCategory::StateConsistency,
+                    endpoints: vec!["/v2/vectordb/entities/insert".to_string()],
+                    precondition_script: "collection exists".to_string(),
+                    verification_script: "print('check count')".to_string(),
+                    expected_outcome: "row_count == N".to_string(),
+                    supersedes: None,
+                    mutation_rules: vec![],
+                },
+                crate::contract::schema::BehavioralContract {
+                    name: "upsert_idempotency".to_string(),
+                    category: BehaviorCategory::InterfaceConsistency,
+                    endpoints: vec!["/v2/vectordb/entities/upsert".to_string()],
+                    precondition_script: "collection exists".to_string(),
+                    verification_script: "print('check idempotency')".to_string(),
+                    expected_outcome: "count unchanged after duplicate upsert".to_string(),
+                    supersedes: None,
+                    mutation_rules: vec![],
+                },
+                crate::contract::schema::BehavioralContract {
+                    name: "search_data_visibility".to_string(),
+                    category: BehaviorCategory::SemanticCorrectness,
+                    endpoints: vec!["/v2/vectordb/entities/search".to_string()],
+                    precondition_script: "data inserted".to_string(),
+                    verification_script: "print('check visibility')".to_string(),
+                    expected_outcome: "inserted data is searchable".to_string(),
+                    supersedes: None,
+                    mutation_rules: vec![],
+                },
+            ],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
+        };
+        let checks = plugin.derive_oracle_checks(&contract);
+
+        // Should derive at least 3 checks from behavioral_contracts
+        let behavioral_checks: Vec<_> = checks.iter().filter(|c| c.source == InvariantSource::DerivedFromBehavior).collect();
+        assert!(behavioral_checks.len() >= 3, "expected >= 3 behavioral checks, got {}", behavioral_checks.len());
+
+        // Verify check types
+        let count_check = behavioral_checks.iter().find(|c| c.name == "behavior_insert_count_consistency");
+        assert!(count_check.is_some(), "missing behavior_insert_count_consistency");
+        assert_eq!(count_check.unwrap().check_type, CheckType::CountConsistency);
+        assert!(!count_check.unwrap().script.is_empty());
+
+        let idempotency_check = behavioral_checks.iter().find(|c| c.name == "behavior_upsert_idempotency");
+        assert!(idempotency_check.is_some(), "missing behavior_upsert_idempotency");
+        assert_eq!(idempotency_check.unwrap().check_type, CheckType::Idempotency);
+        assert!(!idempotency_check.unwrap().script.is_empty());
+
+        let visibility_check = behavioral_checks.iter().find(|c| c.name == "behavior_search_data_visibility");
+        assert!(visibility_check.is_some(), "missing behavior_search_data_visibility");
+        assert_eq!(visibility_check.unwrap().check_type, CheckType::ValueRange);
+        assert!(!visibility_check.unwrap().script.is_empty());
+    }
+
+    #[test]
+    fn test_milvus_behavioral_supersedes_state_invariant() {
+        let plugin = MilvusPlugin;
+        let contract = StructuredContract {
+            api_endpoint: "insert".to_string(),
+            doc_url: "https://milvus.io/docs/".to_string(),
+            assertions: vec![],
+            type_constraints: vec![],
+            range_constraints: vec![],
+            state_constraints: vec![],
+            state_invariants: vec![crate::contract::schema::StateInvariant {
+                name: "count_check".to_string(),
+                check_type: CheckType::CountConsistency,
+                endpoint: "/v2/vectordb/collections/describe".to_string(),
+                precondition: "collection exists".to_string(),
+                assertion_script: "print('old check')".to_string(),
+            }],
+            behavioral_contracts: vec![crate::contract::schema::BehavioralContract {
+                name: "insert_count_consistency".to_string(),
+                category: BehaviorCategory::StateConsistency,
+                endpoints: vec!["/v2/vectordb/entities/insert".to_string()],
+                precondition_script: "collection exists".to_string(),
+                verification_script: "print('new check')".to_string(),
+                expected_outcome: "row_count == N".to_string(),
+                supersedes: Some("count_check".to_string()),
+                mutation_rules: vec![],
+            }],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
+        };
+        let checks = plugin.derive_oracle_checks(&contract);
+
+        // behavioral check should be present
+        assert!(checks.iter().any(|c| c.name == "behavior_insert_count_consistency"));
+        // superseded state_invariant should be skipped
+        assert!(!checks.iter().any(|c| c.name == "count_check"));
+    }
+
+    #[test]
+    fn test_milvus_behavioral_empty_script_skipped() {
+        let plugin = MilvusPlugin;
+        let contract = StructuredContract {
+            api_endpoint: "insert".to_string(),
+            doc_url: "https://milvus.io/docs/".to_string(),
+            assertions: vec![],
+            type_constraints: vec![],
+            range_constraints: vec![],
+            state_constraints: vec![],
+            state_invariants: vec![],
+            behavioral_contracts: vec![crate::contract::schema::BehavioralContract {
+                name: "no_script_check".to_string(),
+                category: BehaviorCategory::StateConsistency,
+                endpoints: vec![],
+                precondition_script: String::new(),
+                verification_script: String::new(), // empty script
+                expected_outcome: String::new(),
+                supersedes: None,
+                mutation_rules: vec![],
+            }],
+            rejection_policies: std::collections::HashMap::new(),
+            nested_params: std::collections::HashMap::new(),
+        };
+        let checks = plugin.derive_oracle_checks(&contract);
+        let behavioral: Vec<_> = checks.iter().filter(|c| c.source == InvariantSource::DerivedFromBehavior).collect();
+        assert!(behavioral.is_empty(), "empty verification_script should be skipped");
     }
 }
 
@@ -476,7 +722,7 @@ fn milvus_semantic_recall_probe() -> String {
     r#"
 import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'sem_recall_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0, f"Create failed: {r.json()}"
@@ -501,7 +747,7 @@ fn milvus_semantic_filter_precision_probe() -> String {
     r#"
 import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'sem_filt_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"COSINE","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0
@@ -523,7 +769,7 @@ fn milvus_semantic_threshold_accuracy_probe() -> String {
     r#"
 import requests, sys, uuid, time
 BASE = '{{TESTVDB_DB_URL}}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'sem_thresh_' + uuid.uuid4().hex[:8]
 r = requests.post(f'{BASE}/v2/vectordb/collections/create', headers=HEADERS, json={"collectionName":c,"schema":{"autoID":False,"enableDynamicField":True,"fields":[{"fieldName":"id","dataType":"Int64","isPrimary":True},{"fieldName":"vector","dataType":"FloatVector","elementTypeParams":{"dim":4}}]},"indexParams":[{"fieldName":"vector","metricType":"L2","indexType":"AUTOINDEX"}]})
 assert r.json().get('code')==0

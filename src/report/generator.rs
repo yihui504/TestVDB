@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use tracing::info;
 
 use crate::agent::classifier::DefectType;
 
@@ -22,6 +23,7 @@ pub enum CandidateStatus {
     Pending,
     ReproducedTwice,
     Rejected,
+    NeedsReview,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -84,6 +86,7 @@ pub struct BugReport {
     pub review_scope: String,
     pub root_cause_analysis: String,
     pub improvement_suggestions: String,
+    pub semantic_gate_result: Option<String>,
     pub github_issue_body: Option<String>,
     pub submission_grade_review: SubmissionGradeReview,
 }
@@ -256,9 +259,6 @@ impl BugReport {
             DefectType::SequenceViolation => {
                 "An API call sequence produced an unexpected state or result, indicating a state transition or ordering dependency that violates documented behavior.".to_string()
             }
-            DefectType::ScriptError | DefectType::Pass => {
-                "This report should not have been promoted for the observed classification.".to_string()
-            }
         };
 
         let improvement_suggestions = match candidate.defect_type {
@@ -300,9 +300,6 @@ impl BugReport {
             }
             DefectType::SequenceViolation => {
                 "Audit the state transition logic for the affected API sequence and add a regression test that asserts the documented ordering constraints hold.".to_string()
-            }
-            DefectType::ScriptError | DefectType::Pass => {
-                "Do not promote this result to a formal defect report until the classification path is corrected.".to_string()
             }
         };
 
@@ -351,6 +348,7 @@ impl BugReport {
             review_scope,
             root_cause_analysis,
             improvement_suggestions,
+            semantic_gate_result: candidate.semantic_gate_result.clone(),
             github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::NeedsRewrite,
@@ -509,6 +507,8 @@ impl BugReport {
             ## Root Cause Analysis\n\
             {}\n\n\
             ## Improvement Suggestions\n\
+            {}\n\n\
+            ## Semantic Gate\n\
             {}\n",
             self.title,
             self.target,
@@ -532,6 +532,7 @@ impl BugReport {
             direct_fail_reasons,
             self.root_cause_analysis,
             self.improvement_suggestions,
+            self.semantic_gate_result.as_deref().unwrap_or("N/A"),
         );
 
         if let Some(ref issue_body) = self.github_issue_body {
@@ -609,6 +610,193 @@ impl BugReport {
         fs::write(path, markdown).context("Failed to write candidate defect report to file")?;
         Ok(())
     }
+
+    pub fn export_self_contained_mre<P: AsRef<Path>>(
+        &self,
+        out_dir: P,
+        db_image: &str,
+        pip_packages: &[String],
+        db_port: u16,
+        db_env: &[(String, String)],
+        auth_header: &str,
+    ) -> Result<()> {
+        std::fs::create_dir_all(&out_dir)?;
+
+        let standalone_script = Self::make_standalone_mre_script(&self.mre_code, auth_header);
+        let dockerfile_mre = Self::make_mre_dockerfile(pip_packages);
+        let docker_compose = Self::make_mre_docker_compose(db_image, pip_packages, db_port, db_env, auth_header);
+        let readme = Self::make_mre_readme(self, db_image, db_port);
+
+        std::fs::write(out_dir.as_ref().join("reproduce.py"), &standalone_script)?;
+        std::fs::write(out_dir.as_ref().join("Dockerfile.mre"), &dockerfile_mre)?;
+        std::fs::write(out_dir.as_ref().join("docker-compose.yml"), &docker_compose)?;
+        std::fs::write(out_dir.as_ref().join("README.md"), &readme)?;
+
+        info!("Self-contained MRE written to {}", out_dir.as_ref().display());
+        Ok(())
+    }
+
+    fn make_mre_dockerfile(pip_packages: &[String]) -> String {
+        let pip_install = if pip_packages.is_empty() {
+            String::new()
+        } else {
+            format!("RUN pip install {}\n", pip_packages.join(" "))
+        };
+        format!(
+            r#"FROM python:3.11-slim
+WORKDIR /app
+COPY reproduce.py .
+RUN pip install requests
+{}
+CMD ["python3", "reproduce.py"]
+"#,
+            pip_install,
+        )
+    }
+
+    fn make_standalone_mre_script(mre_code: &str, auth_header: &str) -> String {
+        let header = format!(
+            r#"#!/usr/bin/env python3
+import os
+import requests
+import json
+import time
+import sys
+
+DB_URL = os.environ.get("TESTVDB_DB_URL", "http://localhost")
+AUTH_HEADER = {{"Authorization": os.environ.get("TESTVDB_AUTH_HEADER", "{}")}}
+"#,
+            auth_header
+        );
+
+        let sanitized = mre_code
+            .replace("{{TESTVDB_DB_URL}}", "{DB_URL}")
+            .replace("{{TESTVDB_AUTH_HEADER}}", "{AUTH_HEADER.get(\"Authorization\", \"\")}");
+
+        format!("{}\n\ndef main():\n{}\n\nif __name__ == \"__main__\":\n    main()\n", header, sanitized)
+    }
+
+    fn make_mre_docker_compose(
+        db_image: &str,
+        _pip_packages: &[String],
+        db_port: u16,
+        db_env: &[(String, String)],
+        auth_header: &str,
+    ) -> String {
+        let env_lines: Vec<String> = db_env.iter()
+            .map(|(k, v)| format!("      {}={}", k, v))
+            .collect();
+
+        format!(
+            r#"version: "3.8"
+services:
+  db:
+    image: {db_image}
+    ports:
+      - "{db_port}:{db_port}"
+    environment:
+{envs}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:{db_port}/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  reproducer:
+    build:
+      context: .
+      dockerfile: Dockerfile.mre
+    environment:
+      - TESTVDB_DB_URL=http://db:{db_port}
+      - TESTVDB_AUTH_HEADER={auth}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: python3 reproduce.py
+"#,
+            db_image = db_image,
+            db_port = db_port,
+            envs = env_lines.join("\n"),
+            auth = auth_header,
+        )
+    }
+
+    fn make_mre_readme(report: &BugReport, db_image: &str, db_port: u16) -> String {
+        format!(
+            r#"# MRE: {} - {} ({:?})
+
+## Quick Start
+
+```bash
+docker-compose up --build
+```
+
+## Requirements
+
+- Docker and docker-compose
+
+## What This Does
+
+1. Starts a {} container ({}, port {})
+2. Runs `reproduce.py` against the DB
+3. The script demonstrates the defect described below
+
+## Expected Behavior
+
+{}
+
+## Actual Behavior (Defect)
+
+{}
+
+## Defect Details
+
+- **Target**: {} {}
+- **Defect Type**: {:?}
+- **Root Cause**: {}
+- **Documentation**: {}
+
+## Standalone Reproduction (without docker-compose)
+
+```bash
+# Start the database
+docker run -d -p {}:{} --name testvdb-mre {} {}
+
+# Install dependencies
+pip install requests
+
+# Wait for DB to be ready
+sleep 10
+
+# Run the reproduction script
+TESTVDB_DB_URL=http://localhost:{} python3 reproduce.py
+```
+
+## Classification Basis
+
+{}
+"#,
+            report.title,
+            report.target,
+            report.defect_type,
+            report.target,
+            db_image,
+            db_port,
+            report.contract_assertions.join("\n"),
+            report.surviving_assertions.join("\n"),
+            report.target,
+            report.version,
+            report.defect_type,
+            report.root_cause_analysis,
+            report.doc_citation_url,
+            db_port,
+            db_port,
+            report.target,
+            db_image,
+            db_port,
+            report.classification_basis,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -636,6 +824,7 @@ mod tests {
             review_scope: "Independent replay covered the same narrowed request.".to_string(),
             root_cause_analysis: "Missing backend validation".to_string(),
             improvement_suggestions: "Add a check in the API gateway".to_string(),
+            semantic_gate_result: None,
             github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::SubmissionGrade,
@@ -663,7 +852,7 @@ mod tests {
             target: "milvus".to_string(),
             version: "2.0.0".to_string(),
             defect_type: DefectType::PoorDiagnostics,
-            doc_citation_url: "".to_string(), // Invalid
+            doc_citation_url: "".to_string(),
             contract_assertions: vec!["Dimension must be greater than 0".to_string()],
             surviving_assertions: vec!["Dimension must be greater than 0".to_string()],
             mre_code: "client.create_collection(dimension=-1)".to_string(),
@@ -676,6 +865,7 @@ mod tests {
             review_scope: "Independent replay covered the same narrowed request.".to_string(),
             root_cause_analysis: "Missing backend validation".to_string(),
             improvement_suggestions: "Add a check in the API gateway".to_string(),
+            semantic_gate_result: None,
             github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::SubmissionGrade,
@@ -723,6 +913,7 @@ mod tests {
             review_scope: "Independent replay covered the same narrowed request.".to_string(),
             root_cause_analysis: "Bug is here".to_string(),
             improvement_suggestions: "Fix it".to_string(),
+            semantic_gate_result: None,
             github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::SubmissionGrade,
@@ -829,6 +1020,7 @@ mod tests {
             review_scope: BugReport::default_review_scope(),
             root_cause_analysis: "The error omits offset.".to_string(),
             improvement_suggestions: "Mention offset in the error.".to_string(),
+            semantic_gate_result: None,
             github_issue_body: None,
             submission_grade_review: SubmissionGradeReview {
                 verdict: SubmissionGradeVerdict::NeedsRewrite,

@@ -3,7 +3,10 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
-const DEEPSEEK_API_URL: &str = "https://api.deepseek.com/chat/completions";
+const LLM_MAX_RETRIES: u32 = 3;
+const LLM_JSON_TEMPERATURE: f64 = 0.1;
+const LLM_TOOL_TEMPERATURE: f64 = 0.7;
+const LLM_RETRY_BASE_DELAY_SECS: u64 = 1;
 
 #[derive(Debug, Serialize)]
 pub struct ChatRequest {
@@ -125,119 +128,142 @@ pub struct Choice {
 pub struct DeepSeekClient {
     client: Client,
     api_key: String,
+    api_url: String,
+    model: String,
+    temperature_override: Option<f64>,
 }
 
 impl DeepSeekClient {
-    pub fn new() -> Result<Self> {
+    pub fn new(api_url: String, model: String, temperature_override: Option<f64>) -> Result<Self> {
         let api_key = env::var("DEEPSEEK_API_KEY")
             .context("DEEPSEEK_API_KEY environment variable not set")?;
         
         Ok(Self {
             client: Client::new(),
             api_key,
+            api_url,
+            model,
+            temperature_override,
         })
     }
 
     /// Sends a chat completion request to DeepSeek API, enforcing JSON mode.
     pub async fn send_chat_json_mode(&self, messages: Vec<Message>) -> Result<String> {
+        let temperature = self.temperature_override.unwrap_or(LLM_JSON_TEMPERATURE) as f32;
         let req_body = ChatRequest {
-            model: "deepseek-chat".to_string(),
+            model: self.model.clone(),
             messages,
             response_format: Some(ResponseFormat {
                 r#type: "json_object".to_string(),
             }),
             tools: None,
             tool_choice: None,
-            temperature: 0.1,
+            temperature,
         };
 
         let mut last_err = None;
-        for attempt in 0..3 {
-            let response = self
-                .client
-                .post(DEEPSEEK_API_URL)
-                .bearer_auth(&self.api_key)
-                .json(&req_body)
-                .send()
-                .await
-                .context("Failed to send request to DeepSeek API")?;
-
-            if response.status().is_success() {
-                let chat_resp: ChatResponse = response
-                    .json()
-                    .await
-                    .context("Failed to deserialize DeepSeek response")?;
-
-                if let Some(choice) = chat_resp.choices.first() {
-                    return Ok(choice.message.content.clone().unwrap_or_default());
-                } else {
-                    bail!("No choices returned from DeepSeek API")
+        for attempt in 0..LLM_MAX_RETRIES {
+            match self.try_chat_request(&req_body).await {
+                Ok(msg) => return Ok(msg),
+                Err(e) => {
+                    let err_str = format!("{:#}", e);
+                    let is_retryable = Self::is_retryable_error(&err_str);
+                    last_err = Some(err_str);
+                    if is_retryable && attempt < LLM_MAX_RETRIES - 1 {
+                        let delay = std::time::Duration::from_secs(LLM_RETRY_BASE_DELAY_SECS * (1u64 << attempt as u64));
+                        tracing::warn!(
+                            "DeepSeek transient error, retrying in {:?} (attempt {}/3): {}",
+                            delay,
+                            attempt + 1,
+                            last_err.as_ref().expect("last_err set in Err branch above")
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    bail!("DeepSeek API error after {} attempts: {}", attempt + 1, last_err.expect("last_err set in Err branch"));
                 }
             }
-
-            let status = response.status();
-            let err_text = response.text().await.unwrap_or_default();
-            last_err = Some(format!("DeepSeek API error ({}): {}", status, err_text));
-
-            if status.as_u16() == 503 && attempt < 2 {
-                let delay = std::time::Duration::from_secs(10 * (attempt as u64 + 1));
-                tracing::warn!("DeepSeek 503, retrying in {:?} (attempt {}/3)...", delay, attempt + 1);
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-            bail!("{}", last_err.unwrap());
         }
-        bail!("{}", last_err.unwrap())
+        bail!("{}", last_err.expect("at least one error occurred in retry loop"))
     }
 
     /// Sends a chat completion request to DeepSeek API with tools.
     pub async fn send_chat_with_tools(&self, messages: Vec<Message>, tools: Vec<Tool>) -> Result<Message> {
+        let temperature = self.temperature_override.unwrap_or(LLM_TOOL_TEMPERATURE) as f32;
         let req_body = ChatRequest {
-            model: "deepseek-chat".to_string(),
+            model: self.model.clone(),
             messages,
             response_format: None,
             tools: Some(tools),
             tool_choice: Some(ToolChoice::String("auto".to_string())),
-            temperature: 0.7,
+            temperature,
         };
 
         let mut last_err = None;
-        for attempt in 0..3 {
-            let response = self
-                .client
-                .post(DEEPSEEK_API_URL)
-                .bearer_auth(&self.api_key)
-                .json(&req_body)
-                .send()
-                .await
-                .context("Failed to send request to DeepSeek API")?;
-
-            if response.status().is_success() {
-                let chat_resp: ChatResponse = response
-                    .json()
-                    .await
-                    .context("Failed to deserialize DeepSeek response")?;
-
-                if let Some(choice) = chat_resp.choices.first() {
-                    return Ok(choice.message.clone());
-                } else {
-                    bail!("No choices returned from DeepSeek API")
+        for attempt in 0..LLM_MAX_RETRIES {
+            match self.try_chat_request_raw(&req_body).await {
+                Ok(msg) => return Ok(msg),
+                Err(e) => {
+                    let err_str = format!("{:#}", e);
+                    let is_retryable = Self::is_retryable_error(&err_str);
+                    last_err = Some(err_str);
+                    if is_retryable && attempt < LLM_MAX_RETRIES - 1 {
+                        let delay = std::time::Duration::from_secs(LLM_RETRY_BASE_DELAY_SECS * (1u64 << attempt as u64));
+                        tracing::warn!(
+                            "DeepSeek transient error, retrying in {:?} (attempt {}/3): {}",
+                            delay,
+                            attempt + 1,
+                            last_err.as_ref().expect("last_err set in Err branch above")
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+                    bail!("DeepSeek API error after {} attempts: {}", attempt + 1, last_err.expect("last_err set in Err branch"));
                 }
             }
-
-            let status = response.status();
-            let err_text = response.text().await.unwrap_or_default();
-            last_err = Some(format!("DeepSeek API error ({}): {}", status, err_text));
-
-            if status.as_u16() == 503 && attempt < 2 {
-                let delay = std::time::Duration::from_secs(10 * (attempt as u64 + 1));
-                tracing::warn!("DeepSeek 503, retrying in {:?} (attempt {}/3)...", delay, attempt + 1);
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-            bail!("{}", last_err.unwrap());
         }
-        bail!("{}", last_err.unwrap())
+        bail!("{}", last_err.expect("at least one error occurred in retry loop"))
+    }
+
+    fn is_retryable_error(err_str: &str) -> bool {
+        err_str.contains("close_notify")
+            || err_str.contains("connection")
+            || err_str.contains("timed out")
+            || err_str.contains("reset")
+            || err_str.contains("503")
+    }
+
+    async fn try_chat_request_raw(&self, req_body: &ChatRequest) -> Result<Message> {
+        let response = self
+            .client
+            .post(&self.api_url)
+            .bearer_auth(&self.api_key)
+            .json(&req_body)
+            .send()
+            .await
+            .context("Failed to send request to DeepSeek API")?;
+
+        if response.status().is_success() {
+            let chat_resp: ChatResponse = response
+                .json()
+                .await
+                .context("Failed to deserialize DeepSeek response")?;
+
+            if let Some(choice) = chat_resp.choices.first() {
+                return Ok(choice.message.clone());
+            } else {
+                bail!("No choices returned from DeepSeek API")
+            }
+        }
+
+        let status = response.status();
+        let err_text = response.text().await.unwrap_or_default();
+        bail!("DeepSeek API HTTP error ({}): {}", status, err_text)
+    }
+
+    async fn try_chat_request(&self, req_body: &ChatRequest) -> Result<String> {
+        let msg = self.try_chat_request_raw(req_body).await?;
+        Ok(msg.content.clone().unwrap_or_default())
     }
 }
 
@@ -248,7 +274,11 @@ mod tests {
     #[tokio::test]
     #[ignore = "Requires DEEPSEEK_API_KEY"]
     async fn test_deepseek_json_mode() {
-        let client = DeepSeekClient::new().unwrap();
+        let client = DeepSeekClient::new(
+            "https://api.deepseek.com/chat/completions".to_string(),
+            "deepseek-chat".to_string(),
+            None,
+        ).unwrap();
         let messages = vec![
             Message::system("You are a helpful assistant. Please output a valid JSON object with keys 'hello' and 'world'."),
             Message::user("Generate the JSON."),

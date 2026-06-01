@@ -30,10 +30,10 @@ impl MetamorphicTestGenerator {
         let mut cases = Vec::new();
 
         let has_search = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/search")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/search"))
         });
         let has_insert = store.type_constraints.iter().any(|atc| {
-            atc.endpoint.contains("entities/insert")
+            atc.endpoint.as_deref().map_or(false, |e| e.contains("entities/insert"))
         });
         let has_ivf = store.type_constraints.iter().any(|atc| {
             atc.constraint.param_name == "indexType"
@@ -65,8 +65,8 @@ impl MetamorphicTestGenerator {
         cases.push(Self::generate_flat_cosine_ordering(style));
 
         for abc in &store.behavioral_contracts {
-            let name = abc.contract.name.to_lowercase();
-            let outcome = abc.contract.expected_outcome.to_lowercase();
+            let name = abc.constraint.name.to_lowercase();
+            let outcome = abc.constraint.expected_outcome.to_lowercase();
             let combined = format!("{} {}", name, outcome);
             if combined.contains("monotonic") || combined.contains("ordering") || combined.contains("sorted") {
                 if combined.contains("l2") || combined.contains("euclidean") {
@@ -144,12 +144,18 @@ impl MetamorphicTestGenerator {
     }
 
     fn generate_flat_cosine_ordering(style: TargetStyle) -> MetamorphicTestCase {
+        let marker = match style {
+            TargetStyle::Weaviate => "PARAM_IGNORED",
+            _ => "METAMORPHIC_VIOLATION",
+        };
+        let script = build_metamorphic_script(style, MetamorphicScriptKind::FlatCosineOrdering);
+        let script = script.replace("[DEFECT: METAMORPHIC_VIOLATION]", &format!("[DEFECT: {}]", marker));
         MetamorphicTestCase {
             name: "metamorphic_flat_cosine_distance_ordering".to_string(),
             metamorphic_pattern: MetamorphicPattern::FlatCosineOrdering,
             endpoint: "/v2/vectordb/entities/search".to_string(),
-            script: build_metamorphic_script(style, MetamorphicScriptKind::FlatCosineOrdering),
-            defect_marker: "METAMORPHIC_VIOLATION".to_string(),
+            script,
+            defect_marker: marker.to_string(),
         }
     }
 }
@@ -167,7 +173,8 @@ enum MetamorphicScriptKind {
 fn build_metamorphic_script(style: TargetStyle, kind: MetamorphicScriptKind) -> String {
     match style {
         TargetStyle::Milvus => build_milvus_metamorphic_script(kind),
-        TargetStyle::Qdrant | TargetStyle::Weaviate => build_qdrant_metamorphic_script(kind),
+        TargetStyle::Qdrant => build_qdrant_metamorphic_script(kind),
+        TargetStyle::Weaviate => build_weaviate_metamorphic_script(kind),
         TargetStyle::PgVector => String::new(),
     }
 }
@@ -175,7 +182,7 @@ fn build_metamorphic_script(style: TargetStyle, kind: MetamorphicScriptKind) -> 
 fn build_milvus_metamorphic_script(kind: MetamorphicScriptKind) -> String {
     let setup = r#"import requests, sys, uuid, time
 BASE = '{TESTVDB_DB_URL}'
-HEADERS = {'Authorization': 'Bearer root:Milvus', 'Content-Type': 'application/json'}
+HEADERS = {'Authorization': '{{TESTVDB_AUTH_HEADER}}', 'Content-Type': 'application/json'}
 c = 'meta_' + uuid.uuid4().hex[:8]
 "#;
 
@@ -415,7 +422,7 @@ time.sleep(1)"#;
              r = requests.post(f'{{BASE}}/collections/{{c}}/points/search', json={{\"vector\":[0.1,0.2,0.3,0.4],\"limit\":10}})\n\
              scores = [p.get('score') for p in r.json().get('result',[])]\n\
              if not scores: print('no results'); sys.exit(0)\n\
-             if any(scores[i] < scores[i+1] for i in range(len(scores)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] L2 not descending (score): scores={{scores}}'); sys.exit(1)\n\
+             if any(scores[i] > scores[i+1] for i in range(len(scores)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] L2 not ascending (score=distance): scores={{scores}}'); sys.exit(1)\n\
              print(f'FLAT L2 ordering verified: scores={{scores}}'); sys.exit(0)",
             setup=setup, insert_perturbed_10=insert_perturbed_10,
         ),
@@ -434,10 +441,136 @@ time.sleep(1)"#;
     }
 }
 
+fn build_weaviate_metamorphic_script(kind: MetamorphicScriptKind) -> String {
+    let setup = r#"import requests, sys, uuid, time
+BASE = '{TESTVDB_DB_URL}'
+c = 'Meta_' + uuid.uuid4().hex[:8]
+"#;
+
+    let create = r#"r = requests.post(f'{BASE}/v1/schema', json={"class":c,"vectorIndexConfig":{"distance":"cosine","efConstruction":128,"maxConnections":64},"properties":[{"name":"title","dataType":["string"]}]})
+if r.status_code not in (200, 201): print(f'setup failed: {r.status_code}'); sys.exit(0)
+time.sleep(1)"#;
+
+    let insert_perturbed = r#"for i in range(20):
+    r = requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":"test"},"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i],"id":str(uuid.uuid4())})
+time.sleep(1)"#;
+
+    let insert_perturbed_50 = r#"for i in range(50):
+    r = requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":"test"},"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i],"id":str(uuid.uuid4())})
+time.sleep(1)"#;
+
+    let insert_perturbed_10 = r#"for i in range(1,11):
+    r = requests.post(f'{BASE}/v1/objects', json={"class":c,"properties":{"title":"test"},"vector":[0.1*i+0.001*(i%3),0.2*i+0.001*((i+1)%3),0.3*i+0.001*((i+2)%3),0.4*i],"id":str(uuid.uuid4())})
+time.sleep(1)"#;
+
+    match kind {
+        MetamorphicScriptKind::QueryConsistency => format!(
+            "{setup}{create}\n\
+             {insert_perturbed}\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 5) {{ _additional {{ id distance }} }} }} }}'\n\
+             r1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             r2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             res1 = [(h.get('_additional',{{}}).get('id'),h.get('_additional',{{}}).get('distance')) for h in r1.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             res2 = [(h.get('_additional',{{}}).get('id'),h.get('_additional',{{}}).get('distance')) for h in r2.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             if res1 != res2: print(f'[DEFECT: METAMORPHIC_VIOLATION] query consistency: {{res1}} vs {{res2}}'); sys.exit(1)\n\
+             else: print(f'query consistency verified'); sys.exit(0)",
+            setup=setup, create=create, insert_perturbed=insert_perturbed,
+        ),
+
+        MetamorphicScriptKind::LimitMonotonicity => format!(
+            "{setup}{create}\n\
+             {insert_perturbed}\n\
+             q3 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 3) {{ _additional {{ id distance }} }} }} }}'\n\
+             q10 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 10) {{ _additional {{ id distance }} }} }} }}'\n\
+             r1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q3}})\n\
+             r2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q10}})\n\
+             ids3 = [h.get('_additional',{{}}).get('id') for h in r1.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             ids10 = [h.get('_additional',{{}}).get('id') for h in r2.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             top1_a = ids3[0] if ids3 else None\n\
+             top1_b = ids10[0] if ids10 else None\n\
+             if top1_a != top1_b: print(f'[DEFECT: METAMORPHIC_VIOLATION] limit top-1 mismatch: limit=3 id={{top1_a}} vs limit=10 id={{top1_b}}'); sys.exit(1)\n\
+             else: print(f'limit monotonicity verified: top-1 id={{top1_a}} consistent'); sys.exit(0)",
+            setup=setup, create=create, insert_perturbed=insert_perturbed,
+        ),
+
+        MetamorphicScriptKind::NprobeMonotonicity => format!(
+            "{setup}{create}\n\
+             {insert_perturbed_50}\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 10) {{ _additional {{ id distance }} }} }} }}'\n\
+             r1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             r2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             top1_a = r1.json().get('data',{{}}).get('Get',{{}}).get(c,[{{}}])[0].get('_additional',{{}}).get('id') if r1.json().get('data',{{}}).get('Get',{{}}).get(c) else None\n\
+             top1_b = r2.json().get('data',{{}}).get('Get',{{}}).get(c,[{{}}])[0].get('_additional',{{}}).get('id') if r2.json().get('data',{{}}).get('Get',{{}}).get(c) else None\n\
+             if top1_a != top1_b: print(f'[DEFECT: METAMORPHIC_VIOLATION] search consistency mismatch: id1={{top1_a}} vs id2={{top1_b}}'); sys.exit(1)\n\
+             else: print(f'nprobe monotonicity verified: top-1 id={{top1_a}} consistent'); sys.exit(0)",
+            setup=setup, create=create, insert_perturbed_50=insert_perturbed_50,
+        ),
+
+        MetamorphicScriptKind::EfSearchMonotonicity => format!(
+            "{setup}{create}\n\
+             {insert_perturbed_50}\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 10) {{ _additional {{ id distance }} }} }} }}'\n\
+             r1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             r2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             top1_a = r1.json().get('data',{{}}).get('Get',{{}}).get(c,[{{}}])[0].get('_additional',{{}}).get('id') if r1.json().get('data',{{}}).get('Get',{{}}).get(c) else None\n\
+             top1_b = r2.json().get('data',{{}}).get('Get',{{}}).get(c,[{{}}])[0].get('_additional',{{}}).get('id') if r2.json().get('data',{{}}).get('Get',{{}}).get(c) else None\n\
+             if top1_a != top1_b: print(f'[DEFECT: METAMORPHIC_VIOLATION] ef consistency mismatch: id1={{top1_a}} vs id2={{top1_b}}'); sys.exit(1)\n\
+             else: print(f'ef_search monotonicity verified: top-1 id={{top1_a}} consistent'); sys.exit(0)",
+            setup=setup, create=create, insert_perturbed_50=insert_perturbed_50,
+        ),
+
+        MetamorphicScriptKind::InsertMonotonicity => format!(
+            "{setup}{create}\n\
+             for i in range(10):\n\
+                 r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"test\"}},\"vector\":[0.1*i,0.2*i,0.3*i,0.4*i],\"id\":str(uuid.uuid4())}})\n\
+             time.sleep(1)\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 5) {{ _additional {{ id distance }} }} }} }}'\n\
+             r1 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             top1_id = r1.json().get('data',{{}}).get('Get',{{}}).get(c,[{{}}])[0].get('_additional',{{}}).get('id') if r1.json().get('data',{{}}).get('Get',{{}}).get(c) else None\n\
+             for i in range(40):\n\
+                 r = requests.post(f'{{BASE}}/v1/objects', json={{\"class\":c,\"properties\":{{\"title\":\"more\"}},\"vector\":[0.5*i,0.6*i,0.7*i,0.8*i],\"id\":str(uuid.uuid4())}})\n\
+             time.sleep(2)\n\
+             q2 = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 50) {{ _additional {{ id distance }} }} }} }}'\n\
+             r2 = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q2}})\n\
+             all_ids_2 = set(h.get('_additional',{{}}).get('id') for h in r2.json().get('data',{{}}).get('Get',{{}}).get(c,[]))\n\
+             if top1_id not in all_ids_2: print(f'[DEFECT: METAMORPHIC_VIOLATION] insert monotonicity: top-1 id={{top1_id}} not in results after more inserts'); sys.exit(1)\n\
+             else: print(f'insert monotonicity verified: top-1 id={{top1_id}} still in results'); sys.exit(0)",
+            setup=setup, create=create,
+        ),
+
+        MetamorphicScriptKind::FlatL2Ordering => format!(
+            "{setup}\
+             r = requests.post(f'{{BASE}}/v1/schema', json={{\"class\":c,\"vectorIndexConfig\":{{\"distance\":\"l2-squared\",\"efConstruction\":128,\"maxConnections\":64}},\"properties\":[{{\"name\":\"title\",\"dataType\":[\"string\"]}}]}})\n\
+             if r.status_code not in (200, 201): print(f'setup failed: {{r.status_code}}'); sys.exit(0)\n\
+             time.sleep(1)\n\
+             {insert_perturbed_10}\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 10) {{ _additional {{ distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             dists = [h.get('_additional',{{}}).get('distance') for h in r.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             if not dists: print('no results'); sys.exit(0)\n\
+             if any(dists[i] > dists[i+1] for i in range(len(dists)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] L2 not ascending: dists={{dists}}'); sys.exit(1)\n\
+             print(f'FLAT L2 ordering verified: dists={{dists}}'); sys.exit(0)",
+            setup=setup, insert_perturbed_10=insert_perturbed_10,
+        ),
+
+        MetamorphicScriptKind::FlatCosineOrdering => format!(
+            "{setup}{create}\n\
+             {insert_perturbed_10}\n\
+             q = '{{ Get {{ ' + c + '(nearVector: {{vector: [0.1,0.2,0.3,0.4]}} limit: 10) {{ _additional {{ distance }} }} }} }}'\n\
+             r = requests.post(f'{{BASE}}/v1/graphql', json={{\"query\":q}})\n\
+             dists = [h.get('_additional',{{}}).get('distance') for h in r.json().get('data',{{}}).get('Get',{{}}).get(c,[])]\n\
+             if not dists: print('no results'); sys.exit(0)\n\
+             if any(dists[i] < dists[i+1] for i in range(len(dists)-1)): print(f'[DEFECT: METAMORPHIC_VIOLATION] COSINE not descending: dists={{dists}}'); sys.exit(1)\n\
+             print(f'FLAT COSINE ordering verified: dists={{dists}}'); sys.exit(0)",
+            setup=setup, create=create, insert_perturbed_10=insert_perturbed_10,
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contract::schema::TypeConstraint;
+    use crate::contract::schema::{RejectionPolicy, TypeConstraint};
     use crate::contract::store::{AnnotatedTypeConstraint, Confidence, ConstraintSource};
 
     fn make_test_store() -> ContractStore {
@@ -449,9 +582,10 @@ mod tests {
                 expected_type: "integer".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/entities/search".to_string(),
+            endpoint: Some("/v2/vectordb/entities/search".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -460,9 +594,10 @@ mod tests {
                 expected_type: "array".to_string(),
                 violation_examples: vec![],
             },
-            endpoint: "/v2/vectordb/entities/insert".to_string(),
+            endpoint: Some("/v2/vectordb/entities/insert".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store.type_constraints.push(AnnotatedTypeConstraint {
@@ -471,9 +606,10 @@ mod tests {
                 expected_type: "string".to_string(),
                 violation_examples: vec!["IVF_FLAT".to_string(), "HNSW".to_string()],
             },
-            endpoint: "/v2/vectordb/indexes/create".to_string(),
+            endpoint: Some("/v2/vectordb/indexes/create".to_string()),
             source: ConstraintSource::OpenapiDerived,
             confidence: Confidence::High,
+            rejection_policy: Some(RejectionPolicy::Reject),
         });
 
         store
@@ -511,7 +647,7 @@ mod tests {
         let cases = MetamorphicTestGenerator::from_store(&store, TargetStyle::Milvus);
 
         for case in &cases {
-            assert!(case.script.contains("Bearer root:Milvus"), "Milvus script missing auth: {}", case.name);
+            assert!(case.script.contains("{{TESTVDB_AUTH_HEADER}}"), "Milvus script missing auth: {}", case.name);
         }
     }
 

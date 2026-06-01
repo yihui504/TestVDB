@@ -3,9 +3,11 @@ pub mod schema;
 pub mod openapi;
 pub mod store;
 pub mod prompt;
+pub mod gate;
 
 use anyhow::Context;
 use schema::{StructuredContract, EndpointRegistry, BehavioralContract, TypeConstraint, RangeConstraint, StateConstraint, Determinism, BehaviorCategory};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -133,6 +135,8 @@ pub fn merge_contracts_from_ka(contracts: &[StructuredContract], doc_url: &str) 
             bc.extend(merged_behavioral);
             bc
         },
+        rejection_policies: HashMap::new(),
+        nested_params: HashMap::new(),
     }
 }
 
@@ -240,7 +244,15 @@ fn extract_param_name(text: &str) -> Option<String> {
             return Some(clean.to_string());
         }
         if clean.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') && clean.len() >= 2 {
-            return Some(clean.replace("params.", "").to_string());
+            let stripped = if clean.starts_with("params.") {
+                &clean["params.".len()..]
+            } else if clean.contains(".params.") {
+                let idx = clean.find(".params.").expect("contains check guarantees find succeeds");
+                &clean[idx + ".params.".len()..]
+            } else {
+                clean
+            };
+            return Some(stripped.to_string());
         }
     }
     None
@@ -321,11 +333,44 @@ mod tests {
             state_constraints: vec![],
             state_invariants: vec![],
             behavioral_contracts: vec![],
+            rejection_policies: HashMap::new(),
+            nested_params: HashMap::new(),
         };
 
         save_contract_json(&contract, &file_path).unwrap();
         let loaded = load_contract_json(&file_path).unwrap();
 
         assert_eq!(contract, loaded);
+    }
+
+    #[test]
+    fn test_extract_param_name_nested_searchparams() {
+        assert_eq!(
+            extract_param_name("searchparams.params.nprobe must be > 0"),
+            Some("nprobe".to_string())
+        );
+        assert_eq!(
+            extract_param_name("params.nprobe must be > 0"),
+            Some("nprobe".to_string())
+        );
+        assert_eq!(
+            extract_param_name("limit must be > 0"),
+            Some("limit".to_string())
+        );
+        assert_eq!(
+            extract_param_name("vectors.size must be > 0"),
+            Some("vectors.size".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_nprobe_range_constraint() {
+        let assertions = vec![
+            "[SEARCH] searchParams.params.nprobe must be > 0".to_string(),
+        ];
+        let (ranges, _types) = parse_constraints_from_assertions(&assertions);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].param_name, "nprobe");
+        assert!(ranges[0].min.is_some());
     }
 }
