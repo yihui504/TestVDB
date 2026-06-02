@@ -184,10 +184,11 @@
 **总计**: 41/42 PASS, 0 FAIL, 1 NEEDS_ATTENTION
 
 ### 唯一关注项
-- US-078 AC2: pgvector合同断言数62条（PRD要求≥65），差3条。state_invariants(6)和behavioral_contracts(5)均满足。断言覆盖所有SQL操作类别。数字精度问题，功能实质满足。
+- ~~US-078 AC2: pgvector合同断言数62条（PRD要求≥65），差3条。state_invariants(6)和behavioral_contracts(5)均满足。断言覆盖所有SQL操作类别。数字精度问题，功能实质满足。~~
+- ✅ **已修复** (iteration 9): 在pgvector_contract.json补加4条断言（62→65条），覆盖DROP TABLE后COUNT重置、TRUNCATE后COUNT重置、类型错误诊断、重复索引名诊断。state_invariants(6)和behavioral_contracts(5)保持不变。Build通过，审查者重新验证PASS。
 
 ### 审查者结论
-**PASS** — 所有核心功能均已实现，代码质量良好，验收标准满足。唯一偏差为数字精度问题，不影响功能。
+**PASS** — 所有核心功能均已实现，代码质量良好，验收标准满足。**42/42 ACs 全部通过。**
 
 ---
 

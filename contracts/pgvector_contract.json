@@ -62,7 +62,11 @@
     "[BEHAVIOR:DIAGNOSTIC] NULL vector error must mention 'NULL' or 'vector'",
     "[BEHAVIOR:DIAGNOSTIC] negative LIMIT error must mention 'LIMIT'",
     "[CONCURRENCY] concurrent INSERT from 2 threads must maintain COUNT consistency",
-    "[CONCURRENCY] concurrent DELETE+SEARCH must not cause crash or data corruption"
+    "[CONCURRENCY] concurrent DELETE+SEARCH must not cause crash or data corruption",
+    "[BEHAVIOR:STATE] DROP TABLE then recreate must reset COUNT to 0",
+    "[BEHAVIOR:STATE] TRUNCATE must reset COUNT to 0 without error",
+    "[BEHAVIOR:DIAGNOSTIC] type error (string for vector) must mention 'type' or 'cast'",
+    "[BEHAVIOR:DIAGNOSTIC] duplicate index name error must mention 'already exists' or 'relation'"
   ],
   "type_constraints": [
     {"param_name": "vector.dim", "expected_type": "positive integer", "violation_examples": ["0", "-1", "1.5", "'abc'", "null"]},
