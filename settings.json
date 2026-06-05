@@ -1,0 +1,54 @@
+{
+  "docker": {
+    "milvus": {
+      "port": 19530,
+      "grpc_port": 19531
+    },
+    "qdrant": {
+      "port": 6333,
+      "grpc_port": 6334
+    },
+    "weaviate": {
+      "port": 8080,
+      "grpc_port": 50051
+    },
+    "pgvector": {
+      "port": 5432
+    },
+    "cleanup_on_exit": true,
+    "startup_timeout_seconds": 120
+  },
+  "github": {
+    "token": ""
+  },
+  "retry": {
+    "max_attempts": 5,
+    "docker_startup_delay_seconds": 10,
+    "script_execution_delay_seconds": 3,
+    "doc_fetch_delay_seconds": 5,
+    "llm_format_delay_seconds": 0
+  },
+  "pipeline": {
+    "default_max_rounds": 5,
+    "default_min_defects": 1
+  },
+  "results": {
+    "base_dir": "results",
+    "max_sessions": 10
+  },
+  "knowledge": {
+    "cache_enabled": true,
+    "cache_ttl_hours": 168
+  },
+  "monitors": {
+    "enabled": true
+  },
+  "notification": {
+    "on_severity": "critical",
+    "webhook_url": ""
+  },
+  "network": {
+    "proxy": ""
+  },
+  "log_level": "info"
+}

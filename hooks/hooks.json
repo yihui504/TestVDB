@@ -1,0 +1,90 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import subprocess,sys,shutil,os; print('[TestVDB] Pre-flight checks...'); r=subprocess.run(['docker','ps'],capture_output=True); print('[TestVDB] Docker:','OK' if not r.returncode else 'WARNING - not running'); vi=sys.version_info; py_ok=vi>=(3,9); print(f'[TestVDB] Python: {vi.major}.{vi.minor}'+(' (FATAL: <3.9, Orchestrator will terminate)' if not py_ok else '')); if sys.platform=='win32': r2=subprocess.run(['py','-0'],capture_output=True,text=True); if not r2.returncode: vers=[l.strip().replace('.','') for l in r2.stdout.strip().split(chr(10)) if l.strip() and l.strip()[0].isdigit()]; best=[l for l in r2.stdout.strip().split(chr(10)) if l.strip() and l.strip()[0].isdigit()]; if best: print(f'[TestVDB] Windows py launcher versions: {best}'); gb=shutil.disk_usage('.').free/1e9; print(f'[TestVDB] Disk: {gb:.1f}GB' + (' (WARNING: <10GB)' if gb<10 else '')); gh=os.environ.get('GITHUB_TOKEN','') or os.environ.get('GH_TOKEN',''); print('[TestVDB] GitHub Token: '+('configured' if gh else 'WARNING - not set, Novelty Judge will use WebSearch only')); nr=subprocess.run(['curl','-s','-o','/dev/null','-w','%{http_code}','--max-time','5','https://pypi.org'],capture_output=True,text=True); net_ok=nr.stdout.strip() in ('200','301','302'); print('[TestVDB] Network: '+('OK' if net_ok else 'WARNING - pypi.org unreachable, WebSearch may fail')); print('[TestVDB] Checks done. Python<3.9 is fatal per Orchestrator spec.')\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import json,os,time; d='results'; os.makedirs(d,exist_ok=True); e={'timestamp':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'type':'Bash','note':'TestVDB agent execution'}; fp=os.path.join(d,'session_execution_log.jsonl'); f=open(fp,'a'); f.write(json.dumps(e)+chr(10)); f.close()\""
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import json,os; p=os.environ.get('CLAUDE_PLUGIN_ROOT','.'); fp=os.path.join(p,'settings.json'); s=json.load(open(fp,encoding='utf-8')); n=s.get('notification',{}); w=n.get('webhook_url',''); sev=n.get('on_severity','critical'); print(f'[TestVDB] Write event. Severity={sev}, Webhook={\"configured\" if w else \"none\"}')\""
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import json,os; p=os.environ.get('CLAUDE_PLUGIN_ROOT','.'); fp=os.path.join(p,'settings.json'); s=json.load(open(fp,encoding='utf-8')); r=s.get('retry',{}); print(f'[TestVDB] Tool failure detected. Retry policy: max_attempts={r.get(\"max_attempts\",5)}')\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import subprocess,os,time; print('[TestVDB] Stop: Cleaning session Docker containers...'); sid=os.environ.get('TESTVDB_SESSION_ID',''); bases=['testvdb-milvus-standalone','testvdb-milvus-etcd','testvdb-milvus-minio','testvdb-qdrant-standalone','testvdb-weaviate-standalone','testvdb-pgvector-standalone']; targets=[b+'-'+sid for b in bases] if sid else bases; [subprocess.run(['docker','rm','-f',c],capture_output=True) for c in targets]; print(f'[TestVDB] Cleaned {len(targets)} containers.' + (' (session:'+sid+')' if sid else ' (all TestVDB)'))\""
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import subprocess,json,os,time; print('[TestVDB] SessionEnd: Emergency cleanup...'); sid=os.environ.get('TESTVDB_SESSION_ID',''); bases=['testvdb-milvus-standalone','testvdb-milvus-etcd','testvdb-milvus-minio','testvdb-qdrant-standalone','testvdb-weaviate-standalone','testvdb-pgvector-standalone']; targets=[b+'-'+sid for b in bases] if sid else bases; [subprocess.run(['docker','rm','-f',c],capture_output=True) for c in targets]; ckpt_dir='results/.checkpoints'; os.makedirs(ckpt_dir,exist_ok=True); state={'pipeline_state':'interrupted','interrupted_at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime()),'note':'Emergency checkpoint by SessionEnd'}; ckpt=os.path.join(ckpt_dir,f'mine_state_{int(time.time())}.json'); json.dump(state,open(ckpt,'w'),indent=2); print(f'[TestVDB] Checkpoint saved: {ckpt}')\""
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import json,os,shutil; print('[TestVDB] PreCompact: Saving state before compaction...'); ckpt_dir='results/.checkpoints'; os.makedirs(ckpt_dir,exist_ok=True); [shutil.copy(f,os.path.join(ckpt_dir,f)) for f in ['mine_state.json','coverage.json'] if os.path.exists(f)]; print('[TestVDB] PreCompact: State checkpoint saved.')\""
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -c \"import json,os; print('[TestVDB] PostCompact: Context compressed. Verifying state...'); ckpt_dir='results/.checkpoints'; if os.path.exists('mine_state.json'): state=json.load(open('mine_state.json')); print(f'[TestVDB] Current pipeline_state: {state.get(\"pipeline_state\",\"unknown\")}'); print(f'[TestVDB] Next action: {state.get(\"next_action\",\"resume from last checkpoint\")}'); print('[TestVDB] Recovery: re-read mine_state.json and experience_handoff.json, then resume from pipeline_state.current_round.'); else: print('[TestVDB] WARNING: mine_state.json not found. Full pipeline restart needed.')\""
+          }
+        ]
+      }
+    ]
+  }
+}
