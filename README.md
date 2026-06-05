@@ -43,7 +43,7 @@ Phase 5: Defect Judgment           -- 3 judge agents + Stage 2 voting debate
 Phase 6: Report Generation         -- Defect reports with MRE scripts
 ```
 
-The pipeline runs iteratively: each round injects a `reflection_context` from the previous round into the attack agents, enabling strategy adaptation. Stalemate detection (2 consecutive rounds with no new defects) triggers document re-search and strategy adjustment.
+The pipeline runs iteratively: each round injects a `reflection_context` from the previous round into the attack agents, enabling strategy adaptation. Stalemate detection (5 consecutive rounds with no new defects) triggers document re-search and strategy adjustment.
 
 ## Defect Taxonomy
 
@@ -112,7 +112,7 @@ Use the `/mine` command to start the pipeline:
 
 The pipeline stops when any of the following is met:
 
-1. **Stalemate**: 2 consecutive rounds with no new defects
+1. **Stalemate**: 5 consecutive rounds with no new defects
 2. **Coverage**: Contract coverage reaches >= 95%
 3. **Max Rounds**: `--max-rounds` limit reached
 4. **Min Defects**: `--min-defects` threshold reached
