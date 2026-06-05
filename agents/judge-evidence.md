@@ -208,9 +208,31 @@ tools:
 
 ---
 
+## 输出
+
+**必须使用 Write 工具将结果写入文件。禁止只在内存中分析后返回文本。**
+
+对每个候选缺陷，将审查结果写入 `${SESSION_DIR}/judge_evidence_{defect_id}.json`。
+
+同时将所有投票汇总写入 `${SESSION_DIR}/debate_logs/stage2_evidence.json`：
+
+```json
+{
+  "judge": "evidence",
+  "votes": [
+    { "defect_id": "...", "vote": "is_defect|not_defect", "evidence_grade": "...", "evidence_score": 0, "rationale": "...", "confidence": 0.0 }
+  ]
+}
+```
+
+**如果未使用 Write 工具写入上述文件，本轮审查视为失败。**
+
+---
+
 ## 约束
 
 - 必须实际重试执行原始脚本（不只是读取已有输出）
 - 如果脚本引用本地不存在的文件 → 标记为 GRADE_E，不投票
 - 与 judge-novelty 和 judge-severity 完全独立评估，不参考它们的投票
 - 证据等级 D 的候选缺陷自动投 `not_defect`
+- **必须使用 Write 工具输出审查结果到文件，禁止只返回文本**
