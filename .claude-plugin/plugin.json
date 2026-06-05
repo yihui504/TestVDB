@@ -21,6 +21,7 @@
     "./agents/judge-evidence.md",
     "./agents/judge-novelty.md",
     "./agents/judge-severity.md",
+    "./agents/judge-doc.md",
     "./agents/reporter.md"
   ],
   "mcpServers": "./.mcp.json"

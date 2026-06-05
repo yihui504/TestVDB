@@ -2,7 +2,7 @@
   "docker": {
     "milvus": {
       "port": 19530,
-      "grpc_port": 19531
+      "health_port": 9091
     },
     "qdrant": {
       "port": 6333,
@@ -18,15 +18,13 @@
     "cleanup_on_exit": true,
     "startup_timeout_seconds": 120
   },
-  "github": {
-    "token": ""
-  },
   "retry": {
     "max_attempts": 5,
     "docker_startup_delay_seconds": 10,
     "script_execution_delay_seconds": 3,
     "doc_fetch_delay_seconds": 5,
-    "llm_format_delay_seconds": 0
+    "llm_format_delay_seconds": 0,
+    "_llm_format_delay_comment": "0 = no delay before retrying after LLM format error. Set >0 to add a pause (seconds) between format-error retries."
   },
   "pipeline": {
     "default_max_rounds": 5,
@@ -34,7 +32,8 @@
   },
   "results": {
     "base_dir": "results",
-    "max_sessions": 10
+    "max_sessions": 10,
+    "_max_sessions_comment": "Maximum concurrent mining sessions. Orchestrator checks active sessions before starting a new one. Exceeding this limit will cause the new session to be queued or rejected."
   },
   "knowledge": {
     "cache_enabled": true,
@@ -45,7 +44,8 @@
   },
   "notification": {
     "on_severity": "critical",
-    "webhook_url": ""
+    "webhook_url": "",
+    "validate_on_start": true
   },
   "network": {
     "proxy": ""

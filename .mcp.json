@@ -5,7 +5,8 @@
       "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
         "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      }
+      },
+      "_comment": "Requires Node.js 18+ and npx. Set GITHUB_TOKEN env var for authenticated access. If not set, judge-novelty will fall back to WebSearch only. To obtain a token: https://github.com/settings/tokens/new?scopes=repo,read:org"
     }
   }
 }
