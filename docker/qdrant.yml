@@ -1,0 +1,21 @@
+# TestVDB Docker Compose - Qdrant Standalone
+# Template uses ${QDRANT_VERSION:-v1.13.0} for user-customizable version
+# Port uses ${QDRANT_PORT:-6333} for user-customizable port
+
+services:
+  qdrant:
+    container_name: testvdb-qdrant-${TESTVDB_SESSION_ID:-standalone}
+    image: qdrant/qdrant:${QDRANT_VERSION:-v1.13.0}
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  qdrant_data:
