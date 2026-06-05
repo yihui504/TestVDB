@@ -82,7 +82,7 @@ TestVDB 的理论基础详见 [THEORETICAL_FRAMEWORK.md](./THEORETICAL_FRAMEWORK
 | judge-evidence | 证据审查，判定缺陷证据可信度 |
 | judge-novelty | 新颖性审查，判定缺陷是否为已知问题 |
 | judge-severity | 严重性评估，判定缺陷影响等级 |
-| judge-doc | 文档契约验证，验证候选缺陷的文档引用有效性 |
+| judge-doc | 文档审查，判定缺陷文档质量 |
 | reporter | 生成缺陷报告和汇总文档 |
 
 ### Skill 体系（4 个 Skill）
@@ -117,8 +117,8 @@ Orchestrator
   |         v
   |   execution_results[]
   |         |
-  +--> Judge Quartet <-- execution_results[]
-  |   doc (先执行，权重调节) | evidence | novelty | severity (并发)
+  +--> Judge Trio (并发) <-- execution_results[]
+  |   evidence | novelty | severity
   |         |
   |         v
   |   confirmed_defects[] + debate_log_stage2.json
@@ -164,49 +164,66 @@ claude --plugin-dir .
 
 ```
 TestVDB/
-├── .claude-plugin/
-│   └── plugin.json              # 插件清单
-├── .mcp.json                    # MCP 服务器配置（GitHub 新颖性判定）
-├── agents/                      # 12 个 Agent 定义
-│   ├── orchestrator.md
-│   ├── knowledge-extractor.md
-│   ├── contract-formalizer.md
-│   ├── attack-boundary.md
-│   ├── attack-state.md
-│   ├── attack-semantic.md
-│   ├── docker-executor.md
-│   ├── judge-evidence.md
-│   ├── judge-novelty.md
-│   ├── judge-severity.md
-│   ├── judge-doc.md
-│   └── reporter.md
-├── commands/
-│   └── mine.md                  # 入口命令
-├── hooks/
-│   └── hooks.json               # 生命周期钩子（前检、清理、状态保护）
-├── skills/                      # 4 个 Skill 定义
-│   ├── pipeline/SKILL.md
-│   ├── contract-schema/SKILL.md
-│   ├── defect-taxonomy/SKILL.md
-│   └── docker-templates/SKILL.md
-├── docker/                      # 4 个 Docker Compose 模板
-├── settings.json                # 可配置参数
-├── contracts/                   # 预构建契约
-│   ├── milvus_contract.json
-│   ├── qdrant_contract.json
-│   ├── weaviate_contract.json
-│   └── pgvector_contract.json
-├── issues/                      # 已发现缺陷报告
-├── scripts/                     # 辅助脚本
-│   ├── verify_defects.py
-│   ├── github_search.py
-│   ├── prioritizer.py
-│   └── developer_attitude.py
-├── rust-impl/                   # 遗留 Rust 实现
-│   ├── src/                     # 约 60 个 Rust 源文件
-│   ├── Cargo.toml
-│   └── Cargo.lock
-└── THEORETICAL_FRAMEWORK.md     # 理论框架论文
+  .claude-plugin/plugin.json       插件清单
+  .mcp.json                        MCP 服务器配置（GitHub API）
+  agents/                          12 个 Agent 定义
+    orchestrator.md
+    knowledge-extractor.md
+    contract-formalizer.md
+    attack-boundary.md
+    attack-state.md
+    attack-semantic.md
+    docker-executor.md
+    judge-evidence.md
+    judge-novelty.md
+    judge-severity.md
+    judge-doc.md
+    reporter.md
+  commands/mine.md                 入口命令
+  docker/                          Docker Compose 模板
+    milvus.yml
+    qdrant.yml
+    weaviate.yml
+    pgvector.yml
+  hooks/hooks.json                  生命周期钩子
+  skills/                          4 个 Skill 定义
+    pipeline/SKILL.md
+    contract-schema/SKILL.md
+    defect-taxonomy/SKILL.md
+    docker-templates/SKILL.md
+  contracts/                        预构建契约
+    milvus_contract.json
+    qdrant_contract.json
+    weaviate_contract.json
+    pgvector_contract.json
+  issues/                          已发现缺陷报告
+    00-summary.md
+    001-*.md ... 007-*.md
+    milvus_*.md
+    qdrant_*.md
+    weaviate_*.md
+  scripts/                         辅助脚本
+    verify_defects.py
+    github_search.py
+    prioritizer.py
+    developer_attitude.py
+    verify/                        缺陷验证脚本
+      verify_defect3.py
+      verify_defect4.py
+      verify_extra.py
+      verify_extra2.py
+      verify_p0b_extended.py
+      verify_remaining.py
+    cleanup_stop.py                会话清理
+    emergency_cleanup.py           紧急容器清理
+    log_execution.py               执行日志记录
+    notify_check.py                通知配置检查
+    postcompact_verify.py          压缩后状态恢复
+    precompact_save.py             压缩前状态保存
+    preflight.py                   会话预检
+    retry_policy.py                重试策略报告
+  settings.json                    26 个可配置参数
+  THEORETICAL_FRAMEWORK.md         理论框架论文
 ```
 
 ---
@@ -256,7 +273,6 @@ TestVDB/
 ```bash
 # 终端 1
 /testvdb:mine milvus v2.6.17
-
 # 终端 2
 /testvdb:mine qdrant v1.13.0
 ```
@@ -362,7 +378,7 @@ Docker Executor Agent 按 DB 选择 Docker 模板，启动容器、健康检查�
 
 ### Phase 5: 缺陷判定
 
-Judge Quartet（evidence + novelty + severity + doc）审查执行结果。judge-doc 先行执行作为权重调节器，其余 3 个 Judge 并发审查。辩论 Stage 2 进行加权投票判定，确认缺陷存入候选列表。
+Judge Trio（evidence + novelty + severity）并发审查执行结果。辩论 Stage 2 进行加权投票判定，确认缺陷存入候选列表。
 
 ### Phase 6: 报告生成
 
@@ -393,14 +409,13 @@ Reporter Agent 生成缺陷报告（defect-N.md）、自包含 MRE 脚本、汇�
 | 1 approve + 1 reject | Orchestrator 根据双方理由裁定 |
 | 0/2 approve | 丢弃 |
 
-### Stage 2: Judge Quartet 投票
+### Stage 2: Judge Trio 投票
 
-四个 Judge Agent 审查全部执行结果：
+三个 Judge Agent 独立审查全部执行结果：
 
-- **judge-doc**：文档契约门控，先于其他 Judge 执行，验证候选缺陷的文档引用可访问性、版本匹配、内容一致性和端点路径精确性，作为权重调节器
 - **judge-evidence**：证据门控，证据等级 D 则自动判定为非缺陷
 - **judge-severity**：严重性门控，severity = trivial 则判定为非缺陷
-- **judge-novelty**：新颖性标记（new / new_similar / already_reported），永远投 is_defect 并附加 novelty_rating 元数据，不参与缺陷确认投票
+- **judge-novelty**：新颖性标记（new / new_similar / already_reported），不参与确认投票
 
 **缺陷确认规则：** evidence = is_defect AND severity = is_defect -> 确认缺陷
 
@@ -436,21 +451,14 @@ results/{target}/{version}/{timestamp}/
 
 ## Rust 实现
 
-`rust-impl/` 目录包含项目的遗留 Rust 实现，采用 Rust 2024 edition，基于 tokio 异步运行时。
+Rust 实现已移至 `archive/rust-impl` 分支。该实现采用 Rust 2024 edition，基于 tokio 异步运行时，与 Claude Code 插件共享相同理论框架和缺陷分类体系，但独立运行。
 
-**主要模块：**
+访问归档代码：
 
-| 模块 | 路径 | 说明 |
-|------|------|------|
-| agent/vdbfuzz | `src/agent/vdbfuzz/` | 10 种变异策略（boundary、mutation、metamorphic、semantic 等） |
-| contract | `src/contract/` | 契约分析、门控、Schema、存储 |
-| crawler | `src/crawler/` | 文档爬取与解析 |
-| report | `src/report/` | 报告生成、假阳性过滤、语义门控 |
-| review | `src/review/` | 各 DB 专项审查逻辑 |
-| sandbox | `src/sandbox/` | Docker 容器管理 |
-| target | `src/target/` | 各 DB 适配层 |
-
-该实现已被 Claude Code 插件方案取代，保留供参考。
+```bash
+git fetch origin archive/rust-impl
+git checkout archive/rust-impl
+```
 
 ---
 
