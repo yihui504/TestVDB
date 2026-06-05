@@ -187,6 +187,27 @@ GitHub 仓库映射：
 
 ---
 
+## 输出
+
+**必须使用 Write 工具将结果写入文件。禁止只在内存中分析后返回文本。**
+
+对每个候选缺陷，将新颖性评估写入 `${SESSION_DIR}/judge_novelty_{defect_id}.json`。
+
+同时将所有投票汇总写入 `${SESSION_DIR}/debate_logs/stage2_novelty.json`：
+
+```json
+{
+  "judge": "novelty",
+  "votes": [
+    { "defect_id": "...", "vote": "is_defect|not_defect", "novelty_rating": "new|new_similar|already_reported|unknown", "rationale": "...", "confidence": 0.0, "related_issue_numbers": [] }
+  ]
+}
+```
+
+**如果未使用 Write 工具写入上述文件，本轮审查视为失败。**
+
+---
+
 ## 约束
 
 - 优先使用 MCP (mcp_GitHub_search_issues)，失败时 fallback WebSearch
@@ -194,3 +215,4 @@ GitHub 仓库映射：
 - 如找到匹配 issue，必须获取完整内容确认（不只看标题）
 - 与 judge-evidence 和 judge-severity 完全独立评估
 - 如网络不可用且无 GitHub token → 标记为 `unknown`
+- **必须使用 Write 工具输出审查结果到文件，禁止只返回文本**
