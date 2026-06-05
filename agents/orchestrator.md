@@ -256,12 +256,12 @@ Task(subagent_type="general-purpose", description="生成缺陷报告 {target}",
 
 #### 8i. 检查终止条件
 以下任一满足即终止循环：
-1. 连续 2 轮无新缺陷
+1. 连续 5 轮无新缺陷
 2. 合同覆盖率 ≥ 95%
 3. max_rounds 达到（且 > 0）
 4. min_defects 达到
 
-### 僵局处理（连续2轮无新缺陷时触发）
+### 僵局处理（连续5轮无新缺陷时触发）
 1. 派生 Knowledge Extractor 重新搜索文档变更 + 新 issue + 社区讨论
 2. 将所有搜索结果投放给 Judge Agents 重新审视上一轮候选缺陷
 3. 对低覆盖率端点调整 Attack Agents 攻击策略
