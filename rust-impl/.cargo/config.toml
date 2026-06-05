@@ -1,5 +1,0 @@
-[build]
-target-dir = "C:/t"
-
-[profile.dev]
-incremental = false
