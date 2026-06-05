@@ -1,0 +1,26 @@
+# TestVDB Docker Compose - Weaviate Standalone
+# Template uses ${WEAVIATE_VERSION:-1.25.0} for user-customizable version
+# Container name includes ${TESTVDB_SESSION_ID} to avoid multi-session conflicts
+
+services:
+  weaviate:
+    container_name: testvdb-weaviate-${TESTVDB_SESSION_ID:-standalone}
+    image: semitechnologies/weaviate:${WEAVIATE_VERSION:-1.25.0}
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      DEFAULT_VECTORIZER_MODULE: none
+      PERSISTENCE_DATA_PATH: /var/lib/weaviate
+      CLUSTER_HOSTNAME: node1
+    ports:
+      - "${WEAVIATE_PORT:-8080}:8080"
+      - "${WEAVIATE_GRPC_PORT:-50051}:50051"
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  weaviate_data:
