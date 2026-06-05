@@ -1,5 +1,7 @@
 # TestVDB
+
 English | [中文](./README_zh.md)
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
 
@@ -29,14 +31,14 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## How It Works
 
-TestVDB operates as a **Claude Code plugin** with a 6-phase pipeline orchestrated by 11 specialized agents:
+TestVDB operates as a **Claude Code plugin** with a 6-phase pipeline orchestrated by 12 specialized agents:
 
 ```
 Phase 1: Knowledge Extraction     -- WebSearch + WebFetch official docs
 Phase 2: Contract Formalization    -- Structured JSON contract from raw docs
 Phase 3: Attack Script Generation  -- 3 attack agents + Stage 1 peer review debate
 Phase 4: Sandbox Execution         -- Docker-isolated script execution
-Phase 5: Defect Judgment           -- 3 judge agents + Stage 2 voting debate
+Phase 5: Defect Judgment           -- 4 judge agents + Stage 2 voting debate
 Phase 6: Report Generation         -- Defect reports with MRE scripts
 ```
 
@@ -47,7 +49,7 @@ The pipeline runs iteratively: each round injects a `reflection_context` from th
 TestVDB classifies discovered defects into four MECE (Mutually Exclusive, Collectively Exhaustive) categories:
 
 | Type | Name | Definition | Example |
-|------|------|------------|---------|
+|------|------|------------|--------|
 | Type 1 | Illegal Success | Input violating documented constraints is accepted (2xx instead of 4xx) | `limit=-1` returns 200 OK |
 | Type 2 | Poor Diagnostics | Invalid input correctly rejected, but error message is unclear | Returns "Unknown Error" instead of "Invalid Dimension" |
 | Type 3 | Runtime Failure | Valid input causes crash, 500 error, or abnormal behavior | Legal search request returns 500 |
@@ -128,14 +130,14 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
   mre/defect-1-script.py        # Minimal Reproducible Example script
   summary.md                    # Session summary
   debate_logs/stage1.json       # Attack script peer review logs
-  debate_logs/stage2.json       # Judge trio voting logs
+  debate_logs/stage2.json       # Judge quartet voting logs
   structured_contract.json      # Generated contract
   session_metadata.json         # Session metadata
 ```
 
 ## Architecture
 
-### 11 Agents
+### 12 Agents
 
 | Agent | Role |
 |-------|------|
@@ -146,6 +148,7 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 | **attack-state** | Generates state-transition attack scripts |
 | **attack-semantic** | Generates semantic/logic attack scripts |
 | **docker-executor** | Manages Docker containers, executes scripts in sandbox |
+| **judge-doc** | Validates document reference accessibility and content consistency |
 | **judge-evidence** | Validates evidence chain completeness |
 | **judge-novelty** | Checks defect novelty against known issues (GitHub) |
 | **judge-severity** | Assesses defect severity |
@@ -154,7 +157,7 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 ### 4 Skills
 
 | Skill | Purpose |
-|-------|---------|
+|-------|--------|
 | **pipeline** | 6-phase pipeline SOP for the orchestrator |
 | **contract-schema** | JSON schema reference for contract formalization |
 | **defect-taxonomy** | Four-type defect classification reference |
@@ -164,7 +167,7 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 
 **Stage 1 -- Attack Script Peer Review**: The three attack agents (boundary, state, semantic) independently generate test scripts. Scripts undergo peer review voting before sandbox execution. Only scripts that pass the vote proceed.
 
-**Stage 2 -- Judge Trio Voting**: After sandbox execution, the three judge agents (evidence, novelty, severity) independently review results. A defect is confirmed only when it passes all three judges.
+**Stage 2 -- Judge Quartet Voting**: After sandbox execution, the four judge agents (doc, evidence, novelty, severity) independently review results. judge-doc runs first as a weight regulator, producing DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH to adjust the strictness of the other three judges. A defect is confirmed when evidence and severity both vote is_defect. Novelty always votes is_defect with novelty_rating metadata, not participating in defect confirmation but affecting report priority.
 
 ### Pre-Submit Reverify Gate
 
