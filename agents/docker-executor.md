@@ -97,6 +97,8 @@ pip install requests numpy
 
 ### Step 5: 执行测试脚本
 
+**脚本必须在 Docker 容器内执行，禁止在宿主机直接运行 Python 脚本。**
+
 对每个通过辩论的测试脚本：
 
 ```bash
@@ -105,10 +107,20 @@ export TESTVDB_DB_URL="http://localhost:{port}"
 export TESTVDB_AUTH_HEADER="{auth_header}"
 export PYTHONIOENCODING=utf-8
 
-# 执行脚本（使用绝对路径）
-python3 "${SESSION_DIR}/script_{script_id}.py" 2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
+# 方式 1（推荐）：在目标 DB 容器内执行脚本
+docker cp "${SESSION_DIR}/script_{script_id}.py" testvdb-{target}-${TESTVDB_SESSION_ID}:/tmp/script.py
+docker exec testvdb-{target}-${TESTVDB_SESSION_ID} python3 /tmp/script.py 2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
+echo $? > "${SESSION_DIR}/exit_code_{script_id}.txt"
+
+# 方式 2（备选）：使用独立执行容器
+docker run --rm --network host -e TESTVDB_DB_URL -e PYTHONIOENCODING=utf-8 \
+  -v "${SESSION_DIR}/script_{script_id}.py:/tmp/script.py:ro" \
+  python:3.12-slim bash -c "pip install requests numpy {sdk_package} -q && python3 /tmp/script.py" \
+  2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
 echo $? > "${SESSION_DIR}/exit_code_{script_id}.txt"
 ```
+
+**禁止使用 `python3 script.py` 在宿主机直接执行。** 所有脚本必须通过 `docker exec` 或 `docker run` 在容器内运行。
 
 **脚本写入验证**：执行前必须确认脚本文件存在：
 ```bash
