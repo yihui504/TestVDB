@@ -68,7 +68,7 @@ TestVDB 的理论基础详见 [THEORETICAL_FRAMEWORK.md](./THEORETICAL_FRAMEWORK
 
 ## 架构设计
 
-### Agent 体系（11 个 Agent）
+### Agent 体系（12 个 Agent）
 
 | Agent | 职责 |
 |-------|------|
@@ -82,6 +82,7 @@ TestVDB 的理论基础详见 [THEORETICAL_FRAMEWORK.md](./THEORETICAL_FRAMEWORK
 | judge-evidence | 证据审查，判定缺陷证据可信度 |
 | judge-novelty | 新颖性审查，判定缺陷是否为已知问题 |
 | judge-severity | 严重性评估，判定缺陷影响等级 |
+| judge-doc | 文档契约验证，验证候选缺陷的文档引用有效性 |
 | reporter | 生成缺陷报告和汇总文档 |
 
 ### Skill 体系（4 个 Skill）
@@ -116,8 +117,8 @@ Orchestrator
   |         v
   |   execution_results[]
   |         |
-  +--> Judge Trio (并发) <-- execution_results[]
-  |   evidence | novelty | severity
+  +--> Judge Quartet <-- execution_results[]
+  |   doc (先执行，权重调节) | evidence | novelty | severity (并发)
   |         |
   |         v
   |   confirmed_defects[] + debate_log_stage2.json
@@ -166,7 +167,7 @@ TestVDB/
 ├── .claude-plugin/
 │   └── plugin.json              # 插件清单
 ├── .mcp.json                    # MCP 服务器配置（GitHub 新颖性判定）
-├── agents/                      # 11 个 Agent 定义
+├── agents/                      # 12 个 Agent 定义
 │   ├── orchestrator.md
 │   ├── knowledge-extractor.md
 │   ├── contract-formalizer.md
@@ -177,6 +178,7 @@ TestVDB/
 │   ├── judge-evidence.md
 │   ├── judge-novelty.md
 │   ├── judge-severity.md
+│   ├── judge-doc.md
 │   └── reporter.md
 ├── commands/
 │   └── mine.md                  # 入口命令
@@ -360,7 +362,7 @@ Docker Executor Agent 按 DB 选择 Docker 模板，启动容器、健康检查�
 
 ### Phase 5: 缺陷判定
 
-Judge Trio（evidence + novelty + severity）并发审查执行结果。辩论 Stage 2 进行加权投票判定，确认缺陷存入候选列表。
+Judge Quartet（evidence + novelty + severity + doc）审查执行结果。judge-doc 先行执行作为权重调节器，其余 3 个 Judge 并发审查。辩论 Stage 2 进行加权投票判定，确认缺陷存入候选列表。
 
 ### Phase 6: 报告生成
 
@@ -391,13 +393,14 @@ Reporter Agent 生成缺陷报告（defect-N.md）、自包含 MRE 脚本、汇�
 | 1 approve + 1 reject | Orchestrator 根据双方理由裁定 |
 | 0/2 approve | 丢弃 |
 
-### Stage 2: Judge Trio 投票
+### Stage 2: Judge Quartet 投票
 
-三个 Judge Agent 独立审查全部执行结果：
+四个 Judge Agent 审查全部执行结果：
 
+- **judge-doc**：文档契约门控，先于其他 Judge 执行，验证候选缺陷的文档引用可访问性、版本匹配、内容一致性和端点路径精确性，作为权重调节器
 - **judge-evidence**：证据门控，证据等级 D 则自动判定为非缺陷
 - **judge-severity**：严重性门控，severity = trivial 则判定为非缺陷
-- **judge-novelty**：新颖性标记（new / new_similar / already_reported），不参与确认投票
+- **judge-novelty**：新颖性标记（new / new_similar / already_reported），永远投 is_defect 并附加 novelty_rating 元数据，不参与缺陷确认投票
 
 **缺陷确认规则：** evidence = is_defect AND severity = is_defect -> 确认缺陷
 

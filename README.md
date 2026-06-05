@@ -32,14 +32,14 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## How It Works
 
-TestVDB operates as a **Claude Code plugin** with a 6-phase pipeline orchestrated by 11 specialized agents:
+TestVDB operates as a **Claude Code plugin** with a 6-phase pipeline orchestrated by 12 specialized agents:
 
 ```
 Phase 1: Knowledge Extraction     -- WebSearch + WebFetch official docs
 Phase 2: Contract Formalization    -- Structured JSON contract from raw docs
 Phase 3: Attack Script Generation  -- 3 attack agents + Stage 1 peer review debate
 Phase 4: Sandbox Execution         -- Docker-isolated script execution
-Phase 5: Defect Judgment           -- 3 judge agents + Stage 2 voting debate
+Phase 5: Defect Judgment           -- 4 judge agents + Stage 2 voting debate
 Phase 6: Report Generation         -- Defect reports with MRE scripts
 ```
 
@@ -131,14 +131,14 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
   mre/defect-1-script.py        # Minimal Reproducible Example script
   summary.md                    # Session summary
   debate_logs/stage1.json       # Attack script peer review logs
-  debate_logs/stage2.json       # Judge trio voting logs
+  debate_logs/stage2.json       # Judge quartet voting logs
   structured_contract.json      # Generated contract
   session_metadata.json         # Session metadata
 ```
 
 ## Architecture
 
-### 11 Agents
+### 12 Agents
 
 | Agent | Role |
 |-------|------|
@@ -152,6 +152,7 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 | **judge-evidence** | Validates evidence chain completeness |
 | **judge-novelty** | Checks defect novelty against known issues (GitHub) |
 | **judge-severity** | Assesses defect severity |
+| **judge-doc** | Validates document reference accessibility, version matching, content consistency, and endpoint path precision |
 | **reporter** | Generates defect reports with MRE scripts |
 
 ### 4 Skills
@@ -167,7 +168,7 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 
 **Stage 1 -- Attack Script Peer Review**: The three attack agents (boundary, state, semantic) independently generate test scripts. Scripts undergo peer review voting before sandbox execution. Only scripts that pass the vote proceed.
 
-**Stage 2 -- Judge Trio Voting**: After sandbox execution, the three judge agents (evidence, novelty, severity) independently review results. A defect is confirmed only when it passes all three judges.
+**Stage 2 -- Judge Quartet Voting**: After sandbox execution, the four judge agents (evidence, novelty, severity, doc) independently review results. judge-doc runs first as a weight regulator, then the other 3 judges run in parallel. novelty always votes is_defect with novelty_rating metadata, does not participate in defect confirmation voting. A defect is confirmed only when it passes the remaining judges.
 
 ### Pre-Submit Reverify Gate
 
@@ -179,7 +180,7 @@ Every confirmed defect is re-verified in a fresh Docker container before report 
 TestVDB/
   .claude-plugin/plugin.json       Plugin manifest
   .mcp.json                        MCP server config (GitHub API)
-  agents/                          11 agent definitions
+  agents/                          12 agent definitions
     orchestrator.md
     knowledge-extractor.md
     contract-formalizer.md
@@ -190,6 +191,7 @@ TestVDB/
     judge-evidence.md
     judge-novelty.md
     judge-severity.md
+    judge-doc.md
     reporter.md
   commands/mine.md                 Entry command
   hooks/hooks.json                  Lifecycle hooks (session start/end, pre/post compact)
