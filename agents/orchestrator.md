@@ -119,6 +119,12 @@ Task(
 
 ### Step 7: 初始化状态
 创建 `results/{target}/{version}/{timestamp}/` 目录结构，初始化 mine_state.json：
+
+**Session 锁机制**：创建目录后立即写入 `.session.lock` 文件：
+```json
+{ "session_id": "{target}-{version}-{timestamp}", "started_at": "...", "status": "active" }
+```
+所有 agent（包括 Stop/SessionEnd hooks）在清理前必须检查 `.session.lock` 是否存在且 `status` 为 `active`。如果锁存在，不得删除该 session 目录下的任何文件。
 ```json
 {
   "session_id": "{target}-{version}-{timestamp}",
@@ -156,6 +162,8 @@ Task(
 
 #### 8b. 并发出动 Attack Trio
 **并发（非顺序）** 派三个 Attack Agent，**必须使用 Task 工具派生子 agent**，禁止自己直接执行攻击生成：
+
+**⛔ 绝对禁止：** Orchestrator 自己生成攻击脚本、自己执行测试、自己审查结果。Orchestrator 只负责编排和协调，所有实质性工作必须通过 Task 工具派发给对应的子 agent。如果你发现自己正在直接编写 Python 攻击脚本或直接执行 curl 测试，立即停止，改用 Task 派发。
 
 ```
 Task(subagent_type="general-purpose", description="边界攻击 {target} v{version}", query="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract={contract_path}, reflection_context={reflection_context}")
@@ -240,7 +248,25 @@ Task(subagent_type="general-purpose", description="生成缺陷报告 {target}",
 缺陷确认后 → 派 Reporter Agent 生成 defect-N.md 报告。
 
 #### 8g. 保存状态
-每轮结束保存 mine_state.json + coverage.json + experience_handoff.json。
+每轮结束保存 mine_state.json + coverage.json + experience_handoff.json + pipeline_state.json。
+
+**pipeline_state.json（Agent 间协调状态文件）：**
+```json
+{
+  "current_round": 1,
+  "phase": "attack_generation|debate_s1|execution|debate_s2|reporting",
+  "attack_trio_done": false,
+  "debate_s1_done": false,
+  "execution_done": false,
+  "debate_s2_done": false,
+  "reporting_done": false,
+  "confirmed_defects_count": 0,
+  "scripts_generated": 0,
+  "scripts_executed": 0,
+  "next_agent": "attack_trio"
+}
+```
+每个子 agent 完成后，Orchestrator 更新 pipeline_state.json 中的对应字段。后续 agent 可读取此文件了解当前进度。
 
 **experience_handoff.json 写入逻辑：**
 - 记录本轮关键发现：confirmed_defects 的 endpoint 分布、驳回原因分类、新发现的高价值攻击策略
