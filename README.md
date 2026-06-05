@@ -1,10 +1,7 @@
 # TestVDB
-
 English | [中文](./README_zh.md)
-
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Rust Edition 2024](https://img.shields.io/badge/Rust-Edition%202024-orange.svg)](https://www.rust-lang.org/)
 
 **Automated Defect Mining for Vector Databases**
 
@@ -32,14 +29,14 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## How It Works
 
-TestVDB operates as a **Claude Code plugin** with a 6-phase pipeline orchestrated by 12 specialized agents:
+TestVDB operates as a **Claude Code plugin** with a 6-phase pipeline orchestrated by 11 specialized agents:
 
 ```
 Phase 1: Knowledge Extraction     -- WebSearch + WebFetch official docs
 Phase 2: Contract Formalization    -- Structured JSON contract from raw docs
 Phase 3: Attack Script Generation  -- 3 attack agents + Stage 1 peer review debate
 Phase 4: Sandbox Execution         -- Docker-isolated script execution
-Phase 5: Defect Judgment           -- 4 judge agents + Stage 2 voting debate
+Phase 5: Defect Judgment           -- 3 judge agents + Stage 2 voting debate
 Phase 6: Report Generation         -- Defect reports with MRE scripts
 ```
 
@@ -131,14 +128,14 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
   mre/defect-1-script.py        # Minimal Reproducible Example script
   summary.md                    # Session summary
   debate_logs/stage1.json       # Attack script peer review logs
-  debate_logs/stage2.json       # Judge quartet voting logs
+  debate_logs/stage2.json       # Judge trio voting logs
   structured_contract.json      # Generated contract
   session_metadata.json         # Session metadata
 ```
 
 ## Architecture
 
-### 12 Agents
+### 11 Agents
 
 | Agent | Role |
 |-------|------|
@@ -152,7 +149,6 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 | **judge-evidence** | Validates evidence chain completeness |
 | **judge-novelty** | Checks defect novelty against known issues (GitHub) |
 | **judge-severity** | Assesses defect severity |
-| **judge-doc** | Validates document reference accessibility, version matching, content consistency, and endpoint path precision |
 | **reporter** | Generates defect reports with MRE scripts |
 
 ### 4 Skills
@@ -168,7 +164,7 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 
 **Stage 1 -- Attack Script Peer Review**: The three attack agents (boundary, state, semantic) independently generate test scripts. Scripts undergo peer review voting before sandbox execution. Only scripts that pass the vote proceed.
 
-**Stage 2 -- Judge Quartet Voting**: After sandbox execution, the four judge agents (evidence, novelty, severity, doc) independently review results. judge-doc runs first as a weight regulator, then the other 3 judges run in parallel. novelty always votes is_defect with novelty_rating metadata, does not participate in defect confirmation voting. A defect is confirmed only when it passes the remaining judges.
+**Stage 2 -- Judge Trio Voting**: After sandbox execution, the three judge agents (evidence, novelty, severity) independently review results. A defect is confirmed only when it passes all three judges.
 
 ### Pre-Submit Reverify Gate
 
@@ -194,38 +190,50 @@ TestVDB/
     judge-doc.md
     reporter.md
   commands/mine.md                 Entry command
-  hooks/hooks.json                  Lifecycle hooks (session start/end, pre/post compact)
+  docker/                          Docker Compose templates
+    milvus.yml
+    qdrant.yml
+    weaviate.yml
+    pgvector.yml
+  hooks/hooks.json                  Lifecycle hooks
   skills/                          4 skill definitions
     pipeline/SKILL.md
     contract-schema/SKILL.md
     defect-taxonomy/SKILL.md
     docker-templates/SKILL.md
-  contracts/                        Pre-built contracts (OpenAPI + behavioral templates)
+  contracts/                        Pre-built contracts
     milvus_contract.json
-    milvus_openapi.json
-    milvus_behavioral_templates.json
     qdrant_contract.json
-    qdrant_openapi.json
-    qdrant_behavioral_templates.json
     weaviate_contract.json
-    weaviate_behavioral_templates.json
     pgvector_contract.json
   issues/                          Known defect reports
     00-summary.md
-    001-concurrent-insert-count-invalid.md
-    002-duplicate-id-insert-count-invalid.md
-    ...
+    001-*.md ... 007-*.md
+    milvus_*.md
+    qdrant_*.md
+    weaviate_*.md
   scripts/                         Helper scripts
     verify_defects.py
     github_search.py
     prioritizer.py
     developer_attitude.py
+    verify/                        Defect verification scripts
+      verify_defect3.py
+      verify_defect4.py
+      verify_extra.py
+      verify_extra2.py
+      verify_p0b_extended.py
+      verify_remaining.py
+    cleanup_stop.py                Session cleanup
+    emergency_cleanup.py           Emergency container cleanup
+    log_execution.py               Execution logging
+    notify_check.py                Notification config check
+    postcompact_verify.py          Post-compact state recovery
+    precompact_save.py             Pre-compact state save
+    preflight.py                   Session pre-flight checks
+    retry_policy.py                Retry policy reporter
   settings.json                    26 configurable parameters
   THEORETICAL_FRAMEWORK.md         Research paper
-  rust-impl/                       Legacy Rust implementation
-    src/                           ~60 Rust source files
-    Cargo.toml
-    Cargo.lock
 ```
 
 ## Configuration
@@ -285,27 +293,13 @@ Additionally, each defect report includes a **Minimal Reproducible Example (MRE)
 
 ## Rust Implementation
 
-The `rust-impl/` directory contains a legacy standalone implementation written in Rust (edition 2024). It shares the same theoretical framework and defect taxonomy but operates independently of the Claude Code plugin.
+The Rust implementation has been moved to the `archive/rust-impl` branch. It contains a standalone implementation written in Rust (edition 2024) that shares the same theoretical framework and defect taxonomy but operates independently of the Claude Code plugin.
 
-Key modules:
-
-| Module | Purpose |
-|--------|---------|
-| `src/agent/` | LLM orchestration, probe generation, sandbox execution |
-| `src/agent/vdbfuzz/` | 9 deterministic test generators (boundary, mutation, metamorphic, etc.) |
-| `src/contract/` | Contract loading, schema validation, OpenAPI parsing |
-| `src/crawler/` | Web crawler for documentation extraction |
-| `src/report/` | Defect report generation, false positive filtering, semantic gate |
-| `src/review/` | Per-DB independent review probes |
-| `src/sandbox/` | Docker container lifecycle management |
-| `src/target/` | Target DB plugin implementations (Milvus, Qdrant, Weaviate, pgvector) |
-
-Build and run:
+To access the archived Rust code:
 
 ```bash
-cd rust-impl
-cargo build
-cargo run -- mine --target qdrant --version v1.13.0
+git fetch origin archive/rust-impl
+git checkout archive/rust-impl
 ```
 
 ## License
