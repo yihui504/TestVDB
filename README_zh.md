@@ -79,10 +79,10 @@ TestVDB 的理论基础详见 [THEORETICAL_FRAMEWORK.md](./THEORETICAL_FRAMEWORK
 | attack-state | 状态攻击，测试状态一致性和逻辑违规 |
 | attack-semantic | 语义攻击，测试语义层面的合规性 |
 | docker-executor | 在 Docker 沙箱中执行攻击脚本 |
+| judge-doc | 文档审查，验证候选缺陷的文档引用有效性与内容一致性 |
 | judge-evidence | 证据审查，判定缺陷证据可信度 |
 | judge-novelty | 新颖性审查，判定缺陷是否为已知问题 |
 | judge-severity | 严重性评估，判定缺陷影响等级 |
-| judge-doc | 文档审查，判定缺陷文档质量 |
 | reporter | 生成缺陷报告和汇总文档 |
 
 ### Skill 体系（4 个 Skill）
@@ -117,8 +117,8 @@ Orchestrator
   |         v
   |   execution_results[]
   |         |
-  +--> Judge Trio (并发) <-- execution_results[]
-  |   evidence | novelty | severity
+  +--> Judge Quartet (并发) <-- execution_results[]
+  |   doc (先行，权重调节) | evidence | novelty | severity
   |         |
   |         v
   |   confirmed_defects[] + debate_log_stage2.json
@@ -378,7 +378,7 @@ Docker Executor Agent 按 DB 选择 Docker 模板，启动容器、健康检查�
 
 ### Phase 5: 缺陷判定
 
-Judge Trio（evidence + novelty + severity）并发审查执行结果。辩论 Stage 2 进行加权投票判定，确认缺陷存入候选列表。
+Judge Quartet（doc + evidence + novelty + severity）并发审查执行结果。judge-doc 先行执行作为权重调节器，产出 DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH 调节其他三个 Judge 的审查严格度。辩论 Stage 2 进行加权投票判定，确认缺陷存入候选列表。
 
 ### Phase 6: 报告生成
 
@@ -409,15 +409,16 @@ Reporter Agent 生成缺陷报告（defect-N.md）、自包含 MRE 脚本、汇�
 | 1 approve + 1 reject | Orchestrator 根据双方理由裁定 |
 | 0/2 approve | 丢弃 |
 
-### Stage 2: Judge Trio 投票
+### Stage 2: Judge Quartet 投票
 
-三个 Judge Agent 独立审查全部执行结果：
+四个 Judge Agent 独立审查全部执行结果：
 
+- **judge-doc**：先行执行，验证文档引用有效性，产出 DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH 作为权重调节器
 - **judge-evidence**：证据门控，证据等级 D 则自动判定为非缺陷
 - **judge-severity**：严重性门控，severity = trivial 则判定为非缺陷
-- **judge-novelty**：新颖性标记（new / new_similar / already_reported），不参与确认投票
+- **judge-novelty**：新颖性标记（new / new_similar / already_reported），永远投 is_defect，仅附加 novelty_rating 元数据，不参与缺陷确认投票
 
-**缺陷确认规则：** evidence = is_defect AND severity = is_defect -> 确认缺陷
+**缺陷确认规则：** evidence = is_defect AND severity = is_defect -> 确认缺陷。novelty_rating 附加到缺陷元数据，不影响确认状态，但影响 Reporter 中的提交优先级。
 
 ### 三环证据链
 
