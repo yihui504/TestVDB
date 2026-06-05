@@ -1,0 +1,23 @@
+# TestVDB Docker Compose - PGVector Standalone
+# Template uses ${PGVECTOR_VERSION:-pg17} for user-customizable version
+# Container name includes ${TESTVDB_SESSION_ID} to avoid multi-session conflicts
+
+services:
+  pgvector:
+    container_name: testvdb-pgvector-${TESTVDB_SESSION_ID:-standalone}
+    image: pgvector/pgvector:${PGVECTOR_VERSION:-pg17}
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: testvdb
+    ports:
+      - "${PGVECTOR_PORT:-5432}:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d testvdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgvector_data:
