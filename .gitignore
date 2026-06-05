@@ -1,7 +1,6 @@
 /target
 .env
 docker.tgz
-docker/
 run_log*.txt
 *.pyc
 volumes/
@@ -14,14 +13,13 @@ experience_handoff.json
 .venv/
 *_candidate_defect.md
 milvus_mre/
-mine_log.txt
 reviewer.log
-count_boundary.py
-test_sandbox_boundary.py
-test_weaviate_deep.py
-test_weaviate_verify.py
-verify_boundary.py
-qdrant_report_needs_rewrite_batch_*.md
-milvus_report_needs_rewrite_batch_state_*.md
-milvus_report_needs_rewrite_batch_boundary_[6-9].md
-ers11428*
+
+# Runtime output - not tracked in git
+results/
+shadow_mode_results/
+
+# Claude Code plugin runtime
+.mine_state.json
+session_metadata.json
+subagent-tracking.json
