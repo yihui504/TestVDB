@@ -22,11 +22,15 @@ tools:
 1. `structured_contract.json`：当前 DB 的契约文件
 2. `reflection_context`：上一轮的经验数据（可选，首轮为 null）
 
+从 structured_contract.json 的 constraint/assertion 中读取 source_url 和 doc_version 字段，在输出中保留这些字段以供下游 Judge 和 Reporter 使用。
+
 ---
 
 ## 攻击策略
 
 **重要：优先使用 REST API（requests 库）而非 SDK。** 仅在明确需要 SDK 特有功能时才使用 SDK。SDK 版本不兼容是常见失败原因，REST API 更稳定。
+
+**Milvus 特殊说明**：Milvus 的核心 API 是 gRPC（端口 19530），REST API（端口 9091）仅提供健康检查和指标接口。对 Milvus 进行攻击时，应使用 `pymilvus` SDK 而非 REST API。
 
 ### 策略 1: 边界值攻击（针对 range_constraints）
 
@@ -184,6 +188,8 @@ if __name__ == "__main__":
   "strategy": "boundary|type|dimension|special_value",
   "endpoint": "search+points",
   "constraint_ids": ["qdrant_range_search_points_001"],
+  "source_url": "(从 constraint/assertion 的 source_url 字段获取)",
+  "doc_version": "(从 constraint/assertion 的 doc_version 字段获取，如无则填 \"unknown\")",
   "expected_defect_type": "Type1_IllegalSuccess|Type2_PoorDiagnostics|Type3_RuntimeFailure",
   "script": "<python code>",
   "confidence": 0.85,

@@ -35,8 +35,8 @@ tools:
 # (1) Executor 启动前验证
 docker manifest inspect {repo}:{version_tag}
 
-# 如果失败，列出可用 tags
-curl -s "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=10" | python3 -c "import sys,json; [print(t['name']) for t in json.load(sys.stdin)['results']]"
+# 如果失败，列出可用 tags（跨平台兼容）
+python3 -c "import urllib.request,json; data=json.loads(urllib.request.urlopen('https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=10').read()); [print(t['name']) for t in data['results']]"
 ```
 
 如果 tag 不存在：
@@ -67,15 +67,42 @@ export {TARGET}_PORT="{port}"
 docker compose -f docker/{target}.yml up -d
 
 # 等待健康检查通过
-# 循环检查直到容器 healthy 或超时
+# 使用 docker compose ps 检查服务健康状态（跨平台，无需知道精确容器名）
 for i in $(seq 1 30); do
-  if docker inspect --format='{{.State.Health.Status}}' testvdb-{target}-${TESTVDB_SESSION_ID} | grep -q healthy; then
+  HEALTH=$(docker compose -f docker/{target}.yml ps --format json 2>/dev/null | python3 -c "import sys,json; [print(json.loads(l).get('Health','')) for l in sys.stdin if l.strip()]" 2>/dev/null | head -1)
+  if [ "$HEALTH" = "healthy" ]; then
+    echo "Container healthy"
+    break
+  fi
+  # Fallback: check via docker inspect using known container names
+  STATUS=$(docker inspect --format='{{.State.Health.Status}}' testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || echo "not_found")
+  if [ "$STATUS" != "healthy" ]; then
+    # Try Milvus-specific name
+    STATUS=$(docker inspect --format='{{.State.Health.Status}}' testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || echo "not_found")
+  fi
+  if [ "$STATUS" = "healthy" ]; then
     echo "Container healthy"
     break
   fi
   sleep 5
 done
 ```
+
+**容器命名规范**：容器名由 docker-compose 模板中的 `container_name` 字段决定，格式如下：
+
+| Target | 主服务容器名 |
+|--------|------------|
+| milvus | `testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone}` |
+| qdrant | `testvdb-qdrant-${TESTVDB_SESSION_ID:-standalone}` |
+| weaviate | `testvdb-weaviate-${TESTVDB_SESSION_ID:-standalone}` |
+| pgvector | `testvdb-pgvector-${TESTVDB_SESSION_ID:-standalone}` |
+
+**Milvus 特殊说明**：Milvus 的 docker-compose 模板定义了 3 个服务，容器名分别为：
+- `testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone}`（主服务）
+- `testvdb-milvus-etcd-${TESTVDB_SESSION_ID:-standalone}`（etcd 依赖）
+- `testvdb-milvus-minio-${TESTVDB_SESSION_ID:-standalone}`（MinIO 依赖）
+
+健康检查时应对 Milvus 主服务容器执行。
 
 ### Step 4: 安装 Python 依赖
 
@@ -101,24 +128,40 @@ pip install requests numpy
 
 对每个通过辩论的测试脚本：
 
+**执行方式选择**：
+- **优先使用方式 1（独立执行容器）**：更可靠，不依赖 DB 容器内的 Python 环境，且每次执行在干净环境中进行
+- **仅在以下情况使用方式 2（DB 容器内执行）**：方式 1 失败（如网络问题无法拉取 python:3.12-slim 镜像），且 DB 容器内已有 Python 环境
+- **方式 1 失败时自动降级**：如果 `docker run` 因镜像拉取失败或网络问题报错，自动切换到方式 2
+
 ```bash
 # 设置环境变量
 export TESTVDB_DB_URL="http://localhost:{port}"
 export TESTVDB_AUTH_HEADER="{auth_header}"
 export PYTHONIOENCODING=utf-8
 
-# 方式 1（推荐）：在目标 DB 容器内执行脚本
-docker cp "${SESSION_DIR}/script_{script_id}.py" testvdb-{target}-${TESTVDB_SESSION_ID}:/tmp/script.py
-docker exec testvdb-{target}-${TESTVDB_SESSION_ID} python3 /tmp/script.py 2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
-echo $? > "${SESSION_DIR}/exit_code_{script_id}.txt"
+# 方式 1（推荐）：使用独立执行容器
+# 注意：--network host 仅在 Linux 上可用；Windows/macOS 使用 Docker 网络
+# 跨平台方案：创建共享 Docker 网络并使用容器名访问
+docker network create testvdb-net-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
+docker network connect testvdb-net-${TESTVDB_SESSION_ID:-standalone} testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
 
-# 方式 2（备选）：使用独立执行容器
-docker run --rm --network host -e TESTVDB_DB_URL -e PYTHONIOENCODING=utf-8 \
+# 使用 Docker 网络而非 --network host（跨平台兼容）
+# Linux 可用 --network host 替代下方命令以获得更好性能
+docker run --rm --network testvdb-net-${TESTVDB_SESSION_ID:-standalone} \
+  -e TESTVDB_DB_URL="http://testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}:{port}" \
+  -e PYTHONIOENCODING=utf-8 \
   -v "${SESSION_DIR}/script_{script_id}.py:/tmp/script.py:ro" \
   python:3.12-slim bash -c "pip install requests numpy {sdk_package} -q && python3 /tmp/script.py" \
   2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
 echo $? > "${SESSION_DIR}/exit_code_{script_id}.txt"
+
+# 方式 2（备选）：在目标 DB 容器内执行脚本（仅当容器内有 Python 环境时可用）
+docker cp "${SESSION_DIR}/script_{script_id}.py" testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}:/tmp/script.py
+docker exec testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} python3 /tmp/script.py 2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
+echo $? > "${SESSION_DIR}/exit_code_{script_id}.txt"
 ```
+
+**Windows 路径注意**：在 PowerShell 中，`${SESSION_DIR}` 使用反斜杠路径。Docker `-v` 挂载时路径会自动转换，无需手动处理。
 
 **禁止使用 `python3 script.py` 在宿主机直接执行。** 所有脚本必须通过 `docker exec` 或 `docker run` 在容器内运行。
 
@@ -183,16 +226,18 @@ fi
 }
 ```
 
-### Step 7: 清理容器
+### Step 7: 容器保持运行
 
-正常清理：
-```bash
-docker compose -f docker/{target}.yml down -v
-```
+**不要清理容器**。容器必须保持运行，供后续 Judge（judge-evidence 复现验证）和 Reporter（Pre-Submit Gate 复现验证）使用。容器清理由 Orchestrator 在整轮完成后统一执行。
 
-强制清理（确保不残留）：
+如果需要为下一轮测试重新初始化数据库状态，可以：
 ```bash
-docker rm -f testvdb-{target}-standalone testvdb-{target}-etcd testvdb-{target}-minio 2>/dev/null
+# 仅重启 DB 容器（保留数据卷）
+docker restart testvdb-{target}-${TESTVDB_SESSION_ID}
+
+# 或清空数据后重启
+docker compose -f docker/{target}.yml down
+docker compose -f docker/{target}.yml up -d
 ```
 
 ### Step 8: 返回结果
@@ -259,5 +304,5 @@ docker build --build-arg HTTP_PROXY --build-arg HTTPS_PROXY ...
 
 - 永远不使用特权容器（no `--privileged`）
 - 每个数据库独立容器，不共享 volumes（除显式需要的数据卷）
-- 退出时务必清理容器（正常 docker-compose down + 紧急 docker rm -f）
+- **不负责容器清理**：执行完脚本后保持容器运行，由 Orchestrator 统一清理
 - 只安装当前 DB 的 SDK（SDK 隔离）

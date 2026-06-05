@@ -96,8 +96,9 @@ tools:
 ### Step 4: 提取 SDK 和版本信息
 
 1. 记录目标版本下的官方 SDK 推荐版本和安装命令
-2. 查询 Docker Hub API 获取目标版本的可用 Docker images：
+2. 查询 Docker Hub API 获取目标版本的可用 Docker images（**注意：Docker Hub API 有速率限制，未认证请求限流严格。建议设置 `DOCKER_HUB_TOKEN` 环境变量（通过 `echo $TOKEN | docker login --username $USER --password-stdin` 获取），或使用 GitHub Container Registry 作为备选源**）：
    - `curl -s "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&name={version}*"`
+   - 如果返回 401/429，降级使用 WebSearch 搜索 `{repo} docker tags {version}` 替代
 
 | Target | Docker Hub Repo |
 |--------|----------------|
@@ -125,6 +126,13 @@ tools:
 - version_match: {major.minor 匹配结果: matched | mismatched}
 - source_url: {文档首页 URL}
 - fetched_at: {ISO 8601 timestamp}
+
+## Document Sources
+| # | URL | Doc Version | Fetched At | Version Match |
+|---|-----|-------------|------------|---------------|
+| 1 | {url_1} | {version_1} | {timestamp_1} | matched/mismatched |
+| 2 | {url_2} | {version_2} | {timestamp_2} | matched/mismatched |
+| ... |
 
 ## SDK Information
 - Package: {package_name}
@@ -174,6 +182,7 @@ tools:
 - SDK 版本号和 Docker tags 已记录
 - **每个端点都有 Source URL 和 Doc Version 字段**
 - **Document Metadata 中 version_match 不为 mismatched**（如果是，需在 Step 1 重新搜索）
+- **Document Sources 表格已填写，每个源都有 URL 和 Doc Version**
 
 ---
 

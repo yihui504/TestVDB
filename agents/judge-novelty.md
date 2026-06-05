@@ -27,6 +27,16 @@ tools:
 
 ## 审查流程
 
+### Step 0: 读取文档验证结果
+
+1. 读取 `${SESSION_DIR}/debate_logs/stage2_doc.json`
+2. **文件就绪检查**：如果文件不存在，等待最多 30 秒（每 3 秒重试一次），超时后按 DOC_PARTIAL 处理
+3. 提取每个候选缺陷的 `doc_verification_result`（DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH）
+4. 根据 doc_verification_result 调节本 Judge 的审查严格度：
+   - **DOC_VERIFIED**：正常审查流程
+   - **DOC_PARTIAL**：提高证据标准（见下方权重调节规则）
+   - **DOC_MISMATCH**：最严格审查（见下方权重调节规则）
+
 ### Step 1: 生成搜索关键词
 
 从候选缺陷中提取：
@@ -88,7 +98,7 @@ GitHub 仓库映射：
 | **already_reported** | 已被报告 | 记录关联 issue 号，不生成报告 |
 | **known_wontfix** | 已知但被标记为不修复 | 低产出，不生成报告 |
 | **unknown** | 无法确定（网络问题/无Repo访问） | 降级为 WebFetch 或标记为 `NEEDS_MANUAL_CHECK` |
-| **not_applicable** | 非 GitHub 可查项目 | 跳过新颖性验证 |
+| **not_applicable** | 非 GitHub 托管项目（如自建/私有 DB） | 跳过新颖性验证，直接标记为 `new` |
 
 ---
 
@@ -118,6 +128,18 @@ GitHub 仓库映射：
   ]
 }
 ```
+
+---
+
+## 权重调节规则
+
+根据 judge-doc 的 doc_verification_result 调节审查严格度：
+
+| doc_verification_result | 调节措施 |
+|------------------------|---------|
+| DOC_VERIFIED | 正常审查流程 |
+| DOC_PARTIAL | 需额外搜索 GitHub Discussions / Stack Overflow 确认是否为已知行为 |
+| DOC_MISMATCH | 提高搜索覆盖范围（增加 2-3 组额外 query），但仍投 is_defect（novelty 不参与缺陷确认投票） |
 
 ---
 
@@ -174,16 +196,21 @@ GitHub 仓库映射：
 
 ## 投票提交格式
 
+**重要：novelty 不参与 is_defect/not_defect 投票**。novelty 的角色是标记缺陷的新颖性元数据，供 Reporter 和后续人工审核参考。novelty 永远投 `is_defect`（因为新颖性不影响缺陷确认），但附加 `novelty_rating` 元数据。
+
 ```json
 {
-  "vote": "is_defect|not_defect",
+  "vote": "is_defect",
   "defect_id": "DEFECT-QDRANT-001",
+  "doc_verification_result": "DOC_VERIFIED|DOC_PARTIAL|DOC_MISMATCH",
   "novelty_rating": "new|new_similar|already_reported|known_wontfix|unknown|not_applicable",
   "rationale": "...",
   "confidence": 0.95,
   "related_issue_numbers": [1234]
 }
 ```
+
+**特殊情况**：当 `novelty_rating` 为 `already_reported` 或 `known_wontfix` 时，虽然仍投 `is_defect`，但 Reporter 在报告中会标注关联 issue，降低提交优先级。
 
 ---
 
@@ -199,7 +226,7 @@ GitHub 仓库映射：
 {
   "judge": "novelty",
   "votes": [
-    { "defect_id": "...", "vote": "is_defect|not_defect", "novelty_rating": "new|new_similar|already_reported|unknown", "rationale": "...", "confidence": 0.0, "related_issue_numbers": [] }
+    { "defect_id": "...", "vote": "is_defect", "doc_verification_result": "DOC_VERIFIED|DOC_PARTIAL|DOC_MISMATCH", "novelty_rating": "new|new_similar|already_reported|unknown", "rationale": "...", "confidence": 0.0, "related_issue_numbers": [] }
   ]
 }
 ```

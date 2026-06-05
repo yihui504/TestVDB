@@ -83,6 +83,22 @@ tools:
         }
       }
     },
+    "endpoint_registry": {
+      "type": "array",
+      "description": "端点注册表：每个已知端点的文档来源信息，供 judge-doc 查表验证",
+      "items": {
+        "type": "object",
+        "required": ["path", "method", "source_url", "doc_version"],
+        "properties": {
+          "path": { "type": "string", "description": "端点路径（如 collections+create）" },
+          "method": { "type": "string", "description": "HTTP 方法" },
+          "source_url": { "type": "string", "description": "该端点文档的原始 URL" },
+          "doc_version": { "type": "string", "description": "该页面的文档版本号" },
+          "doc_quote": { "type": "string", "description": "文档中关于该端点的关键描述（1-2句）" },
+          "verified_at": { "type": "string", "format": "date-time", "description": "验证时间" }
+        }
+      }
+    },
     "constraints": {
       "type": "object",
       "required": ["type_constraints", "range_constraints", "state_constraints"],
@@ -144,7 +160,7 @@ tools:
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["assertion_id", "endpoint", "description", "category", "expected_behavior", "confidence"],
+        "required": ["assertion_id", "endpoint", "description", "category", "expected_behavior", "confidence", "source_url"],
         "properties": {
           "assertion_id": { "type": "string" },
           "endpoint": { "type": "string" },
@@ -152,7 +168,9 @@ tools:
           "category": { "type": "string", "enum": ["type_check", "range_check", "state_check", "behavioral"] },
           "expected_behavior": { "type": "string" },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "defect_type_if_violated": { "type": "string", "enum": ["Type1_IllegalSuccess", "Type2_PoorDiagnostics", "Type3_RuntimeFailure", "Type4_StateLogicViolation"] }
+          "defect_type_if_violated": { "type": "string", "enum": ["Type1_IllegalSuccess", "Type2_PoorDiagnostics", "Type3_RuntimeFailure", "Type4_StateLogicViolation"] },
+          "source_url": { "type": "string", "description": "该断言来源的文档 URL" },
+          "doc_version": { "type": "string", "description": "该断言来源的文档版本" }
         }
       }
     },
@@ -160,13 +178,14 @@ tools:
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["contract_id", "description", "scenario", "expected_behavior"],
+        "required": ["contract_id", "description", "scenario", "expected_behavior", "source_url"],
         "properties": {
           "contract_id": { "type": "string" },
           "description": { "type": "string" },
           "scenario": { "type": "string" },
           "expected_behavior": { "type": "string" },
-          "related_endpoints": { "type": "array", "items": { "type": "string" } }
+          "related_endpoints": { "type": "array", "items": { "type": "string" } },
+          "source_url": { "type": "string", "description": "该行为契约来源的文档 URL" }
         }
       }
     },
@@ -174,12 +193,13 @@ tools:
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["invariant_id", "description", "assertion"],
+        "required": ["invariant_id", "description", "assertion", "source_url"],
         "properties": {
           "invariant_id": { "type": "string" },
           "description": { "type": "string" },
           "assertion": { "type": "string" },
-          "scope": { "type": "string", "enum": ["per_collection", "per_table", "global"] }
+          "scope": { "type": "string", "enum": ["per_collection", "per_table", "global"] },
+          "source_url": { "type": "string", "description": "该不变量来源的文档 URL" }
         }
       }
     },
@@ -264,6 +284,16 @@ tools:
 - 删除→查询不可见性
 - 更新→查询新值的原子性
 
+### 规则 7: 端点注册表生成
+
+从 raw_knowledge.md 的 Document Sources 表格和每个端点的 Source URL 字段生成 endpoint_registry。每个 api_endpoints 中的端点必须在 endpoint_registry 中有对应条目。endpoint_registry 是 api_endpoints 的文档来源索引，path+method 必须与 api_endpoints 中的条目一一对应。
+
+**doc_quote 字段提取规范：**
+- 从 raw_knowledge.md 中每个端点的 `Constraints` → `behavioral` 部分提取关键描述
+- 优先使用文档原文中的行为描述（1-2 句），如 "Search for the closest points to the given query vector"
+- 如果 raw_knowledge.md 中没有明确的原文引用，使用端点 Description 字段作为 doc_quote
+- doc_quote 必须是对该端点核心行为的权威描述，用于 judge-doc 的内容一致性验证
+
 ---
 
 ## 输出验证
@@ -284,6 +314,7 @@ tools:
    - 如果 source_url 可达但版本不匹配 → 标记 `source_status: "degraded"`
    - 如果 source_url 可达且版本匹配 → 标记 `source_status: "reachable"`
 10. **降级搜索**：对于 `source_status: "unreachable"` 的约束，使用 WebSearch 搜索替代文档源（如 GitHub README、社区文档、Stack Overflow），找到后更新 source_url 并标记 `source_status: "degraded"`
+11. **endpoint_registry 已生成且每个条目都有 source_url 和 doc_version**
 
 ---
 
@@ -303,6 +334,16 @@ tools:
         { "name": "vector", "type": "array<float>", "required": true, "description": "Query vector" },
         { "name": "limit", "type": "int", "required": true, "description": "Maximum number of results" }
       ]
+    }
+  ],
+  "endpoint_registry": [
+    {
+      "path": "search+points",
+      "method": "POST",
+      "source_url": "https://qdrant.tech/documentation/api-reference/search/",
+      "doc_version": "v1.13.x",
+      "doc_quote": "Search for the closest points to the given query vector",
+      "verified_at": "2026-06-05T01:02:00Z"
     }
   ],
   "constraints": {

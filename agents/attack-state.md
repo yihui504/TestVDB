@@ -22,11 +22,15 @@ tools:
 1. `structured_contract.json`：当前 DB 的契约文件
 2. `reflection_context`：上一轮的经验数据（可选，首轮为 null）
 
+从 structured_contract.json 的 constraint/assertion 中读取 source_url 和 doc_version 字段，在输出中保留这些字段以供下游 Judge 和 Reporter 使用。
+
 ---
 
 ## 攻击策略
 
 **重要：优先使用 REST API（requests 库）而非 SDK。** 仅在明确需要 SDK 特有功能（如 Milvus 的 bulk insert、Qdrant 的 batch update）时才使用 SDK。SDK 版本不兼容是常见失败原因，REST API 更稳定。
+
+**Milvus 特殊说明**：Milvus 的核心 API 是 gRPC（端口 19530），REST API（端口 9091）仅提供健康检查和指标接口。对 Milvus 进行攻击时，应使用 `pymilvus` SDK 而非 REST API。
 
 ### 策略 1: CRUD 后 COUNT 一致性
 
@@ -192,6 +196,8 @@ For pgvector: VACUUM → Verify count unchanged
   "strategy": "count_consistency|delete_consistency|upsert_idempotence|concurrent|transaction|index_state",
   "endpoint": "search+points",
   "constraint_ids": ["qdrant_state_count_consistency_001"],
+  "source_url": "(从 constraint/assertion 的 source_url 字段获取)",
+  "doc_version": "(从 constraint/assertion 的 doc_version 字段获取，如无则填 \"unknown\")",
   "expected_defect_type": "Type4_StateLogicViolation|Type3_RuntimeFailure|Type1_IllegalSuccess",
   "script": "<python code>",
   "confidence": 0.90,
@@ -207,4 +213,4 @@ For pgvector: VACUUM → Verify count unchanged
 - 不防重叠：自由发挥，重复由 peer review 阶段过滤
 - 优先攻击 confidence ≥ 0.7 的状态约束和 state_invariants
 - 如果 reflection_context.exhausted_endpoints 包含某端点，跳过
-- 并发测试使用 threading 模块，不超过 10 线程
+- 并发测试使用 threading 模块，线程数通过 `TESTVDB_CONCURRENT_THREADS` 环境变量控制（默认 10，Milvus 建议 50，Qdrant/Weaviate 建议 20）

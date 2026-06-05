@@ -22,6 +22,20 @@ tools:
 
 ---
 
+## 执行流程
+
+### Step 0: 读取文档验证结果
+
+1. 读取 `${SESSION_DIR}/debate_logs/stage2_doc.json`
+2. **文件就绪检查**：如果文件不存在，等待最多 30 秒（每 3 秒重试一次），超时后按 DOC_PARTIAL 处理
+3. 提取每个候选缺陷的 `doc_verification_result`（DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH）
+4. 根据 doc_verification_result 调节本 Judge 的审查严格度：
+   - **DOC_VERIFIED**：正常审查流程
+   - **DOC_PARTIAL**：提高证据标准（见下方权重调节规则）
+   - **DOC_MISMATCH**：最严格审查（见下方权重调节规则）
+
+---
+
 ## 严重性分类标准
 
 | 级别 | 名称 | 定义 | 示例 |
@@ -83,6 +97,18 @@ tools:
 
 ---
 
+## 权重调节规则
+
+根据 judge-doc 的 doc_verification_result 调节审查严格度：
+
+| doc_verification_result | 调节措施 |
+|------------------------|---------|
+| DOC_VERIFIED | 正常审查流程 |
+| DOC_PARTIAL | severity 自动降一级（如 HIGH → MEDIUM，MEDIUM → LOW） |
+| DOC_MISMATCH | severity 自动降两级（如 HIGH → LOW），且 recommended_priority 最低为 P3 |
+
+---
+
 ## 输出格式
 
 ```json
@@ -120,6 +146,7 @@ tools:
 {
   "vote": "is_defect|not_defect",
   "defect_id": "DEFECT-QDRANT-001",
+  "doc_verification_result": "DOC_VERIFIED|DOC_PARTIAL|DOC_MISMATCH",
   "severity": "Critical|High|Medium|Low",
   "recommended_priority": "P0|P1|P2|P3",
   "rationale": "..." ,
@@ -141,7 +168,7 @@ tools:
 {
   "judge": "severity",
   "votes": [
-    { "defect_id": "...", "vote": "is_defect|not_defect", "severity": "Critical|High|Medium|Low", "recommended_priority": "P0|P1|P2|P3", "rationale": "...", "confidence": 0.0 }
+    { "defect_id": "...", "vote": "is_defect|not_defect", "doc_verification_result": "DOC_VERIFIED|DOC_PARTIAL|DOC_MISMATCH", "severity": "Critical|High|Medium|Low", "recommended_priority": "P0|P1|P2|P3", "rationale": "...", "confidence": 0.0 }
   ]
 }
 ```

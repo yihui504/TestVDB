@@ -60,7 +60,7 @@ results/qdrant/v1.13.0/2026-06-04T15-30-00Z/
 
 ## Termination Conditions
 
-1. **Stalemate**: 2 consecutive rounds with no new defects
+1. **Stalemate**: 5 consecutive rounds with no new defects
 2. **Coverage**: Contract coverage reaches ≥ 95%
 3. **Max Rounds**: `--max-rounds` reached
 4. **Min Defects**: `--min-defects` reached

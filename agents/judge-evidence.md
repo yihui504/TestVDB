@@ -23,6 +23,20 @@ tools:
 
 ---
 
+## 执行流程
+
+### Step 0: 读取文档验证结果
+
+1. 读取 `${SESSION_DIR}/debate_logs/stage2_doc.json`
+2. **文件就绪检查**：如果文件不存在，等待最多 30 秒（每 3 秒重试一次），超时后按 DOC_PARTIAL 处理
+3. 提取每个候选缺陷的 `doc_verification_result`（DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH）
+4. 根据 doc_verification_result 调节本 Judge 的审查严格度：
+   - **DOC_VERIFIED**：正常审查流程
+   - **DOC_PARTIAL**：提高证据标准（见下方权重调节规则）
+   - **DOC_MISMATCH**：最严格审查（见下方权重调节规则）
+
+---
+
 ## 审查维度与标准
 
 ### 维度 1: 可复现性 (Reproducibility)
@@ -85,6 +99,23 @@ tools:
 | B | 证据链部分缺失（如 HTTP 响应 body 未记录） | 1 |
 | C | 证据链严重缺失 | 0 |
 
+### 维度 4: 缺陷类型准确性 (Defect Type Accuracy)
+
+验证候选缺陷的 `defect_type` 分类是否正确：
+
+| Type | 错误分类场景 | 正确分类提示 |
+|------|------------|------------|
+| Type1_IllegalSuccess | 应该拒绝但接受的操作 | 200/201 响应 + 非法参数 |
+| Type2_PoorDiagnostics | 错误消息不清晰/不充分 | 4xx/5xx + 缺少参数名/正确格式提示 |
+| Type3_RuntimeFailure | 服务崩溃/500 错误 | 500 + 合法输入 |
+| Type4_StateLogicViolation | 正确 API 调用但结果不一致 | 200 + 状态不符合预期 |
+
+**评级：**
+| 等级 | 标准 | 评分 |
+|------|------|------|
+| A | 缺陷类型分类准确 | 1 |
+| B | 类型分类有争议 | 0 |
+
 ### 维度 5: 契约引用可达性 (Source Traceability)
 
 **审查方法：**
@@ -116,22 +147,6 @@ tools:
 | undocumented_strict | 无文档，但通过严格审查 | evidence_score 上限降为 7（B 级） |
 | undocumented_fail | 无文档，且未通过严格审查 | 自动 not_defect |
 
-**审查方法：**
-- 验证候选缺陷的 `defect_type` 分类是否正确
-
-| Type | 错误分类场景 | 正确分类提示 |
-|------|------------|------------|
-| Type1_IllegalSuccess | 应该拒绝但接受的操作 | 200/201 响应 + 非法参数 |
-| Type2_PoorDiagnostics | 错误消息不清晰/不充分 | 4xx/5xx + 缺少参数名/正确格式提示 |
-| Type3_RuntimeFailure | 服务崩溃/500 错误 | 500 + 合法输入 |
-| Type4_StateLogicViolation | 正确 API 调用但结果不一致 | 200 + 状态不符合预期 |
-
-**评级：**
-| 等级 | 标准 | 评分 |
-|------|------|------|
-| A | 缺陷类型分类准确 | 1 |
-| B | 类型分类有争议 | 0 |
-
 ---
 
 ## 综合评级
@@ -149,6 +164,18 @@ tools:
 | 0-4 | D | 证据不足，不进入后续阶段 |
 
 **无文档缺陷修正**：如果维度 6 评级为 `undocumented_strict`，总分上限为 7（B 级）。如果评级为 `undocumented_fail`，自动投 `not_defect`。
+
+---
+
+## 权重调节规则
+
+根据 judge-doc 的 doc_verification_result 调节审查严格度：
+
+| doc_verification_result | 调节措施 |
+|------------------------|---------|
+| DOC_VERIFIED | 正常审查流程 |
+| DOC_PARTIAL | evidence 需达到 A 级（11-13 分）才能投 is_defect，B 级（8-10 分）投 not_defect |
+| DOC_MISMATCH | 需 2 次独立复现 + 源码验证 + 排除行业惯例 + evidence_score 上限降为 7 分（C 级） |
 
 ---
 
@@ -199,6 +226,7 @@ tools:
 {
   "vote": "is_defect|not_defect",
   "defect_id": "DEFECT-QDRANT-001",
+  "doc_verification_result": "DOC_VERIFIED|DOC_PARTIAL|DOC_MISMATCH",
   "evidence_grade": "A|B|C|D",
   "evidence_score": 10,
   "rationale": "Reproducible in retry, no infrastructure issues, complete evidence chain. Correctly classified.",
@@ -220,7 +248,7 @@ tools:
 {
   "judge": "evidence",
   "votes": [
-    { "defect_id": "...", "vote": "is_defect|not_defect", "evidence_grade": "...", "evidence_score": 0, "rationale": "...", "confidence": 0.0 }
+    { "defect_id": "...", "vote": "is_defect|not_defect", "doc_verification_result": "DOC_VERIFIED|DOC_PARTIAL|DOC_MISMATCH", "evidence_grade": "...", "evidence_score": 0, "rationale": "...", "confidence": 0.0 }
   ]
 }
 ```
