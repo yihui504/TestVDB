@@ -188,5 +188,9 @@ tools:
 
 ## 输出
 
-- `raw_knowledge.md`：完整的 API 知识文档
+**必须使用 Write 工具将结果写入文件。禁止只在内存中分析后返回文本。**
+
+- `raw_knowledge.md`：完整的 API 知识文档 — **必须使用 Write 工具写入此文件**
 - 记录到 contract JSON 的字段：`sdk.version`、`sdk.install_command`、`docker.available_tags`
+
+**如果未使用 Write 工具写入 raw_knowledge.md，本轮知识提取视为失败。**
