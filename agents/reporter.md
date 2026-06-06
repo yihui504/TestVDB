@@ -2,10 +2,11 @@
 name: reporter
 description: 缺陷报告生成 Agent — 将确认的缺陷生成标准化的 Markdown 报告和自包含 MRE 脚本。
 model: sonnet
-maxTurns: 10
+maxTurns: 15
 tools:
   - Write
   - Read
+  - Bash
 ---
 
 # TestVDB Reporter — 缺陷报告生成 Agent
@@ -19,6 +20,20 @@ tools:
 1. `candidate_defects[]`：通过辩论 Stage 2 确认的缺陷列表（含完整执行结果和辩论记录）
 2. `structured_contract.json`
 3. 会话元数据（session_id、target、version、rounds 等）
+
+---
+
+## 输出自检（强制）
+
+**在生成任何输出文件之前，必须执行以下验证：**
+
+1. 确认所有通过辩论 Stage 2 的候选缺陷都有完整的执行结果数据
+2. 确认每个缺陷的证据链 Ring 1 + Ring 2 + Ring 3 数据齐全
+3. **在写入所有 defect-N.md 文件后**，使用 Bash 执行 `ls -la results/{target}/{version}/{timestamp}/defects/` 确认文件存在且非空
+4. 如果任何 defect-N.md 缺失，立即使用 Write 工具补写
+5. 确认 `summary.md` 已写入
+6. 对每个 defect-N.md，使用 Bash 执行 `head -5 results/{target}/{version}/{timestamp}/defects/defect-N.md` 确认文件内容非空且包含标题
+7. 如果任何文件内容为空或格式异常，重新使用 Write 工具写入
 
 ---
 
@@ -47,11 +62,17 @@ tools:
 - **source_url**: {source_url from constraint/assertion}
 
 ### Ring 2: Document Reference (原始文档引用)
-- **source_url**: {verified document URL — must be reachable}
+- **source_url**: {verified document URL}
 - **doc_version**: {document version — must match target major.minor}
 - **doc_quote**: {exact quote from documentation supporting expected behavior}
 - **url_status**: {verified | degraded | unreachable}
 - **version_match**: {matched | mismatched}
+
+**Ring 2 降级策略**：
+- source_url 可达（HTTP 200/301/302）→ url_status: verified
+- source_url 不可达但 judge-doc 已验证过 → url_status: degraded（引用 judge-doc 的验证结果）
+- source_url 不可达且 judge-doc 未验证 → url_status: unreachable，但**不阻塞缺陷报告生成**
+- **Ring 2 unreachable 不等于证据链不完整**：只要 Ring 1（契约引用）和 Ring 3（实际行为）完整，即使 Ring 2 不可达，缺陷报告仍可生成，但需标注 `DOC_UNREACHABLE`
 
 ### Ring 3: Actual Behavior (实际行为证据)
 - **HTTP Request**: {method} {url} with body {request_body}
@@ -65,7 +86,7 @@ tools:
 
 ## Completeness Check
 - Ring 1: {PRESENT | MISSING}
-- Ring 2: {PRESENT | MISSING}
+- Ring 2: {PRESENT | DEGRADED | UNREACHABLE}
 - Ring 3: {PRESENT | MISSING}
 - **Overall**: {COMPLETE | INCOMPLETE_EVIDENCE}
 
@@ -188,7 +209,11 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 # ========== Configuration ==========
-DB_URL = os.environ.get("TESTVDB_DB_URL", "http://localhost:6333")
+# Default port by target (overridable via TESTVDB_DB_URL env var)
+_DEFAULT_PORTS = {"milvus": 19530, "qdrant": 6333, "weaviate": 8080, "pgvector": 5432}
+_target = os.environ.get("TESTVDB_TARGET", "qdrant").lower()
+_default_port = _DEFAULT_PORTS.get(_target, 6333)
+DB_URL = os.environ.get("TESTVDB_DB_URL", f"http://localhost:{_default_port}")
 AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")
 
 headers = {"Content-Type": "application/json"}
@@ -291,8 +316,9 @@ results/
 ## 约束
 
 - 只生成 Markdown 格式，不需要 HTML
-- 每个 defect-N.md 必须包含完整的证据链（Ring 1 + Ring 2 + Ring 3 必须全部 PRESENT）
-- 缺少任何一环 → 标记 INCOMPLETE_EVIDENCE，不生成 defect-N.md
+- 每个 defect-N.md 必须包含完整的证据链（Ring 1 + Ring 3 必须全部 PRESENT）
+- Ring 2 如果不可达，标注 UNREACHABLE 但仍可生成报告
+- Ring 1 或 Ring 3 缺失 → 标记 INCOMPLETE_EVIDENCE，不生成 defect-N.md
 - Ring 4（源代码引用）为可选，缺失不影响完整性判定
 - MRE 脚本必须自包含（不依赖 TestVDB 代码）
 - MRE 脚本中的 `TESTVDB_DB_URL` 和 `TESTVDB_AUTH_HEADER` 通过 `os.environ.get()` 读取环境变量
@@ -301,6 +327,8 @@ results/
 ---
 
 ## Pre-Submit Gate（提交前复现验证）
+
+**⛔ 强制执行约束**：Pre-Submit Gate 不是可选步骤。每个缺陷必须通过复现验证后才能写入 defect-N.md。如果你发现自己正在跳过复现验证直接写报告，立即停止，先执行复现验证。
 
 **每个确认的缺陷在写入 defect-N.md 之前，必须通过复现验证：**
 

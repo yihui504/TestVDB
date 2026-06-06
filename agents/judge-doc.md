@@ -49,12 +49,16 @@ tools:
 #### 验证 1: 链接可达性
 
 对缺陷引用的每个 source_url：
-1. 用 Bash 执行 `curl -sI "{source_url}"` 检查 HTTP 状态码
+1. 先用 Bash 执行 `curl -sI "{source_url}"` 检查 HTTP 状态码
 2. HTTP 200/301/302 → 可达
 3. HTTP 404/5xx → 不可达
 4. 无 source_url → 标记为 `no_source_url`
+5. **WebFetch 降级策略**：如果 curl 因网络限制失败（如 milvus.io 域名被阻止），尝试以下降级方案：
+   - 用 WebSearch 搜索 `{source_url} site:{domain}` 确认页面存在
+   - 用 WebFetch 尝试访问（某些域名的 API 文档可能通过子域名可达，如 `milvus.io/api/`）
+   - 如果以上均失败，标记为 `domain_blocked`，不视为 FAIL，降级为 PARTIAL
 
-评分：所有 source_url 可达 = PASS，任一不可达 = FAIL，无 source_url = FAIL
+评分：所有 source_url 可达 = PASS，任一不可达（非 domain_blocked）= FAIL，任一 domain_blocked = PARTIAL，无 source_url = FAIL
 
 #### 验证 2: 版本匹配
 
@@ -119,6 +123,13 @@ tools:
 
 ### Step 4: 写入验证结果
 
+**⛔ 强制输出约束（MUST Write Before Exit）：**
+- 在执行任何其他操作之前，必须先使用 Write 工具将所有 judge_doc_{defect_id}.json 和 stage2_doc.json 写入磁盘
+- 如果你在分析完成后未写入文件就退出，本轮文档验证自动判定为失败
+- **不允许**以"验证完成"作为输出 — 文件写入是唯一的成功标准
+- **执行顺序**：Step 1-3 验证 → Step 4 Write 写入 → Step 5 验证 → 返回
+- 如果 Write 工具报错，重试最多 3 次
+
 对每个缺陷，写入 `${SESSION_DIR}/judge_doc_{defect_id}.json`：
 
 ```json
@@ -148,6 +159,15 @@ tools:
   ]
 }
 ```
+
+### Step 5: 最终验证（强制）
+
+**在返回结果之前，必须执行以下验证：**
+
+1. 使用 Bash 执行 `ls -la ${SESSION_DIR}/debate_logs/stage2_doc.json` 确认文件存在
+2. 如果文件不存在，立即使用 Write 工具写入
+3. 确认文件内容包含所有候选缺陷的验证结果
+4. 对每个候选缺陷，确认 `${SESSION_DIR}/judge_doc_{defect_id}.json` 已写入
 
 ---
 

@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/preflight.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/preflight.py",
+            "timeout": 30
           }
         ]
       }
@@ -17,7 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/log_execution.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/log_execution.py",
+            "timeout": 15
           }
         ]
       },
@@ -26,7 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/notify_check.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/notify_check.py",
+            "timeout": 15
           }
         ]
       }
@@ -37,7 +40,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/retry_policy.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/retry_policy.py",
+            "timeout": 10
           }
         ]
       }
@@ -48,7 +52,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/cleanup_stop.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/cleanup_stop.py",
+            "timeout": 30
           }
         ]
       }
@@ -59,7 +64,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/emergency_cleanup.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/emergency_cleanup.py",
+            "timeout": 30
           }
         ]
       }
@@ -70,7 +76,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/precompact_save.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/precompact_save.py",
+            "timeout": 15
           }
         ]
       }
@@ -81,7 +88,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python scripts/postcompact_verify.py"
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/postcompact_verify.py",
+            "timeout": 15
           }
         ]
       }

@@ -8,8 +8,51 @@ import json
 import os
 
 
+def _plugin_root():
+    """Determine plugin root from script location."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def find_session_id():
+    """Find TESTVDB_SESSION_ID from multiple sources.
+
+    Priority: environment variable > .env file > settings.json
+    """
+    # 1. Environment variable
+    sid = os.environ.get("TESTVDB_SESSION_ID", "")
+    if sid:
+        return sid
+
+    # 2. .env file in plugin root
+    plugin_root = _plugin_root()
+    env_path = os.path.join(plugin_root, ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("TESTVDB_SESSION_ID="):
+                        return line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+
+    # 3. settings.json in plugin root
+    settings_path = os.path.join(plugin_root, "settings.json")
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+            sid = settings.get("session", {}).get("session_id", "")
+            if sid:
+                return sid
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return ""
+
+
 def main():
-    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", ".")
+    plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", _plugin_root())
     settings_path = os.path.join(plugin_root, "settings.json")
 
     with open(settings_path, encoding="utf-8") as f:

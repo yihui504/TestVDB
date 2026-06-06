@@ -2,7 +2,7 @@
 name: knowledge-extractor
 description: 从官方文档中提取目标向量数据库的 API 知识和约束信息。
 model: sonnet
-maxTurns: 20
+maxTurns: 25
 tools:
   - WebSearch
   - WebFetch
@@ -115,7 +115,14 @@ tools:
 
 ### Step 5: 生成 raw_knowledge.md
 
-将所有提取的信息写入 `raw_knowledge.md`，结构如下：
+**⛔ 强制输出约束（MUST Write Before Exit）：**
+- 在执行任何其他操作之前，必须先使用 Write 工具将 raw_knowledge.md 写入磁盘
+- 如果你在分析完成后未写入文件就退出，本轮知识提取自动判定为失败
+- **不允许**以"分析完成"作为输出 — 文件写入是唯一的成功标准
+- **执行顺序**：Step 1-4 分析 → Step 5 Write 写入 → Step 6 验证 → 返回
+- 如果 Write 工具报错，重试最多 3 次
+
+将所有提取的信息写入 `results/{target}/{version}/raw_knowledge.md`（如果 `results/{target}/{version}/` 目录不存在，先用 Bash 执行 `mkdir -p results/{target}/{version}` 创建）。**注意：raw_knowledge.md 写入 `results/{target}/{version}/` 而非 `results/{target}/{version}/{timestamp}/`，因为它是跨 session 共享的缓存文件，不随特定 session 变化。**
 
 ```markdown
 # {target} v{version} API Knowledge

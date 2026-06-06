@@ -8,6 +8,7 @@ import subprocess
 import sys
 import shutil
 import os
+import re
 
 
 def check_docker():
@@ -19,6 +20,34 @@ def check_docker():
     r2 = subprocess.run(["docker", "compose", "version"], capture_output=True)
     compose_status = "OK" if not r2.returncode else "WARNING - docker compose not available"
     print(f"[TestVDB] Docker Compose: {compose_status}")
+
+
+def _parse_python_version(output):
+    """Extract (major, minor, patch) from version string output."""
+    m = re.search(r"(\d+)\.(\d+)(?:\.(\d+))?", output)
+    if m:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+    return None
+
+
+def _scan_python_candidates():
+    """Scan system PATH for Python >= 3.9 installations."""
+    candidates = []
+    if sys.platform == "win32":
+        commands = ["py -3", "py -3.12", "py -3.11", "py -3.10", "py -3.9",
+                     "python3", "python3.12", "python3.11", "python3.10", "python3.9"]
+    else:
+        commands = ["python3", "python3.12", "python3.11", "python3.10", "python3.9"]
+    for cmd in commands:
+        try:
+            r = subprocess.run(cmd.split() + ["--version"], capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                ver = _parse_python_version(r.stdout + r.stderr)
+                if ver and ver >= (3, 9, 0):
+                    candidates.append((cmd, f"{ver[0]}.{ver[1]}.{ver[2]}"))
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            continue
+    return candidates
 
 
 def check_python():
@@ -40,6 +69,56 @@ def check_python():
             ]
             if best:
                 print(f"[TestVDB] Windows py launcher versions: {best}")
+
+    # If current Python < 3.9, scan for alternatives
+    if not py_ok:
+        print("[TestVDB] Scanning for Python >= 3.9 in PATH...")
+        candidates = _scan_python_candidates()
+        if candidates:
+            for cmd, ver in candidates:
+                print(f"[TestVDB]   Found: {cmd} ({ver})")
+            print(f"[TestVDB] RECOMMEND: Use '{candidates[0][0]}' instead of 'python'")
+        else:
+            print("[TestVDB] No Python >= 3.9 found in PATH. Install Python 3.9+.")
+
+
+def _plugin_root():
+    """Determine plugin root from script location."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def check_session_env():
+    """Ensure TESTVDB_SESSION_ID is set; persist to plugin_root/.env."""
+    session_id = os.environ.get("TESTVDB_SESSION_ID", "")
+    if session_id:
+        print(f"[TestVDB] Session ID: {session_id}")
+        return
+
+    # Generate a session ID
+    import time
+    new_id = f"sess-{int(time.time())}"
+
+    # Try CLAUDE_ENV_FILE first (if available and non-empty)
+    env_file = os.environ.get("CLAUDE_ENV_FILE", "")
+    if env_file:
+        try:
+            with open(env_file, "a", encoding="utf-8") as f:
+                f.write(f"TESTVDB_SESSION_ID={new_id}\n")
+            print(f"[TestVDB] Session ID: {new_id} (persisted to CLAUDE_ENV_FILE)")
+            return
+        except OSError:
+            pass
+
+    # Fallback: write to plugin_root/.env (readable by all hook scripts)
+    plugin_root = _plugin_root()
+    dot_env = os.path.join(plugin_root, ".env")
+    try:
+        with open(dot_env, "a", encoding="utf-8") as f:
+            f.write(f"TESTVDB_SESSION_ID={new_id}\n")
+        print(f"[TestVDB] Session ID: {new_id} (persisted to {dot_env})")
+    except OSError as e:
+        print(f"[TestVDB] WARNING: Failed to write .env: {e}")
+        print(f"[TestVDB] Set TESTVDB_SESSION_ID={new_id} manually")
 
 
 def check_disk():
@@ -71,6 +150,7 @@ def main():
     print("[TestVDB] Pre-flight checks...")
     check_docker()
     check_python()
+    check_session_env()
     check_disk()
     check_github_token()
     check_network()

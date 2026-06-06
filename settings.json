@@ -47,6 +47,9 @@
     "webhook_url": "",
     "validate_on_start": true
   },
+  "session": {
+    "session_id": ""
+  },
   "network": {
     "proxy": ""
   },

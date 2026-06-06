@@ -9,18 +9,70 @@ import os
 import glob
 
 
-def find_latest_state():
-    """Find the latest mine_state.json across all session directories."""
-    # Check current directory first
-    if os.path.exists("mine_state.json"):
-        return "mine_state.json"
+def _plugin_root():
+    """Determine plugin root from script location."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-    # Search results/{target}/{version}/{timestamp}/ pattern
-    candidates = glob.glob(os.path.join("results", "*", "*", "*", "mine_state.json"))
+
+def find_session_id():
+    """Find TESTVDB_SESSION_ID from env, .env file, or settings.json."""
+    # 1. Environment variable
+    sid = os.environ.get("TESTVDB_SESSION_ID", "")
+    if sid:
+        return sid
+
+    # 2. .env file in plugin root
+    plugin_root = _plugin_root()
+    dot_env = os.path.join(plugin_root, ".env")
+    if os.path.exists(dot_env):
+        try:
+            with open(dot_env, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("TESTVDB_SESSION_ID="):
+                        return line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+
+    # 3. settings.json
+    settings_path = os.path.join(plugin_root, "settings.json")
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+            sid = settings.get("session", {}).get("session_id", "")
+            if sid:
+                return sid
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    return ""
+
+
+def find_latest_state():
+    """Find the latest mine_state.json, preferring current session if known."""
+    plugin_root = _plugin_root()
+
+    # If session_id is known, try to find its state file directly
+    session_id = find_session_id()
+    if session_id:
+        # Search results/{target}/{version}/{timestamp}/ for matching session
+        for root, dirs, files in os.walk(os.path.join(plugin_root, "results")):
+            if "mine_state.json" in files:
+                state_path = os.path.join(root, "mine_state.json")
+                try:
+                    with open(state_path, encoding="utf-8") as f:
+                        state = json.load(f)
+                    if state.get("session_id") == session_id:
+                        return state_path
+                except (OSError, json.JSONDecodeError):
+                    continue
+
+    # Fallback: search all session directories
+    candidates = glob.glob(os.path.join(plugin_root, "results", "*", "*", "*", "mine_state.json"))
     if not candidates:
         return None
 
-    # Return the most recently modified one
     return max(candidates, key=os.path.getmtime)
 
 
@@ -28,7 +80,8 @@ def main():
     print("[TestVDB] PostCompact: Context compressed. Verifying state...")
 
     # Try checkpoint first, then live state
-    ckpt_dir = os.path.join("results", ".checkpoints")
+    plugin_root = _plugin_root()
+    ckpt_dir = os.path.join(plugin_root, "results", ".checkpoints")
     ckpt_state = os.path.join(ckpt_dir, "mine_state.json")
 
     state_path = None

@@ -61,7 +61,10 @@ tools:
         "properties": {
           "path": { "type": "string" },
           "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "SQL"] },
-          "category": { "type": "string", "enum": ["collections", "points", "search", "index", "management", "ddl", "dml", "dql"] },
+          "category": {
+            "type": "string",
+            "description": "端点功能分类。标准分类：collections, points, search, index, management, ddl, dml, dql。别名映射：vector→points, partition→management, alias→management, cluster→management"
+          },
           "description": { "type": "string" },
           "source_url": { "type": "string", "description": "该端点文档的原始 URL，用于证据链追溯" },
           "doc_version": { "type": "string", "description": "该端点文档的版本号" },
@@ -255,6 +258,35 @@ tools:
 | 状态/一致性 | "atomic", "consistent", "after {op}", "should not affect" | state_constraint |
 | 行为/响应 | "returns", "returns error", "successful", "failure", "should not" | assertion (behavioral) |
 
+### 规则 2.5: 端点分类标准化（强制）
+
+在生成 structured_contract.json 时，所有 api_endpoints[].category 必须使用标准分类名。如果从 raw_knowledge.md 中提取到非标准分类名，必须按以下映射表转换为标准名：
+
+| 非标准分类名 | 标准分类名 |
+|-------------|-----------|
+| vector | points |
+| vectors | points |
+| entities | points |
+| entity | points |
+| partition | management |
+| alias | management |
+| cluster | management |
+| admin | management |
+| system | management |
+| collection | collections |
+| query | search |
+| recommend | search |
+| indexes | index |
+| indices | index |
+
+**标准化步骤**：
+1. 从 raw_knowledge.md 提取端点时，先记录原始分类名
+2. 查上表映射为标准分类名
+3. 在 api_endpoints 中只使用标准分类名
+4. 在输出验证第 12 条中确认无非标准分类名
+
+**注意**：此映射是强制性的，不是建议。如果发现未映射的非标准分类名，在输出验证中报错。
+
 ### 规则 3: 置信度标记
 
 每条约束/断言都需标记 `confidence`（0.0-1.0）：
@@ -315,6 +347,7 @@ tools:
    - 如果 source_url 可达且版本匹配 → 标记 `source_status: "reachable"`
 10. **降级搜索**：对于 `source_status: "unreachable"` 的约束，使用 WebSearch 搜索替代文档源（如 GitHub README、社区文档、Stack Overflow），找到后更新 source_url 并标记 `source_status: "degraded"`
 11. **endpoint_registry 已生成且每个条目都有 source_url 和 doc_version**
+12. **category 别名已全部映射为标准分类名**（无 vector、partition、alias 等非标准分类名）
 
 ---
 

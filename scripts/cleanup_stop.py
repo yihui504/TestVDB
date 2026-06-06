@@ -21,6 +21,49 @@ BASE_CONTAINER_NAMES = [
 ]
 
 
+def _plugin_root():
+    """Determine plugin root from script location."""
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def find_session_id():
+    """Find TESTVDB_SESSION_ID from multiple sources.
+
+    Priority: environment variable > .env file > settings.json
+    """
+    # 1. Environment variable
+    sid = os.environ.get("TESTVDB_SESSION_ID", "")
+    if sid:
+        return sid
+
+    # 2. .env file in plugin root
+    plugin_root = _plugin_root()
+    env_path = os.path.join(plugin_root, ".env")
+    if os.path.exists(env_path):
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("TESTVDB_SESSION_ID="):
+                        return line.split("=", 1)[1].strip()
+        except OSError:
+            pass
+
+    # 3. settings.json in plugin root
+    settings_path = os.path.join(plugin_root, "settings.json")
+    if os.path.exists(settings_path):
+        try:
+            with open(settings_path, encoding="utf-8") as f:
+                settings = json.load(f)
+            sid = settings.get("session", {}).get("session_id", "")
+            if sid:
+                return sid
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    return ""
+
+
 def is_session_locked(session_dir):
     """Check if a session has an active .session.lock file."""
     lock_path = os.path.join(session_dir, ".session.lock")
@@ -37,12 +80,13 @@ def is_session_locked(session_dir):
 def main():
     print("[TestVDB] Stop: Cleaning session Docker containers...")
 
-    session_id = os.environ.get("TESTVDB_SESSION_ID", "")
+    session_id = find_session_id()
 
     # Check session lock before cleaning
     if session_id:
         # Try to find and check session directory
-        results_dir = os.environ.get("TESTVDB_RESULTS_DIR", "results")
+        plugin_root = _plugin_root()
+        results_dir = os.environ.get("TESTVDB_RESULTS_DIR", os.path.join(plugin_root, "results"))
         if os.path.isdir(results_dir):
             for target_dir in os.listdir(results_dir):
                 target_path = os.path.join(results_dir, target_dir)

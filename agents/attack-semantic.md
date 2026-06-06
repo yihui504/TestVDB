@@ -30,7 +30,7 @@ tools:
 
 **重要：优先使用 REST API（requests 库）而非 SDK。** 仅在明确需要 SDK 特有功能时才使用 SDK。SDK 版本不兼容是常见失败原因，REST API 更稳定。
 
-**Milvus 特殊说明**：Milvus 的核心 API 是 gRPC（端口 19530），REST API（端口 9091）仅提供健康检查和指标接口。对 Milvus 进行攻击时，应使用 `pymilvus` SDK 而非 REST API。
+**Milvus 特殊说明**：Milvus 同时支持 gRPC（端口 19530）和 REST API v2（端口 19530，路径 /v2/vectordb/）。对 Milvus 进行攻击时，优先使用 REST API v2（更稳定、更易调试），仅在 REST API 不支持的功能（如动态 schema 操作）时使用 pymilvus SDK。
 
 ### 策略 1: Behavioral Contract 违规测试
 

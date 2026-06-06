@@ -2,7 +2,7 @@
 name: docker-executor
 description: Docker 沙箱执行 Agent — 在独立容器中运行攻击脚本并收集结果。
 model: haiku
-maxTurns: 15
+maxTurns: 8
 tools:
   - Bash
   - Read
@@ -239,6 +239,15 @@ docker restart testvdb-{target}-${TESTVDB_SESSION_ID}
 docker compose -f docker/{target}.yml down
 docker compose -f docker/{target}.yml up -d
 ```
+
+### Step 7.5: 执行结果自检（强制）
+
+**在返回结果之前，必须执行以下验证：**
+
+1. 确认每个已执行脚本的 `output_{script_id}.log` 文件已写入 `${SESSION_DIR}/`
+2. 确认每个已执行脚本的 `exit_code_{script_id}.txt` 文件已写入 `${SESSION_DIR}/`
+3. 如果任何输出文件缺失，重新执行对应脚本或手动补写结果
+4. 确认 `execution_results` 列表非空（至少包含一个执行结果）
 
 ### Step 8: 返回结果
 
