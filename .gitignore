@@ -1,13 +1,22 @@
 /target
 .env
 docker.tgz
+
+# Docker engine binaries (not tracked - install Docker separately)
+docker/containerd
+docker/containerd-shim-runc-v2
+docker/ctr
+docker/docker
+docker/dockerd
+docker/docker-init
+docker/docker-proxy
+docker/runc
 run_log*.txt
 *.pyc
 volumes/
 *.log
 mine_*_log.txt
 github_token.txt
-.mine_state.json
 experience_handoff.json
 *_mine_defects_*.json
 .venv/
@@ -19,7 +28,22 @@ reviewer.log
 results/
 shadow_mode_results/
 
+# Contracts - runtime artifacts (crawled pages, generated JSONs)
+contracts/*_crawled_pages.json
+contracts/*_openapi.json
+contracts/test*_contract.json
+contracts/test*_crawled_pages.json
+contracts/milvus_behavioral_templates.json
+contracts/qdrant_behavioral_templates.json
+contracts/weaviate_behavioral_templates.json
+
 # Claude Code plugin runtime
 .mine_state.json
 session_metadata.json
 subagent-tracking.json
+
+# Mining session artifacts (auto-generated, not source)
+qdrant_report_*.md
+*_candidate_defect.md
+mine_*_log.txt
+contracts/qdrant_contract.json

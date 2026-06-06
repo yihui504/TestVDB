@@ -2,7 +2,7 @@
 name: reporter
 description: 缺陷报告生成 Agent — 将确认的缺陷生成标准化的 Markdown 报告和自包含 MRE 脚本。
 model: sonnet
-maxTurns: 15
+maxTurns: 20
 tools:
   - Write
   - Read

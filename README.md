@@ -81,6 +81,8 @@ cd TestVDB
 claude --plugin-dir .
 ```
 
+> **Note**: `--plugin-dir .` loads the plugin for the current session only (development/testing). For permanent installation, see [Testing on Claude Code](#testing-on-claude-code).
+
 ### 3. Mine Defects
 
 Use the `/mine` command to start the pipeline:
@@ -194,6 +196,7 @@ TestVDB/
     reporter.md
   commands/mine.md                 Entry command
   docker/                          Docker Compose templates
+    crawl4ai.yml
     milvus.yml
     qdrant.yml
     weaviate.yml
@@ -204,11 +207,12 @@ TestVDB/
     contract-schema/SKILL.md
     defect-taxonomy/SKILL.md
     docker-templates/SKILL.md
-  contracts/                        Pre-built contracts
-    milvus_contract.json
-    qdrant_contract.json
-    weaviate_contract.json
-    pgvector_contract.json
+  contracts/                        Configuration & seed data
+    milvus_contract.json           Pre-crawled Milvus documentation
+    weaviate_contract.json         Pre-crawled Weaviate documentation
+    pgvector_contract.json         Pre-crawled pgvector documentation
+    db_strategies.json             Per-DB centralized strategy config
+    settings_schema.json           Settings validation schema
   issues/                          Known defect reports
     00-summary.md
     001-*.md ... 007-*.md
@@ -216,6 +220,8 @@ TestVDB/
     qdrant_*.md
     weaviate_*.md
   scripts/                         Helper scripts
+    crawl_fetch.py                 Crawl4AI web scraper (primary)
+    hook_runner.py                 Cross-platform Python interpreter resolver
     verify_defects.py
     github_search.py
     prioritizer.py
@@ -238,6 +244,14 @@ TestVDB/
   settings.json                    26 configurable parameters
   THEORETICAL_FRAMEWORK.md         Research paper
 ```
+
+## Theoretical Framework
+
+The [THEORETICAL_FRAMEWORK.md](./THEORETICAL_FRAMEWORK.md) document describes the research foundations of TestVDB, covering:
+
+- **Natural Language Contract Reverse Engineering** — Extracting machine-executable structured contracts from official documentation
+- **Human-in-the-Loop Anti-Hallucination Sandbox** — Physical isolation (Docker) + logical isolation (Four-Type Bug Taxonomy as gatekeeper)
+- **Four-Type Bug Taxonomy** — The MECE (Mutually Exclusive, Collectively Exhaustive) defect classification at the core of all agents
 
 ## Configuration
 
@@ -278,11 +292,69 @@ Configures the GitHub MCP server used by the novelty judge to search for duplica
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
+| **LLM Model** | Claude Sonnet/Opus or DeepSeek | Use `claude --model sonnet` for Claude. DeepSeek models are also supported. |
 | Claude Code CLI | Latest | `npm install -g @anthropic-ai/claude-code` |
 | Docker Engine | 20+ | Must be running before pipeline start |
 | Python | 3.9+ | Used by hooks and helper scripts |
 | Disk Space | 10GB+ | For Docker images and results |
+| Docker Hub Token | -- | **Required**. Set `DOCKER_HUB_TOKEN` env var. Unauthenticated requests are rate-limited. Obtain via `echo $TOKEN \| docker login --username $USER --password-stdin` |
+| Network Access | -- | WebFetch must reach target doc sites (milvus.io, qdrant.tech, etc.). Corporate proxies must whitelist these domains. |
 | GitHub Token | -- | Optional; enables full novelty judge via GitHub API |
+
+## Testing on Claude Code
+
+### Method 1: Session-only loading (recommended for development)
+
+```bash
+cd TestVDB
+claude --plugin-dir .
+```
+
+This loads the plugin for the current session only. Changes to plugin files take effect in the next session.
+
+### Method 2: Permanent local installation
+
+```bash
+# Add the plugin directory as a local marketplace
+/plugin marketplace add /path/to/TestVDB
+
+# Install the plugin
+/plugin install testvdb@TestVDB
+
+# Verify installation
+/help
+# You should see /testvdb:mine in the command list
+```
+
+### Method 3: From GitHub
+
+```bash
+/plugin marketplace add yihui504/TestVDB
+/plugin install testvdb@yihui504-TestVDB
+```
+
+### Debugging
+
+```bash
+# Enable debug mode to see plugin loading details
+claude --plugin-dir . --debug
+
+# Check loaded agents
+/agents
+
+# Check available commands
+/help
+```
+
+### Testing the Pipeline
+
+1. Ensure Docker Engine is running: `docker info`
+2. Start a session: `claude --plugin-dir .`
+3. Run a quick test on Qdrant (simplest setup, single container):
+   ```
+   /testvdb:mine qdrant v1.13.0 --max-rounds 1
+   ```
+4. Check results in `results/qdrant/v1.13.0/<timestamp>/`
 
 ## Evidence Chain Standard
 

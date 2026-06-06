@@ -1,4 +1,6 @@
 {
+  "$schema": "./contracts/settings_schema.json",
+  "_comment": "TestVDB 配置文件。所有路径相对于项目根目录。修改后无需重启。",
   "docker": {
     "milvus": {
       "port": 19530,
@@ -39,8 +41,8 @@
     "cache_enabled": true,
     "cache_ttl_hours": 168
   },
-  "monitors": {
-    "enabled": true
+  "github": {
+    "token": ""
   },
   "notification": {
     "on_severity": "critical",

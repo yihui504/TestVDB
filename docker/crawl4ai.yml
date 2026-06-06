@@ -1,0 +1,26 @@
+# TestVDB Crawl4AI - LLM-Friendly Web Crawler
+# Provides markdown extraction for API documentation scraping.
+# Replaces WebFetch for agents blocked by domain restrictions.
+#
+# Endpoints:
+#   11235 - Crawl4AI REST API
+#   11235/health - Health check (unauthenticated)
+#   11235/crawl - POST submit crawl task
+#   11235/task/{task_id} - GET task result/status
+
+services:
+  crawl4ai:
+    image: unclecode/crawl4ai:latest
+    container_name: testvdb-crawl4ai-standalone
+    ports:
+      - "${CRAWL4AI_PORT:-11235}:11235"
+    shm_size: "2g"
+    restart: unless-stopped
+    environment:
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11235/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

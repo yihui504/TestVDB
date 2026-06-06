@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yihui504/TestVDB/settings_schema.json",
+  "title": "TestVDB Settings Schema",
+  "description": "Configuration schema for the TestVDB vector database defect mining plugin.",
+  "type": "object",
+  "required": ["docker", "retry", "pipeline", "results", "knowledge"],
+  "properties": {
+    "docker": {
+      "type": "object",
+      "required": ["cleanup_on_exit", "startup_timeout_seconds"],
+      "properties": {
+        "milvus": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 19530 },
+            "health_port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 9091 }
+          }
+        },
+        "qdrant": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 6333 },
+            "grpc_port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 6334 }
+          }
+        },
+        "weaviate": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 8080 },
+            "grpc_port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 50051 }
+          }
+        },
+        "pgvector": {
+          "type": "object",
+          "properties": {
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 5432 }
+          }
+        },
+        "cleanup_on_exit": { "type": "boolean", "default": true },
+        "startup_timeout_seconds": { "type": "integer", "minimum": 10, "maximum": 600, "default": 120 }
+      }
+    },
+    "retry": {
+      "type": "object",
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1, "maximum": 20, "default": 5 },
+        "docker_startup_delay_seconds": { "type": "integer", "minimum": 1, "maximum": 60, "default": 10 },
+        "script_execution_delay_seconds": { "type": "integer", "minimum": 1, "maximum": 30, "default": 3 },
+        "doc_fetch_delay_seconds": { "type": "integer", "minimum": 1, "maximum": 30, "default": 5 },
+        "llm_format_delay_seconds": { "type": "integer", "minimum": 0, "maximum": 30, "default": 0 }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "properties": {
+        "default_max_rounds": { "type": "integer", "minimum": 0, "maximum": 100, "default": 5 },
+        "default_min_defects": { "type": "integer", "minimum": 0, "maximum": 100, "default": 1 }
+      }
+    },
+    "results": {
+      "type": "object",
+      "properties": {
+        "base_dir": { "type": "string", "default": "results" },
+        "max_sessions": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 }
+      }
+    },
+    "knowledge": {
+      "type": "object",
+      "properties": {
+        "cache_enabled": { "type": "boolean", "default": true },
+        "cache_ttl_hours": { "type": "integer", "minimum": 1, "maximum": 8760, "default": 168 }
+      }
+    },
+    "monitors": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true }
+      }
+    },
+    "notification": {
+      "type": "object",
+      "properties": {
+        "on_severity": { "type": "string", "enum": ["critical", "high", "medium", "low"], "default": "critical" },
+        "webhook_url": { "type": "string", "format": "uri", "default": "" },
+        "validate_on_start": { "type": "boolean", "default": true }
+      }
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string", "default": "" }
+      }
+    },
+    "network": {
+      "type": "object",
+      "properties": {
+        "proxy": { "type": "string", "default": "" }
+      }
+    },
+    "log_level": {
+      "type": "string",
+      "enum": ["debug", "info", "warn", "error"],
+      "default": "info"
+    }
+  }
+}

@@ -2,13 +2,41 @@
 name: knowledge-extractor
 description: 从官方文档中提取目标向量数据库的 API 知识和约束信息。
 model: sonnet
-maxTurns: 25
+maxTurns: 30
 tools:
+  - Bash
   - WebSearch
   - WebFetch
   - Grep
   - Read
   - Write
+
+# Web 抓取工具
+
+**首选方案：Crawl4AI (本地 Docker 服务)**
+
+TestVDB 使用 Crawl4AI 本地 Docker 服务作为主要网页抓取工具，替代可能被封锁的 WebFetch。
+
+使用方式：
+```bash
+python scripts/crawl_fetch.py "<url>"
+python scripts/crawl_fetch.py --json "<url>"     # 含元数据的 JSON 输出
+python scripts/crawl_fetch.py --raw "<url>"      # 原始 HTML
+```
+
+**启动 Crawl4AI（如果未运行）：**
+```bash
+docker compose -f docker/crawl4ai.yml up -d
+```
+
+**检查 Crawl4AI 健康状态：**
+```bash
+curl -sf http://127.0.0.1:11235/health && echo "Crawl4AI OK" || echo "Crawl4AI DOWN"
+```
+
+**降级方案：WebFetch**
+
+仅当 Crawl4AI 不可用（Docker 未运行、端口不通）时，才使用内置 WebFetch 工具作为降级方案。
 ---
 
 # TestVDB Knowledge Extractor — 知识获取 Agent
@@ -49,22 +77,26 @@ tools:
    - `major.minor` 必须一致（`2.6` == `2.6`），patch 级别差异可接受
    - `major.minor` 不一致（如文档 `2.2.x` 对目标 `2.6.x`）→ **文档过时，必须重新搜索匹配版本**
 3. 验证文档链接可达性：
-   - 用 WebFetch 请求每个关键文档页面
+   - **优先使用 Crawl4AI**：`python scripts/crawl_fetch.py --json "<url>"` 检查 HTTP 状态
+   - **降级用 curl**：`curl -sI "<url>" | head -1` 
    - HTTP 200/301/302 → 可达
    - HTTP 404/5xx → 不可达，降级搜索替代源
+   - 仅当 Crawl4AI 和 curl 都不可达时，使用 WebFetch
 4. 如果找不到匹配版本的文档 → 在 raw_knowledge.md 中标注 `doc_version_mismatch: true`，记录实际文档版本
 
 ### Step 2: 获取 API 端点列表
 
 **对于 REST API 数据库（qdrant、weaviate、milvus）：**
-1. 用 WebFetch 抓取 API 参考页面
-2. 提取所有 API 端点（HTTP method + path）
-3. 按功能分类：Collections、Points/Entities、Search、Index、Cluster/Management
+1. **优先用 Crawl4AI** 抓取 API 参考页面：`python scripts/crawl_fetch.py "<api_ref_url>"`
+2. **降级用 WebFetch**（仅当 Crawl4AI 不可用）
+3. 提取所有 API 端点（HTTP method + path）
+4. 按功能分类：Collections、Points/Entities、Search、Index、Cluster/Management
 
 **对于 SQL 数据库（pgvector）：**
-1. 用 WebFetch 抓取 README 和 SQL 参考
-2. 提取所有 SQL 操作：CREATE TABLE、CREATE INDEX、INSERT、SELECT、UPDATE、DELETE、向量操作符
-3. 按功能分类：DDL、DML、DQL、索引管理
+1. **优先用 Crawl4AI** 抓取 README 和 SQL 参考：`python scripts/crawl_fetch.py "<github_readme_url>"`
+2. **降级用 WebFetch**（仅当 Crawl4AI 不可用）
+3. 提取所有 SQL 操作：CREATE TABLE、CREATE INDEX、INSERT、SELECT、UPDATE、DELETE、向量操作符
+4. 按功能分类：DDL、DML、DQL、索引管理
 
 ### Step 3: 提取约束信息
 
@@ -96,9 +128,9 @@ tools:
 ### Step 4: 提取 SDK 和版本信息
 
 1. 记录目标版本下的官方 SDK 推荐版本和安装命令
-2. 查询 Docker Hub API 获取目标版本的可用 Docker images（**注意：Docker Hub API 有速率限制，未认证请求限流严格。建议设置 `DOCKER_HUB_TOKEN` 环境变量（通过 `echo $TOKEN | docker login --username $USER --password-stdin` 获取），或使用 GitHub Container Registry 作为备选源**）：
-   - `curl -s "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&name={version}*"`
-   - 如果返回 401/429，降级使用 WebSearch 搜索 `{repo} docker tags {version}` 替代
+2. 查询 Docker Hub API 获取目标版本的可用 Docker images（**注意：Docker Hub API 有速率限制，未认证请求限流严格。必须设置 `DOCKER_HUB_TOKEN` 环境变量（通过 `echo $TOKEN | docker login --username $USER --password-stdin` 获取）。如果 Docker Hub 不可用，使用 GitHub Container Registry 作为备选源**）：
+   - `curl -s -H "Authorization: Bearer $DOCKER_HUB_TOKEN" "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&name={version}*"`
+   - 备选：`curl -s "https://ghcr.io/v2/{org}/{repo}/tags/list"`
 
 | Target | Docker Hub Repo |
 |--------|----------------|
@@ -195,7 +227,8 @@ tools:
 
 ## 错误处理
 
-- 文档抓取失败 → 重试最多 5 次（5s 递增退避）
+- **Crawl4AI 不可用** → 自动检查并启动：`docker compose -f docker/crawl4ai.yml up -d`，等待就绪后重试。如果 Docker 完全不可用，降级为 WebFetch
+- 文档抓取失败 → 先尝试 Crawl4AI，再尝试 WebFetch，最多重试 5 次（5s 递增退避）
 - 某个端点页面不可访问 → 跳过该端点，在 raw_knowledge.md 末尾记录 `## Missing Endpoints`
 - Docker Hub API 不可达 → 标记 `available_tags: []`，由 Executor 镜像预检时验证
 - 网络不可用 → 报错退出，不降级处理

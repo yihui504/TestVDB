@@ -2,8 +2,9 @@
 name: judge-novelty
 description: 新颖性审查 Agent — 通过 GitHub Issues 搜索验证缺陷是否为首次报告。
 model: sonnet
-maxTurns: 15
+maxTurns: 18
 tools:
+  - Bash
   - WebSearch
   - WebFetch
   - mcp_GitHub_search_issues
@@ -71,9 +72,16 @@ GitHub 仓库映射：
 
 **Fallback: WebSearch（无 GitHub token 时）**
 
+使用 WebSearch 搜索 GitHub Issues（优先）：
 ```
 "{target} github issue {query}"
 ```
+
+如果搜索结果需要抓取具体 issue 页面内容，优先使用 Crawl4AI：
+```bash
+python scripts/crawl_fetch.py "<issue_url>"
+```
+仅当 Crawl4AI 不可用时降级为 WebFetch。
 
 ### Step 3: 精确匹配验证
 
@@ -97,7 +105,7 @@ GitHub 仓库映射：
 | **new_similar** | 有类似但不同根因 | 仍有价值，标注关联 issue |
 | **already_reported** | 已被报告 | 记录关联 issue 号，不生成报告 |
 | **known_wontfix** | 已知但被标记为不修复 | 低产出，不生成报告 |
-| **unknown** | 无法确定（网络问题/无Repo访问） | 降级为 WebFetch 或标记为 `NEEDS_MANUAL_CHECK` |
+| **unknown** | 无法确定（网络问题/无Repo访问） | 尝试 Crawl4AI 抓取 GitHub issue 页面，若仍失败标记为 `NEEDS_MANUAL_CHECK` |
 | **not_applicable** | 非 GitHub 托管项目（如自建/私有 DB） | 跳过新颖性验证，直接标记为 `new` |
 
 ---

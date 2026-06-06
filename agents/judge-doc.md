@@ -2,13 +2,28 @@
 name: judge-doc
 description: 验证候选缺陷的文档引用可达性、版本匹配、内容一致性和端点路径精确性。
 model: sonnet
-maxTurns: 15
+maxTurns: 20
 tools:
   - Read
   - Write
+  - Bash
   - WebSearch
   - WebFetch
-  - Bash
+
+# Web 抓取工具
+
+**首选方案：Crawl4AI (本地 Docker 服务)**
+
+```bash
+python scripts/crawl_fetch.py "<url>"
+```
+
+**启动 Crawl4AI（如果未运行）：**
+```bash
+docker compose -f docker/crawl4ai.yml up -d
+```
+
+**降级方案：curl / WebFetch**（仅当 Crawl4AI 不可用时使用）
 ---
 
 # TestVDB Judge Doc — 文档契约验证 Agent
@@ -49,13 +64,14 @@ tools:
 #### 验证 1: 链接可达性
 
 对缺陷引用的每个 source_url：
-1. 先用 Bash 执行 `curl -sI "{source_url}"` 检查 HTTP 状态码
-2. HTTP 200/301/302 → 可达
-3. HTTP 404/5xx → 不可达
-4. 无 source_url → 标记为 `no_source_url`
-5. **WebFetch 降级策略**：如果 curl 因网络限制失败（如 milvus.io 域名被阻止），尝试以下降级方案：
+1. **优先用 Crawl4AI**：`python scripts/crawl_fetch.py --json "<source_url>"` 抓取页面
+2. **降级用 curl**：`curl -sI "<source_url>"` 检查 HTTP 状态码
+3. HTTP 200/301/302 → 可达
+4. HTTP 404/5xx → 不可达
+5. 无 source_url → 标记为 `no_source_url`
+6. **WebFetch 降级策略**：如果 Crawl4AI 和 curl 均因网络限制失败（如 milvus.io 域名被阻止），尝试以下降级方案：
    - 用 WebSearch 搜索 `{source_url} site:{domain}` 确认页面存在
-   - 用 WebFetch 尝试访问（某些域名的 API 文档可能通过子域名可达，如 `milvus.io/api/`）
+   - 用 WebFetch 尝试访问（仅作为最后手段）
    - 如果以上均失败，标记为 `domain_blocked`，不视为 FAIL，降级为 PARTIAL
 
 评分：所有 source_url 可达 = PASS，任一不可达（非 domain_blocked）= FAIL，任一 domain_blocked = PARTIAL，无 source_url = FAIL
@@ -70,12 +86,13 @@ tools:
 
 #### 验证 3: 内容一致性
 
-1. 用 WebFetch 抓取 source_url 的文档内容
-2. 验证缺陷描述的"预期行为"与文档内容一致：
+1. **优先用 Crawl4AI** 抓取 source_url 的文档内容：`python scripts/crawl_fetch.py "<source_url>"`
+2. **降级用 WebFetch**（仅当 Crawl4AI 不可用时）
+3. 验证缺陷描述的"预期行为"与文档内容一致：
    - 缺陷声称"API 应返回 X"→ 文档是否确实声明应返回 X？
    - 缺陷声称"参数 Y 是 required"→ 文档是否确实标注 Y 为 required？
    - 缺陷声称"端点支持 Z 操作"→ 文档是否确实列出该操作？
-3. 特别注意 SDK/REST 混淆：
+4. 特别注意 SDK/REST 混淆：
    - 如果缺陷引用的功能只在 SDK 文档中出现，而非 REST API 文档 → 标记为 `sdk_rest_confusion`
    - 如果缺陷引用的参数只在 SDK 方法签名中出现 → 标记为 `sdk_rest_confusion`
 
@@ -93,7 +110,8 @@ tools:
 
 2. **联网验证**（查表失败时补充）：
    - 用 WebSearch 搜索 `{target} REST API {endpoint_path} documentation`
-   - 用 WebFetch 抓取搜索结果中的文档页面
+   - **优先用 Crawl4AI** 抓取搜索结果中的文档页面：`python scripts/crawl_fetch.py "<search_result_url>"`
+   - **降级用 WebFetch**（仅当 Crawl4AI 不可用）
    - 验证端点路径是否在文档中实际存在
    - 找到正确路径 → 记录正确路径
    - 未找到 → 端点可能不存在
@@ -185,7 +203,8 @@ tools:
 
 ## 错误处理
 
-- WebFetch 失败 → 重试最多 3 次（5s 递增退避）
+- Crawl4AI 不可用 → 自动启动 `docker compose -f docker/crawl4ai.yml up -d`，等待就绪后重试。如果 Docker 完全不可用，降级为 WebFetch
+- 所有抓取方式均失败 → 重试最多 3 次（5s 递增退避）
 - curl 超时 → 标记 source_url 为 unreachable
 - endpoint_registry 为空 → 所有端点验证降级为联网验证
 - 网络完全不可用 → 所有验证标记为 unverifiable，doc_verification_result 降级为 DOC_PARTIAL

@@ -149,6 +149,8 @@ cd TestVDB
 claude --plugin-dir .
 ```
 
+> **注意**：`--plugin-dir .` 仅在当前会话加载插件（适用于开发/测试）。如需永久安装，参见[在 Claude Code 上测试](#在-claude-code-上测试)。
+
 然后在 Claude Code 会话中使用 `/mine` 命令：
 
 ```
@@ -181,6 +183,7 @@ TestVDB/
     reporter.md
   commands/mine.md                 入口命令
   docker/                          Docker Compose 模板
+    crawl4ai.yml
     milvus.yml
     qdrant.yml
     weaviate.yml
@@ -191,11 +194,12 @@ TestVDB/
     contract-schema/SKILL.md
     defect-taxonomy/SKILL.md
     docker-templates/SKILL.md
-  contracts/                        预构建契约
-    milvus_contract.json
-    qdrant_contract.json
-    weaviate_contract.json
-    pgvector_contract.json
+  contracts/                        配置与种子数据
+    milvus_contract.json           预爬取 Milvus 文档
+    weaviate_contract.json         预爬取 Weaviate 文档
+    pgvector_contract.json         预爬取 pgvector 文档
+    db_strategies.json              Per-DB 集中化策略配置
+    settings_schema.json            配置验证 Schema
   issues/                          已发现缺陷报告
     00-summary.md
     001-*.md ... 007-*.md
@@ -203,6 +207,8 @@ TestVDB/
     qdrant_*.md
     weaviate_*.md
   scripts/                         辅助脚本
+    crawl_fetch.py                 Crawl4AI 网页抓取器（主方案）
+    hook_runner.py                跨平台 Python 解释器解析器
     verify_defects.py
     github_search.py
     prioritizer.py
@@ -232,11 +238,71 @@ TestVDB/
 
 | 依赖 | 最低版本 | 说明 |
 |------|---------|------|
+| **LLM 模型** | Claude Sonnet/Opus 或 DeepSeek | 使用 `claude --model sonnet` 运行 Claude。也支持 DeepSeek 模型。 |
 | Claude Code CLI | 最新 | `npm install -g @anthropic-ai/claude-code` |
 | Docker Engine | 20.10+ | 运行中，用于沙箱隔离 |
 | Python | 3.9+ | 低于 3.9 为致命错误，流水线将终止 |
 | 磁盘空间 | 10GB+ | Docker 镜像与结果存储 |
+| Docker Hub Token | -- | **必须**。设置 `DOCKER_HUB_TOKEN` 环境变量。未认证请求被严格限流。通过 `echo $TOKEN \| docker login --username $USER --password-stdin` 获取 |
+| 网络访问 | -- | WebFetch 必须能访问目标文档站点（milvus.io、qdrant.tech 等）。企业代理需白名单这些域名。 |
 | GitHub Token | -- | 可选，用于新颖性判定（无则降级为 WebSearch） |
+
+---
+
+## 在 Claude Code 上测试
+
+### 方式 1：会话内加载（推荐开发时使用）
+
+```bash
+cd TestVDB
+claude --plugin-dir .
+```
+
+仅在当前会话加载插件，修改文件后重启会话即可生效。
+
+### 方式 2：永久本地安装
+
+```bash
+# 将插件目录添加为本地 marketplace
+/plugin marketplace add /path/to/TestVDB
+
+# 安装插件
+/plugin install testvdb@TestVDB
+
+# 验证安装
+/help
+# 应看到 /testvdb:mine 命令
+```
+
+### 方式 3：从 GitHub 安装
+
+```bash
+/plugin marketplace add yihui504/TestVDB
+/plugin install testvdb@yihui504-TestVDB
+```
+
+### 调试
+
+```bash
+# 启用 debug 模式查看插件加载详情
+claude --plugin-dir . --debug
+
+# 查看已加载的 agents
+/agents
+
+# 查看可用命令
+/help
+```
+
+### 测试流水线
+
+1. 确保 Docker Engine 正在运行：`docker info`
+2. 启动会话：`claude --plugin-dir .`
+3. 用 Qdrant 快速测试（最简单，单容器）：
+   ```
+   /testvdb:mine qdrant v1.13.0 --max-rounds 1
+   ```
+4. 检查结果：`results/qdrant/v1.13.0/<timestamp>/`
 
 ---
 

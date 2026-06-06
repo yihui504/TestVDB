@@ -2,7 +2,7 @@
 name: orchestrator
 description: TestVDB 缺陷挖掘流水线主编排器。协调全部12个 Agent 完成从知识提取到缺陷报告的全流程。
 model: opus
-maxTurns: 80
+maxTurns: 120
 tools:
   - Read
   - Write
@@ -75,12 +75,16 @@ tools:
 ### Step 2: 前提条件检查
 执行检查脚本，验证：
 - Docker Engine 运行中
+- **Crawl4AI 网页抓取服务**：执行 `docker compose -f docker/crawl4ai.yml up -d --wait` 启动。等待 `/health` 端点返回 200。如果 Docker 不可用，警告但继续（Agent 将降级为 WebFetch）。Crawl4AI 是 WebFetch 封锁的解决方案 — 所有文档抓取优先走 Crawl4AI。
 - Python 3.9+ 可用（**Python < 3.9 为致命错误，终止会话**）
+- Python 依赖安装：`pip install httpx html2text`（crawl_fetch.py 的降级方案依赖）
 - 磁盘剩余空间 ≥ 10GB
+- **模型兼容性**：支持 Claude Sonnet/Opus 和 DeepSeek（通过 Anthropic API 兼容模式）。
 
 **确定项目根目录**：使用 Bash 执行 `git rev-parse --show-toplevel 2>/dev/null || pwd`，将结果存储为 `PROJECT_ROOT` 变量。后续所有路径操作使用 `${PROJECT_ROOT}/` 前缀确保绝对路径。
-- GitHub PAT（可选，无则降级 WebFetch）
-- 网络连接（可选依赖）
+- GitHub PAT（可选，MCP GitHub 工具需要）
+- 网络连接（Crawl4AI 服务需要出站网络访问文档站点）
+- `DOCKER_HUB_TOKEN` 环境变量（**必须**，Docker Hub 未认证请求被严格限流）
 
 ### Step 3: 缓存检查
 检查路径 `results/{target}/{version}/structured_contract.json`：
@@ -90,7 +94,7 @@ tools:
 **TTL 过期计算**：从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取 TTL（默认 168 小时 = 7 天）。读取 `structured_contract.json` 中的 `cached_at`（ISO 8601 时间戳），计算 `当前时间 - cached_at > cache_ttl_hours`。如果 `cached_at` 字段缺失，视为缓存无效。
 
 ### Step 4: 派 Knowledge Extractor
-使用 Task 工具派 knowledge-extractor agent：
+使用 Task 工具派 knowledge-extractor agent。**Agent 分发模式**：所有子 Agent 通过 `subagent_type="general-purpose"` 派发，Agent 定义（frontmatter 中的 tools/maxTurns/model）由插件系统自动加载。使用 general-purpose 而非直接指定 agent type 的好处是：可在 query 中注入运行时参数（session_dir, session_id 等）。
 
 ```
 Task(
@@ -118,7 +122,7 @@ Task(
 ### Step 6: 合同门控检查
 检查 structured_contract.json 的端点覆盖率：
 - **核心 CRUD 端点覆盖率 ≥ 90%** → 通过
-- 不通过 → 输出缺失端点列表 + 拒绝进入 Mine，终止会话
+- 不通过 → 输出缺失端点列表 + 清理 `results/{target}/{version}/` 下的 mine_state.json（如果已创建）+ 拒绝进入 Mine，终止会话
 
 核心 CRUD 分类规则：
 - 排除管理端点：/indexes/, /partitions/, /aliases/, load, release, flush, compact, /meta, /nodes, /cluster, /users, /roles
@@ -127,7 +131,9 @@ Task(
 **覆盖率计算方式**：`核心 CRUD 端点覆盖率 = api_endpoints 中属于核心 CRUD 的端点数 / 文档中已知的核心 CRUD 端点总数`。核心 CRUD 端点包括：collections 的 create/list/get/delete、points 的 insert/get/update/delete、search 的 search/recommend。
 
 ### Step 7: 初始化状态
-创建 `results/{target}/{version}/{timestamp}/` 目录结构，初始化 mine_state.json：
+创建 `results/{target}/{version}/` 目录（不含 timestamp 子目录），初始化 mine_state.json：
+
+**注意**：timestamp 子目录（`results/{target}/{version}/{timestamp}/`）在 Step 8 第一轮挖掘开始时才创建。这样如果 Step 6 门控失败，不会留下空的 timestamp 子目录。
 
 **Session ID 生成与传递**：
 1. 生成格式：`{target}-{version_short}-{counter}`（如 `milvus-2617-r1`、`qdrant-1130-r1`）
@@ -164,6 +170,8 @@ Task(
 ```
 
 ### Step 8: 挖掘循环（每轮）
+
+**每轮开始前**：如果是第一轮，创建 `results/{target}/{version}/{timestamp}/` 目录结构。
 
 #### 8a. 注入 reflection_context
 第一轮：无 reflection_context，Attack Agents 自由探索。
@@ -208,7 +216,8 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 3. 在 mine_state.json 的 error_log 中记录超时事件
 4. 如果 3 个 Attack Agent 全部超时，终止当前轮次并记录错误
 
-#### 8c. 辩论 Stage 1（自动化审查 + 去重）
+#### 8c. 辩论 Stage 1（自动化审查 + 去重 + 交叉审查）
+
 收集三个 Agent 产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
 
 **自动化审查步骤**：
@@ -217,12 +226,17 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 2. **自动去重**：按 `endpoint + constraint_id + strategy` 组合去重，只保留 confidence 最高的脚本。高 confidence（≥0.7）且无重复的脚本直接通过
 3. **语法验证**：对每个脚本执行 `python -m py_compile` 验证语法，语法错误直接丢弃
 4. **约束存在性验证**：检查脚本的 constraint_id 是否在 structured_contract.json 中存在，不存在的直接丢弃
-5. **抽样审查**：只对 confidence < 0.7 或跨 Agent 重复的脚本做详细审查（评估预期是否合理、攻击策略是否匹配）
-6. **记录审查结果**：将审查结果写入 `debate_logs/stage1.json`
-7. **脚本路径标准化**：将通过审查的脚本复制到 `${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/script_{script_id}.py`，确保 Executor 在 Step 8d 能找到它们。使用 Bash 执行：
+5. **跨 Agent 交叉审查**：对跨 Agent 重复的脚本（相同 endpoint+constraint 被多个 Attack Agent 独立生成），比较各 Agent 的实现：
+   - 各 Agent 使用不同测试值/策略 → 选择覆盖最广的版本
+   - 各 Agent 使用相同测试值 → 保留 confidence 最高的版本
+   - 交叉验证通过的脚本 confidence 提升 0.1
+6. **抽样审查**：只对 confidence < 0.7 或跨 Agent 重复的脚本做详细审查（评估预期是否合理、攻击策略是否匹配）
+7. **记录审查结果**：将审查结果写入 `debate_logs/stage1.json`
+8. **脚本路径标准化**：将通过审查的脚本复制到 `${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/script_{script_id}.py`，确保 Executor 在 Step 8d 能找到它们。使用 Bash 执行：
    ```bash
    mkdir -p ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}
    cp ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/debate_logs/{approved_script}.py ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/script_{script_id}.py
+   touch ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/debate_logs/stage1.json.done
    ```
 
 **审查判定规则**：
@@ -241,11 +255,11 @@ Task(subagent_type="general-purpose", description="执行 {target} v{version} �
 
 每个脚本一个独立沙箱执行，并发处理。
 
-**自动阻断**：Executor 完成后，使用 Bash 工具执行以下命令验证产出：
+**自动阻断**：Executor 完成后，使用 Bash 工具执行以下命令验证产出（使用 .done 标记确保文件写入完成）：
 ```bash
-ls results/{target}/{version}/{timestamp}/output_*.log 2>/dev/null | wc -l
+ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l
 ```
-如果输出为 0，说明 Executor 未正常执行，**禁止 Orchestrator 自己执行脚本**，必须在 error_log 中记录并终止当前轮次。**⛔ 绝对禁止 Orchestrator 自己运行 Python 脚本或 curl 命令来替代 Executor。如果 Executor 失败，当前轮次终止。**
+如果输出为 0，**禁止 Orchestrator 自己执行脚本**，必须在 error_log 中记录并终止当前轮次。**⛔ 绝对禁止 Orchestrator 自己运行 Python 脚本或 curl 命令来替代 Executor。如果 Executor 失败，当前轮次终止。**
 
 **容器生命周期管理**：Executor 在 Step 5 执行完脚本后，**不得清理容器**。容器必须保持运行直到 Reporter 完成 Pre-Submit Gate 复现验证（Step 8f）后，由 Orchestrator 在 Step 8j 统一清理。Executor 只负责启动和执行，不负责停止。轮次间如需重置 DB 状态，由 Orchestrator 在 Step 8j 执行 `docker restart`。
 
@@ -257,11 +271,11 @@ ls results/{target}/{version}/{timestamp}/output_*.log 2>/dev/null | wc -l
 Task(subagent_type="general-purpose", description="文档契约验证 {target}", query="按照 agents/judge-doc.md 规范，验证以下候选缺陷的文档引用有效性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
-**自动化输出验证**：等待 judge-doc 完成后，使用 Bash 工具执行以下命令验证产出：
+**自动化输出验证**：等待 judge-doc 完成后，使用 Bash 工具执行以下命令验证产出（检查 .done 标记确保写入完成）：
 ```bash
-ls results/{target}/{version}/{timestamp}/debate_logs/stage2_doc.json 2>/dev/null && echo "EXISTS" || echo "MISSING"
+test -f "results/{target}/{version}/{timestamp}/debate_logs/stage2_doc.json.done" && echo "READY" || echo "PENDING"
 ```
-如果输出为 MISSING，说明 judge-doc 未正常执行，必须在 error_log 中记录并终止当前轮次。
+如果输出为 PENDING（含超时 60s 仍 PENDING），说明 judge-doc 未正常执行，必须在 error_log 中记录并终止当前轮次。
 
 **阶段 2：确认 stage2_doc.json 存在后，并发派其他 3 个 Judge**
 ```
@@ -270,12 +284,12 @@ Task(subagent_type="general-purpose", description="新颖性审查 {target}", qu
 Task(subagent_type="general-purpose", description="严重性评估 {target}", query="按照 agents/judge-severity.md 规范，评估以下候选缺陷的严重程度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
-**自动阻断**：4 个 Judge 全部完成后，使用 Bash 工具执行以下命令验证产出：
+**自动阻断**：4 个 Judge 全部完成后，使用 Bash 工具执行以下命令验证产出（所有文件必须都有 .done 标记）：
 ```bash
-echo "doc: $(ls results/{target}/{version}/{timestamp}/debate_logs/stage2_doc.json 2>/dev/null | wc -l)"
-echo "evidence: $(ls results/{target}/{version}/{timestamp}/debate_logs/stage2_evidence.json 2>/dev/null | wc -l)"
-echo "novelty: $(ls results/{target}/{version}/{timestamp}/debate_logs/stage2_novelty.json 2>/dev/null | wc -l)"
-echo "severity: $(ls results/{target}/{version}/{timestamp}/debate_logs/stage2_severity.json 2>/dev/null | wc -l)"
+echo "doc: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_doc.json.done && echo 1 || echo 0)"
+echo "evidence: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_evidence.json.done && echo 1 || echo 0)"
+echo "novelty: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_novelty.json.done && echo 1 || echo 0)"
+echo "severity: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_severity.json.done && echo 1 || echo 0)"
 ```
 如果任一 Judge 计数为 0，**禁止 Orchestrator 自己做 Judge 判断**，必须在 error_log 中记录缺失的 Judge 名称。**⛔ 绝对禁止 Orchestrator 自己执行 WebSearch 或代码审查来替代 Judge。如果 Judge 失败，缺失的 Judge 投 not_defect（保守策略）。**
 
@@ -292,11 +306,18 @@ evidence 和 severity 按 is_defect/not_defect 投票，novelty 永远投 is_def
 3. **严重性门控**（judge-severity）：severity = trivial → not_defect
 4. **新颖性标记**（judge-novelty）：永远投 is_defect，仅标记 `new` / `new_similar` / `already_reported`，不影响缺陷确认
 
-**缺陷确认规则：**
-- evidence=is_defect AND severity=is_defect → **确认缺陷**
-- novelty_rating 附加到缺陷元数据，不影响确认状态，但影响 Reporter 中的提交优先级
-- doc_verification_result 附加到缺陷元数据，影响报告格式但不影响确认状态
-- evidence=not_defect OR severity=not_defect → **丢弃**（记录驳回原因）
+**缺陷确认规则（按优先级判定）：**
+1. evidence=not_defect → **丢弃**（证据不足，记录驳回原因，不检查 severity）
+2. severity=trivial → **丢弃**（影响过小不值得报告，记录驳回原因）
+   - **重要**：severity 降级逻辑（如 DOC_PARTIAL → 自动降级）可能在 judge-severity 内部将 Low 降为 trivial，此降级不代表缺陷不存在，仅影响是否值得单独报告。降级被丢弃的缺陷记录到 `downgraded_defects` 数组，供 reflection_context 参考
+3. evidence=is_defect AND severity∈{Critical,High,Medium,Low} → **确认缺陷**
+4. novelty_rating 附加到缺陷元数据，不影响确认状态，但：
+   - `new` / `new_similar` → 正常优先级
+   - `already_reported` / `known_wontfix` → 降级为 P3 优先级，但仍生成报告（标注关联 issue）
+5. doc_verification_result 附加到缺陷元数据：
+   - DOC_VERIFIED → 正常格式
+   - DOC_PARTIAL → 标注文档引用为 PARTIAL，严重性自动降一级（但仅影响 severity 输出，不影响 evidence 判定）
+   - DOC_MISMATCH → 标注文档引用不匹配，严重性自动降两级，但**不阻塞缺陷确认**（只要 evidence 确认即可）
 
 辩论日志写入 `debate_logs/stage2.json`（含 stage2_doc.json 的文档验证结果）。
 
@@ -336,14 +357,25 @@ ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -
   "confirmed_defects_count": 0,
   "scripts_generated": 0,
   "scripts_executed": 0,
-  "next_agent": "attack_trio"
+  "next_agent": "attack_trio",
+  "agent_markers": {}
 }
 ```
 每个子 agent 完成后，Orchestrator 更新 pipeline_state.json 中的对应字段。后续 agent 可读取此文件了解当前进度。
 
+### Agent 间通信可靠性机制（.done 标记文件）
+
+由于 Agent 通过 Task 工具异步派发，所有 Agent 间通信通过文件系统。为确保文件写入的原子性和可见性：
+
+1. **子 Agent 输出规范**：先写入输出文件，完成后创建同名 `.done` 标记文件
+2. **Orchestrator 检查规范**：**必须**检查 `.done` 标记文件存在性（而非仅检查输出文件——文件可能正在写入）
+3. **检查命令**：`test -f "{file}.done" && echo "READY" || echo "PENDING"`
+4. **超时处理**：输出文件存在但 `.done` 不存在超过 60 秒 → 子 Agent 卡住，触发超时
+5. **Orchestrator 写入规范**：先写 `.tmp` 临时文件，完成后 rename + touch `.done`
+
 **experience_handoff.json 写入逻辑：**
 - 记录本轮关键发现：confirmed_defects 的 endpoint 分布、驳回原因分类、新发现的高价值攻击策略
-- 记录当前辩论机制状态：stage1/stage2 的 approve/reject 比例、Judge Trio 一致率
+- 记录当前辩论机制状态：stage1/stage2 的 approve/reject 比例、Judge Quartet 一致率
 - 供下次 session 或上下文压缩恢复时快速理解当前进度
 
 **experience_handoff.json 模板**（Orchestrator 使用 Write 工具写入）：

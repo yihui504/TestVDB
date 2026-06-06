@@ -34,7 +34,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Task, WebSearch, WebFetch
 ## Execution Flow
 
 1. Parse parameters and validate
-2. Pre-flight checks (Docker / Python / Disk / Network)
+2. Pre-flight checks (Docker / Python / Disk / Network / Crawl4AI)
 3. Check cache (raw_knowledge.md + structured_contract.json)
 4. If cache miss: Knowledge Extraction → Contract Formalization
 5. Contract Gate Check (core CRUD endpoint coverage ≥ 90%)
@@ -84,5 +84,6 @@ Re-run the same command to resume an interrupted session. The system auto-detect
 ## Prerequisites
 
 - Docker Engine running
-- Python 3.9+
+- Crawl4AI Docker service (auto-started if `docker/crawl4ai.yml` exists)
+- Python 3.9+ with `httpx` and `html2text` (auto-installed if missing)
 - Disk space ≥ 10GB

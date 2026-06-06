@@ -2,7 +2,7 @@
 name: docker-executor
 description: Docker 沙箱执行 Agent — 在独立容器中运行攻击脚本并收集结果。
 model: haiku
-maxTurns: 8
+maxTurns: 12
 tools:
   - Bash
   - Read
@@ -74,16 +74,6 @@ for i in $(seq 1 30); do
     echo "Container healthy"
     break
   fi
-  # Fallback: check via docker inspect using known container names
-  STATUS=$(docker inspect --format='{{.State.Health.Status}}' testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || echo "not_found")
-  if [ "$STATUS" != "healthy" ]; then
-    # Try Milvus-specific name
-    STATUS=$(docker inspect --format='{{.State.Health.Status}}' testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || echo "not_found")
-  fi
-  if [ "$STATUS" = "healthy" ]; then
-    echo "Container healthy"
-    break
-  fi
   sleep 5
 done
 ```
@@ -139,15 +129,13 @@ export TESTVDB_DB_URL="http://localhost:{port}"
 export TESTVDB_AUTH_HEADER="{auth_header}"
 export PYTHONIOENCODING=utf-8
 
-# 方式 1（推荐）：使用独立执行容器
-# 注意：--network host 仅在 Linux 上可用；Windows/macOS 使用 Docker 网络
-# 跨平台方案：创建共享 Docker 网络并使用容器名访问
+# 创建共享网络，使执行容器能通过容器名访问 DB 容器（跨平台兼容）
 docker network create testvdb-net-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
 docker network connect testvdb-net-${TESTVDB_SESSION_ID:-standalone} testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
 
-# 使用 Docker 网络而非 --network host（跨平台兼容）
-# Linux 可用 --network host 替代下方命令以获得更好性能
 docker run --rm --network testvdb-net-${TESTVDB_SESSION_ID:-standalone} \
+  --memory=1g --cpus=2 --memory-swap=1g --ulimit nofile=1024:1024 --timeout=600 \
+  # ^ 资源限制：内存 1GB、CPU 2 核、无交换、文件描述符上限 1024、超时 600 秒，防止单脚本耗尽宿主机资源
   -e TESTVDB_DB_URL="http://testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}:{port}" \
   -e PYTHONIOENCODING=utf-8 \
   -v "${SESSION_DIR}/script_{script_id}.py:/tmp/script.py:ro" \
@@ -179,6 +167,14 @@ python3 -m py_compile "${SESSION_DIR}/script_{script_id}.py"
 if [ $? -ne 0 ]; then
   echo "SYNTAX_ERROR: Script has invalid Python syntax" > "${SESSION_DIR}/error_{script_id}.log"
   continue
+fi
+```
+
+**容器日志自动收集**：脚本执行失败时自动收集容器日志用于诊断：
+```bash
+# If script failed, collect container logs for diagnosis
+if [ -f "${SESSION_DIR}/exit_code_{script_id}.txt" ] && [ "$(cat ${SESSION_DIR}/exit_code_{script_id}.txt)" != "0" ]; then
+  docker logs testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} --tail 100 > "${SESSION_DIR}/container_log_{script_id}.log" 2>&1
 fi
 ```
 
@@ -226,7 +222,23 @@ fi
 }
 ```
 
-### Step 7: 容器保持运行
+### Step 7: 创建 .done 标记文件
+
+**所有输出文件写入完成后，必须创建同名 `.done` 标记文件**，用于 Orchestrator 的原子性检测：
+
+```bash
+# 对每个已执行的脚本，创建 .done 标记
+for f in "${SESSION_DIR}"/output_*.log; do
+  touch "${f}.done"
+done
+for f in "${SESSION_DIR}"/exit_code_*.txt; do
+  touch "${f}.done"
+done
+```
+
+**为什么要 .done？** Orchestrator 通过检查 `.done` 文件来确认文件写入完成。如果直接检查输出文件，可能在文件写入中途读到不完整数据。`.done` 标记是 Agent 间通信的原子性保证。
+
+### Step 8: 容器保持运行
 
 **不要清理容器**。容器必须保持运行，供后续 Judge（judge-evidence 复现验证）和 Reporter（Pre-Submit Gate 复现验证）使用。容器清理由 Orchestrator 在整轮完成后统一执行。
 
@@ -240,7 +252,7 @@ docker compose -f docker/{target}.yml down
 docker compose -f docker/{target}.yml up -d
 ```
 
-### Step 7.5: 执行结果自检（强制）
+### Step 9: 执行结果自检（强制）
 
 **在返回结果之前，必须执行以下验证：**
 
@@ -249,7 +261,7 @@ docker compose -f docker/{target}.yml up -d
 3. 如果任何输出文件缺失，重新执行对应脚本或手动补写结果
 4. 确认 `execution_results` 列表非空（至少包含一个执行结果）
 
-### Step 8: 返回结果
+### Step 10: 返回结果
 
 ```json
 {

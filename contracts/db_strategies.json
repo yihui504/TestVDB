@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "TestVDB Per-Database Strategy Configuration",
+  "description": "Centralized configuration for database-specific behaviors across all agents. When adding a new database, update this file and the corresponding docker-compose template.",
+  "databases": {
+    "milvus": {
+      "display_name": "Milvus",
+      "type": "rest_grpc",
+      "rest_api_base": "/v2/vectordb",
+      "default_port": 19530,
+      "health_port": 9091,
+      "grpc_port": 19530,
+      "docker": {
+        "repo": "milvusdb/milvus",
+        "compose_file": "docker/milvus.yml",
+        "main_container": "testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone}",
+        "extra_containers": [
+          "testvdb-milvus-etcd-${TESTVDB_SESSION_ID:-standalone}",
+          "testvdb-milvus-minio-${TESTVDB_SESSION_ID:-standalone}"
+        ],
+        "startup_timeout_seconds": 120
+      },
+      "sdk": {
+        "package": "pymilvus",
+        "import_name": "pymilvus"
+      },
+      "api_strategy": {
+        "preferred": "rest_v2",
+        "fallback": "sdk_grpc",
+        "note": "优先使用 REST API v2 (路径 /v2/vectordb/)，仅在 REST 不支持时使用 pymilvus SDK"
+      },
+      "attack_strategy": {
+        "concurrent_threads": 50,
+        "note": "Milvus 是高并发数据库，并发测试建议 50 线程"
+      },
+      "documentation": {
+        "base_url": "https://milvus.io/docs/",
+        "api_reference_url": "https://milvus.io/api-reference/rest/v2.6.x/"
+      },
+      "github": {
+        "repo": "milvus-io/milvus"
+      }
+    },
+    "qdrant": {
+      "display_name": "Qdrant",
+      "type": "rest",
+      "rest_api_base": "",
+      "default_port": 6333,
+      "grpc_port": 6334,
+      "docker": {
+        "repo": "qdrant/qdrant",
+        "compose_file": "docker/qdrant.yml",
+        "main_container": "testvdb-qdrant-${TESTVDB_SESSION_ID:-standalone}",
+        "extra_containers": [],
+        "startup_timeout_seconds": 60
+      },
+      "sdk": {
+        "package": "qdrant-client",
+        "import_name": "qdrant_client"
+      },
+      "api_strategy": {
+        "preferred": "rest",
+        "fallback": null,
+        "note": "Qdrant 纯 REST API，使用 requests 库即可"
+      },
+      "attack_strategy": {
+        "concurrent_threads": 20,
+        "note": "Qdrant 并发测试建议 20 线程"
+      },
+      "documentation": {
+        "base_url": "https://qdrant.tech/documentation/",
+        "api_reference_url": "https://qdrant.tech/documentation/api-reference/"
+      },
+      "github": {
+        "repo": "qdrant/qdrant"
+      }
+    },
+    "weaviate": {
+      "display_name": "Weaviate",
+      "type": "rest_graphql",
+      "rest_api_base": "/v1",
+      "default_port": 8080,
+      "grpc_port": 50051,
+      "docker": {
+        "repo": "semitechnologies/weaviate",
+        "compose_file": "docker/weaviate.yml",
+        "main_container": "testvdb-weaviate-${TESTVDB_SESSION_ID:-standalone}",
+        "extra_containers": [],
+        "startup_timeout_seconds": 90,
+        "env": {
+          "AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED": "true",
+          "DEFAULT_VECTORIZER_MODULE": "none"
+        }
+      },
+      "sdk": {
+        "package": "weaviate-client",
+        "import_name": "weaviate"
+      },
+      "api_strategy": {
+        "preferred": "rest_graphql",
+        "fallback": null,
+        "note": "Weaviate 同时支持 REST (/v1/) 和 GraphQL，优先使用 REST 进行 CRUD 测试"
+      },
+      "attack_strategy": {
+        "concurrent_threads": 20,
+        "note": "Weaviate 并发测试建议 20 线程"
+      },
+      "documentation": {
+        "base_url": "https://weaviate.io/developers/weaviate",
+        "api_reference_url": "https://weaviate.io/developers/weaviate/api/rest"
+      },
+      "github": {
+        "repo": "weaviate/weaviate"
+      }
+    },
+    "pgvector": {
+      "display_name": "pgvector",
+      "type": "sql",
+      "rest_api_base": null,
+      "default_port": 5432,
+      "docker": {
+        "repo": "pgvector/pgvector",
+        "compose_file": "docker/pgvector.yml",
+        "main_container": "testvdb-pgvector-${TESTVDB_SESSION_ID:-standalone}",
+        "extra_containers": [],
+        "startup_timeout_seconds": 60,
+        "env": {
+          "POSTGRES_PASSWORD": "testvdb",
+          "POSTGRES_DB": "testvdb"
+        }
+      },
+      "sdk": {
+        "package": "pgvector",
+        "import_name": "pgvector"
+      },
+      "extra_dependencies": ["psycopg2-binary"],
+      "api_strategy": {
+        "preferred": "sql",
+        "fallback": null,
+        "note": "pgvector 是 SQL 扩展，使用 psycopg2 连接 PostgreSQL，SQL 语句测试"
+      },
+      "attack_strategy": {
+        "concurrent_threads": 10,
+        "note": "PostgreSQL 事务隔离，并发测试建议 10 线程"
+      },
+      "documentation": {
+        "base_url": "https://github.com/pgvector/pgvector",
+        "api_reference_url": "https://github.com/pgvector/pgvector#installation"
+      },
+      "github": {
+        "repo": "pgvector/pgvector"
+      }
+    }
+  }
+}

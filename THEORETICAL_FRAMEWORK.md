@@ -37,4 +37,4 @@ TestVDB 致力于解决传统数据库测试在面对复杂向量数据库时缺
 3. **根因分析与建议**：结合源码和日志提供的改进建议。
 
 ---
-*本文档作为 Phase 3（LLM API 接入与缺陷分类器实现）的北极星指标，指导 `Bug Classifier` 与 `Agent Loop` 的具体代码逻辑。*
+*本文档作为 TestVDB 项目的理论北极星指标，指导 `orchestrator`、`judge-*` 与 `attack-*` 等 Agent 的核心判定逻辑。*
