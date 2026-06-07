@@ -38,6 +38,10 @@ version: 1.1.0
    - coverage_gap: 优先低覆盖率端点
    - rejection_pattern: 绕过已知驳回模式
 3. 每个 Agent 独立生成测试脚本（最多 30 个/Agent/profile/轮）
+3a. **v2.0 跨会话策略注入**：从 Strategy Registry 查询适用策略 → 注入 Attack Agent prompt
+    - 高 confidence (>0.7) 策略作为优先攻击模板
+    - 应用 migration_rules 中的 DB 特定适配规则
+    - `status=deprecated` 的策略不注入
 4. 注入 reflection_context + 跨会话策略（首轮无）
 5. **汇聚去重**：3 级去重（endpoint + constraint_id + strategy）
 6. 辩论 Stage 1：自动化审查（去重 + 语法验证 + 约束验证 + 跨 Agent 交叉审查）

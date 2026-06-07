@@ -226,6 +226,22 @@ Agent(
 上轮经验：{key_learnings 的要点}。已排除的端点：{exhausted_endpoints}。高价值端点：{high_value_endpoints}。驳回模式：{rejection_patterns 的摘要}
 ```
 
+### v2.0 跨会话策略注入（evolution.enabled=true）
+
+在 reflection_context 之后，追加从 Strategy Registry 读取的策略：
+```
+## 跨会话策略注入
+
+以下策略来自之前成功挖掘的经验（跨 DB 迁移）：
+
+{cross_session_strategies 的输出}
+
+使用这些策略作为初始 seed。对于标记了 applicable_dbs 包含当前 DB 的策略，
+应用 migration_rules 中的 DB 特定适配规则。
+```
+
+策略由 `scripts/strategy_injector.py {target} --text-only` 生成。
+
 #### 8b. 并发出动 Attack Trio
 **并发（非顺序）** 派三个 Attack Agent，**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
@@ -496,6 +512,20 @@ ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -
 - 驳回原因分类（by-design / 假阳性 / 不可复现 / 证据不足）
 - endpoint 覆盖率更新
 - 生成 reflection_context 供下轮使用
+
+### v2.0 策略提取（evolution.enabled=true）
+
+每轮结束后（或在 Step 9 统一执行），运行：
+```bash
+python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {target}
+```
+
+策略提取逻辑：
+1. 读取本轮 experience_handoff.json
+2. 提取 confirmed_defects 的策略模式 → 泛化 → 合并
+3. 新策略 → 写入 strategy_registry（global + per-DB）
+4. 已有策略 → 更新 performance 计数 + 调整 confidence
+5. 追加 evolution_log.jsonl 审计条目
 
 #### 8i. 检查终止条件
 以下任一满足即终止循环：

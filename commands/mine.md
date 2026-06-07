@@ -87,6 +87,17 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
 
 如果 `material_passport.enabled=false`，跳过 hash 验证，仅按 TTL 判断。
 
+### Step 3.5: 跨会话策略注入准备（v2.0 新增，evolution.enabled=true 时）
+
+读取 Strategy Registry 中适用于当前 target 的策略：
+```bash
+python scripts/strategy_injector.py {target} --text-only
+```
+
+将输出文本保存为临时变量 `cross_session_strategies`，供 Step 8a 注入 Attack Agent 使用。
+
+如果 `evolution.enabled=false`，跳过此步骤。
+
 ### Step 4: 派 Knowledge Extractor（⛔ 禁止自己爬取文档）
 ```
 Agent(
@@ -130,6 +141,11 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
 
 #### 8a. 注入 reflection_context
 第一轮：无。后续轮次：从上轮 `experience_handoff.json` 读取。
+
+**v2.0 新增 — 跨会话策略注入（evolution.enabled=true 时）：**
+
+将 Step 3.5 读取的 `cross_session_strategies` 追加到 Attack Agent 的 prompt 末尾。
+如果策略文本为「（无跨会话策略可用）」，跳过注入。
 
 #### 8b. Fan-Out Attack Trio（⛔ 禁止自己写脚本）
 
@@ -257,6 +273,18 @@ Agent(
 
 ### Step 9: 生成汇总 + 清理
 - 生成 `summary.md`
+
+**v2.0 新增 — 策略提取（evolution.enabled=true 时）：**
+
+本轮挖掘结束后，提取经验至 Strategy Registry：
+```bash
+python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {target}
+```
+
+检查输出中的 `extracted` 和 `merged` 计数，在 stdout 日志中输出：
+```
+[Step 9] Strategy extraction: N new strategies extracted, M existing strategies updated
+```
 - 清理 Docker 容器和网络
 - 更新 `.session.lock` status 为 `completed`
 
