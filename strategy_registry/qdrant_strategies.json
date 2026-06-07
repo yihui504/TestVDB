@@ -1,9 +1,0 @@
-{
-  "_meta": {
-    "db": "qdrant",
-    "description": "Qdrant 特有策略注册表",
-    "created_at": "2026-06-07T00:00:00Z",
-    "version": "1.0"
-  },
-  "strategies": []
-}

@@ -48,3 +48,14 @@ qdrant_report_*.md
 *_candidate_defect.md
 mine_*_log.txt
 contracts/qdrant_contract.json
+contracts/qdrant_contract.json.bak
+contracts/qdrant_contract_fixed.json
+
+# Development-only directories (IDE state, generated outputs, runtime state)
+.trae/
+issues/
+strategy_registry/
+scripts/state/
+scripts/verify/
+__pycache__/
+.ruff_cache/

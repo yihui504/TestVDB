@@ -1,9 +1,0 @@
-{
-  "_meta": {
-    "db": "global",
-    "description": "跨 DB 通用攻击策略注册表",
-    "created_at": "2026-06-07T00:00:00Z",
-    "version": "1.0"
-  },
-  "strategies": []
-}
