@@ -40,6 +40,46 @@ tools:
   "type": "object",
   "required": ["target", "version", "api_endpoints", "constraints", "assertions", "data_types"],
   "properties": {
+    "_passport": {
+      "type": "object",
+      "required": ["schema_version", "contract_hash", "contract_hash_algorithm", "source", "generation", "integrity"],
+      "properties": {
+        "schema_version": { "type": "string", "description": "Passport schema version (2.0)" },
+        "contract_hash": { "type": "string", "description": "SHA256 hash of contract content (excluding _passport)" },
+        "contract_hash_algorithm": { "type": "string", "description": "Hash algorithm used (sha256)" },
+        "source": {
+          "type": "object",
+          "required": ["doc_urls", "doc_version", "crawl_method", "crawled_at"],
+          "properties": {
+            "doc_urls": { "type": "array", "items": { "type": "string" } },
+            "doc_version": { "type": "string" },
+            "crawl_method": { "type": "string" },
+            "crawled_at": { "type": "string", "format": "date-time" }
+          }
+        },
+        "generation": {
+          "type": "object",
+          "required": ["knowledge_extractor_agent", "contract_formalizer_agent", "generated_at", "cache_ttl_hours"],
+          "properties": {
+            "knowledge_extractor_agent": { "type": "string" },
+            "contract_formalizer_agent": { "type": "string" },
+            "generated_at": { "type": "string", "format": "date-time" },
+            "cache_ttl_hours": { "type": "integer" }
+          }
+        },
+        "integrity": {
+          "type": "object",
+          "required": ["verified", "verified_at", "core_crud_coverage_pct", "endpoint_count", "constraint_count"],
+          "properties": {
+            "verified": { "type": "boolean" },
+            "verified_at": { "type": "string", "format": "date-time" },
+            "core_crud_coverage_pct": { "type": "number" },
+            "endpoint_count": { "type": "integer" },
+            "constraint_count": { "type": "integer" }
+          }
+        }
+      }
+    },
     "target": { "type": "string", "enum": ["milvus", "qdrant", "weaviate", "pgvector"] },
     "version": { "type": "string" },
     "cache_ttl_hours": { "type": "integer", "default": 168, "description": "契约缓存有效期（小时），过期后 Orchestrator 会重新生成" },
@@ -356,6 +396,24 @@ tools:
 10. **降级搜索**：对于 `source_status: "unreachable"` 的约束，使用 WebSearch 搜索替代文档源（如 GitHub README、社区文档、Stack Overflow），找到后更新 source_url 并标记 `source_status: "degraded"`
 11. **endpoint_registry 已生成且每个条目都有 source_url 和 doc_version**
 12. **category 别名已全部映射为标准分类名**（无 vector、partition、alias 等非标准分类名）
+13. **_passport 生成**（v2.0 新增）：
+   - 在 structured_contract.json 顶层生成 `_passport` 字段
+   - `schema_version`: "2.0"
+   - `source.doc_urls`: 从 raw_knowledge.md 提取的所有文档 URL
+   - `source.doc_version`: 文档版本号
+   - `source.crawl_method`: "crawl4ai" | "webfetch" | "manual"
+   - `source.crawled_at`: 当前时间（ISO 8601）
+   - `generation.knowledge_extractor_agent`: "testvdb:knowledge-extractor"
+   - `generation.contract_formalizer_agent`: "testvdb:contract-formalizer"
+   - `generation.generated_at`: 当前时间（ISO 8601）
+   - `generation.cache_ttl_hours`: 从 settings.json 读取的 knowledge.cache_ttl_hours
+   - `integrity.verified`: true
+   - `integrity.verified_at`: 当前时间（ISO 8601）
+   - `integrity.core_crud_coverage_pct`: 核心 CRUD 覆盖率百分比
+   - `integrity.endpoint_count`: api_endpoints 数组长度
+   - `integrity.constraint_count`: 所有约束数组的总长度
+   - **hash 计算**：使用 Bash 执行 `python scripts/passport_verify.py --compute-hash results/{target}/{version}/structured_contract.json`
+     将输出的 hash 值填入 `_passport.contract_hash`
 
 ---
 

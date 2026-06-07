@@ -76,6 +76,17 @@ docker compose -f docker/crawl4ai.yml up -d --wait 2>/dev/null || true
 ### Step 3: 缓存检查
 检查 `results/{target}/{version}/structured_contract.json` 是否存在且未过期（TTL 见 settings.json 的 `knowledge.cache_ttl_hours`，默认 168h）。如果缓存有效 → 跳到 Step 6。
 
+**v2.0 新增 — Passport Hash 验证（material_passport.enabled=true 时）：**
+```bash
+python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
+```
+- 退出码 0（PASS）→ 缓存有效，跳到 Step 6
+- 退出码 1（NO_PASSPORT）→ 旧格式契约，输出警告但继续使用缓存
+- 退出码 2（TAMPERED）→ 契约被篡改，强制重新生成（继续 Step 4）
+- 退出码 3（INVALID_JSON/FILE_NOT_FOUND）→ 视为缓存无效
+
+如果 `material_passport.enabled=false`，跳过 hash 验证，仅按 TTL 判断。
+
 ### Step 4: 派 Knowledge Extractor（⛔ 禁止自己爬取文档）
 ```
 Agent(
@@ -98,6 +109,15 @@ Agent(
 
 ### Step 6: 合同门控检查
 检查 `structured_contract.json` 的核心 CRUD 端点覆盖率 ≥ 90%。不通过 → 输出缺失端点 + 终止。
+
+**v2.0 新增 — Passport Hash 验证（material_passport.enabled=true 时）：**
+对新生成的 structured_contract.json 执行 hash 验证：
+```bash
+python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
+```
+- 退出码 0（PASS）→ 契约完整性确认
+- 退出码 2（TAMPERED）→ 异常：契约刚生成 hash 就不匹配，可能是 Agent 写入不完整。
+  重试 `contract-formalizer` 一次。如果重试后仍不匹配，标记为 `PASSPORT_TAMPERED` 并终止。
 
 ### Step 7: 初始化状态
 - 生成 `session_id`: `{target}-{version_short}-{counter}`（sanitize: `[a-z0-9-]`，≤63字符）
