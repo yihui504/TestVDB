@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Version](https://img.shields.io/badge/version-2.0.0-orange.svg)](https://github.com/yihui504/TestVDB/releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-orange.svg)](https://github.com/yihui504/TestVDB/releases)
 
 **基于 LLM 的向量数据库自动化缺陷挖掘工具**
 
@@ -12,13 +12,13 @@ TestVDB 以 Claude Code 插件形式运行，通过自然语言契约逆向工�
 
 ---
 
-## v2.0 新特性
+## v2.1 新特性
 
-- **Fan-Out 攻击矩阵**：每种攻击类型 3 个 focus profile × 3 种类型 = 9 Agent 并发派发，3 级去重
-- **跨会话策略进化**：从挖掘结果提取策略→持久化到注册表→跨 DB 自动注入，实现经验跨目标迁移
-- **7 模式 AI 故障检查**：LLM 幻觉检测——7 种验证模式 + halt/reject/rewind 分级响应
-- **Material Passport**：结构化契约自动附带 SHA-256 哈希，防篡改验证
-- **数据访问分级**：每个 Agent 声明 `dataAccess` 级别（`raw` / `redacted` / `verified_only`）
+- **Phase 0：战略情报采集层**：在攻击流水线之前插入历史缺陷分析阶段，爬取目标仓库 GitHub Issues 和已合并 PR，构建威胁模型与认知盲点画像
+- **Issue 三分类**：将历史 Issues 分为正样本（开发者承认的 bug）、负样本（by-design / wontfix）、无效样本（无回应），从正样本提取根因模式
+- **开发者认知盲点模型**：5 类盲点体系（BS-01 ~ BS-05），将系统性开发者疏忽映射到攻击策略
+- **跨 DB Bug Shape 迁移**：标记 Bug Shape 的 `cross_db_applicable` 属性，实现 Milvus→Qdrant→Weaviate→PGVector 的策略复用
+- **3 个新 Agent**：`issue-miner`（raw）、`bug-shape-extractor`（redacted）、`threat-modeler`（redacted）——Agent 总数：16
 
 [完整更新日志 →](#v20-新特性详解)
 
@@ -264,20 +264,23 @@ claude --plugin-dir .
 
 ## 架构设计
 
-### Agent 体系（13 个 Agent）
+### Agent 体系（16 个 Agent）
 
 | Agent | dataAccess | 职责 |
 |-------|-----------|------|
 | **orchestrator** | redacted | 主编排器，协调全部子 Agent 完成流水线 |
+| **issue-miner** | raw | 爬取目标仓库历史 Issues 和已合并 PR，构建原始缺陷语料库 |
+| **bug-shape-extractor** | redacted | 对历史 Issues 三分类（positive/negative/invalid），提取根因模式和开发者认知边界 |
+| **threat-modeler** | redacted | 基于历史缺陷数据构建威胁模型和认知盲点模型，指导攻击优先级 |
 | **knowledge-extractor** | raw | 从官方文档提取 API 知识 |
-| **contract-formalizer** | raw | 将原始知识形式化为结构化契约（含 `_passport`） |
+| **contract-formalizer** | redacted | 将原始知识形式化为结构化契约（含 `_passport`） |
 | **attack-boundary** | redacted | 边界值攻击，测试参数边界约束 |
 | **attack-state** | redacted | 状态攻击，测试状态一致性和逻辑违规 |
 | **attack-semantic** | redacted | 语义攻击，测试语义层面的合规性 |
 | **docker-executor** | redacted | 双轨策略执行脚本（主机 Python / Docker stdin pipe） |
-| **judge-doc** | verified_only | 文档审查，验证缺陷的文档引用有效性与内容一致性 |
+| **judge-doc** | raw | 文档审查，验证缺陷的文档引用可达性与内容一致性（含网络验证） |
 | **judge-evidence** | verified_only | 证据审查，判定缺陷证据可信度 |
-| **judge-novelty** | verified_only | 新颖性审查，判定缺陷是否为已知问题 |
+| **judge-novelty** | raw | 新颖性审查，通过 GitHub 搜索判定缺陷是否为已知问题 |
 | **judge-severity** | verified_only | 严重性评估，判定缺陷影响等级 |
 | **reporter** | verified_only | 生成缺陷报告和汇总文档 |
 | **model-test** | redacted | CCSwitch 模型路由验证 |
@@ -296,6 +299,12 @@ claude --plugin-dir .
 ```
 Orchestrator
   |
+  +--> [Phase 0: Strategic Intelligence — v2.1 新增]
+  |     Issue Miner → Bug Shape Extractor → Threat Modeler
+  |         |
+  |         v
+  |   threat_model.json (attack priorities + cognitive blindspots + judge enhancements)
+  |
   +--> Knowledge Extractor --> raw_knowledge.md
   |                                    |
   +--> Contract Formalizer <-----------+
@@ -303,7 +312,7 @@ Orchestrator
   |         v
   |   structured_contract.json (_passport hash verified)
   |         |
-  +--> Attack Trio (9 并发) <-- contract + reflection_context + cross_session_strategies
+  +--> Attack Trio (9 并发) <-- contract + reflection_context + threat_model + cross_session_strategies
   |   boundary×3 | state×3 | semantic×3
   |         |
   |         v
@@ -331,8 +340,11 @@ Orchestrator
 TestVDB/
   .claude-plugin/plugin.json      插件清单（名称、版本、命令、Agent）
   .mcp.json                       MCP 服务器配置（GitHub API）
-  agents/                         13 个 Agent 定义文件
+  agents/                         16 个 Agent 定义文件
     orchestrator.md
+    issue-miner.md
+    bug-shape-extractor.md
+    threat-modeler.md
     knowledge-extractor.md
     contract-formalizer.md
     attack-boundary.md
@@ -358,6 +370,7 @@ TestVDB/
     contract-schema/SKILL.md
     defect-taxonomy/SKILL.md
     docker-templates/SKILL.md
+  intelligence/                   v2.1 战略情报缓存（per-DB，TTL 30 天）
   contracts/                      参考契约与配置 schema
     AGENTS.md
     settings_schema.json          配置验证 Schema
@@ -412,6 +425,7 @@ TestVDB/
 | `fan_out` | `enabled`、`seeds_per_agent`、`profiles` | Fan-Out 攻击矩阵（9 并发 Agent） |
 | `ai_failure_check` | `enabled`、`halt_on`、`reject_on`、`rewind_on` | 7 模式 AI 故障检测 |
 | `material_passport` | `enabled`、`hash_algorithm`、`reject_on_tamper` | 契约哈希完整性验证 |
+| `intelligence` | `enabled`、`cache_ttl_hours`、`time_window_months`、`max_issues`、`max_commits`、`inject_to_attack_agents`、`inject_to_judge_agents` | v2.1 Phase 0 战略情报采集层配置 |
 
 ### .mcp.json
 

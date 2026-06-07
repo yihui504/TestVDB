@@ -47,11 +47,26 @@ Turn 2: Bash  touch ${SESSION_DIR}/debate_logs/stage2_evidence.json.done
 
 对 stage2_doc.json 中的每个 defect_id，在 Bash 输出中查找对应的日志：
 
-**判定规则（极简）：**
-- 日志包含 "FAILED: Type1" 或 "VIOLATION" → is_defect, grade=A, score=9
-- 日志包含 "Diagnosis quality: 2/3" 或更低 → is_defect, grade=B, score=6
-- 日志包含 "PASSED" 且无 FAILED → not_defect, grade=D, score=0
-- 日志内容为连接失败/超时 → not_defect, grade=D, score=0
+**判定规则（完整版）：**
+
+| 日志模式 | 判定 | grade | score | 备注 |
+|---------|------|-------|-------|------|
+| 包含 "FAILED: Type1" 或 "VIOLATION" | is_defect | A | 9 | 明确的非法操作成功 |
+| 包含 "FAILED: Type3" 或 "RuntimeFailure" | is_defect | A | 9 | 运行时崩溃 |
+| 包含 "FAILED: Type4" 或 "StateViolation" | is_defect | B | 7 | 状态逻辑违规（需更多证据） |
+| 包含 "Type2_PoorDiagnostics" | is_defect | B | 6 | 诊断不足（主观性较强） |
+| 多脚本触发相同模式（3+ 脚本复现） | is_defect | A | 10 | 独立复现，可靠性最高 |
+| PASSED 且无 FAILED | not_defect | D | 0 | 未触发缺陷 |
+| 部分 FAILED + 部分 PASSED（同一 endpoint） | is_defect | C | 5 | 间歇性问题，降低置信度 |
+| 连接失败/超时/网络错误 | not_defect | D | 0 | 环境问题，非缺陷 |
+| 日志为空或无对应日志文件 | not_defect | D | 0 | 无可评估证据 |
+| 文档标记为 DOC_MISMATCH 且仅 1 个脚本触发 | is_defect | C | 4 | 文档引用有误，降低置信度 |
+| 文档标记为 DOC_PARTIAL | — | — | 降 1 级 | 证据不受影响但标注 |
+
+**特殊处理**：
+- 同一脚本触发多个 FAILED 模式 → 取最高的判定
+- 同一 endpoint 多脚本间结果矛盾 → 标注为 `flaky`，grade 降为 C
+- 如果 stage2_doc.json 中 defect_id 不存在 → 不在 votes 中输出该条目
 
 ---
 

@@ -1,5 +1,5 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-05-24 | Updated: 2026-06-06 -->
+<!-- Generated: 2026-05-24 | Updated: 2026-06-07 -->
 
 # TestVDB
 
@@ -15,6 +15,13 @@ git clone https://github.com/yihui504/TestVDB.git
 claude --plugin-dir TestVDB
 ```
 
+## What's New in v2.1
+
+- **Phase 0: 战略情报采集层**: 在攻击流水线之前插入历史缺陷分析阶段，从目标仓库的 Issues 和合并 PR 中提取根因模式和开发者认知盲点
+- **Bug-Shape Extractor**: 三分类 Issue（positive/negative/invalid），提取根因模式，分析开发者认知边界
+- **Threat Model + Cognitive Blindspot Model**: 基于历史数据构建威胁模型，定义"什么算漏洞、什么不算、为什么"，指导攻击方向和 Judge 判定
+- **跨 DB 缺陷模式迁移**: 将历史 Bug Shape 标记为 `cross_db_applicable`，实现 Milvus→Qdrant→Weaviate→PGVector 的策略复用
+
 ## What's New in v2.0
 
 - **跨会话自进化**: 从 Milvus 挖掘中学到的策略自动迁移到 Qdrant/Weaviate/PGVector
@@ -24,36 +31,41 @@ claude --plugin-dir TestVDB
 - **data_access_level**: Agent 数据权限声明式标记
 
 ## Purpose
-基于 LLM 的向量数据库自动化缺陷挖掘工具（Claude Code 插件）。通过自然语言契约逆向工程从官方文档提取结构化约束，结合 12 个 Agent 的 4-Judge 辩论机制，在 Docker 沙箱中自动发现向量数据库的合规性缺陷。支持 Milvus、Qdrant、Weaviate、PGVector 四种向量数据库。
+基于 LLM 的向量数据库自动化缺陷挖掘工具（Claude Code 插件）。通过自然语言契约逆向工程从官方文档提取结构化约束，结合 16 个 Agent 的 4-Judge 辩论机制 + Phase 0 战略情报采集层，在 Docker 沙箱中自动发现向量数据库的合规性缺陷。支持 Milvus、Qdrant、Weaviate、PGVector 四种向量数据库。
 
 ## Key Files
 | File | Description |
 |------|-------------|
-| `.claude-plugin/plugin.json` | 插件注册配置 |
-| `settings.json` | 运行配置（端口、重试策略、流水线参数等） |
+| `.claude-plugin/plugin.json` | 插件注册配置（16 agents + 4 skills + 1 command） |
+| `settings.json` | 运行配置（端口、重试策略、流水线参数、intelligence 等） |
 | `contracts/settings_schema.json` | 配置 JSON Schema 校验 |
 | `contracts/db_strategies.json` | 各 DB 的策略配置（API 策略、攻击策略、文档源等） |
-| `THEORETICAL_FRAMEWORK.md` | 理论框架文档（自然语言契约逆向工程 + 四型缺陷分类法） |
+| `THEORETICAL_FRAMEWORK.md` | 理论框架文档（自然语言契约逆向工程 + 四型缺陷分类法 + 认知盲点理论） |
 | `.mcp.json` | MCP Server 配置（GitHub Issues 搜索） |
 
 ## Subdirectories
 | Directory | Purpose |
 |-----------|---------|
-| `agents/` | 12 个 Agent 定义文件（orchestrator + knowledge-extractor + contract-formalizer + attack trio + docker-executor + judge quartet + reporter） |
+| `agents/` | 16 个 Agent 定义文件（Phase 0: issue-miner + bug-shape-extractor + threat-modeler / Phase 1: orchestrator + knowledge-extractor + contract-formalizer / Phase 2: attack-boundary + attack-state + attack-semantic / Phase 3: docker-executor / Phase 4: judge-doc + judge-evidence + judge-novelty + judge-severity / Phase 5: reporter / Aux: model-test） |
 | `skills/` | 4 个 Skill 文件（pipeline + contract-schema + defect-taxonomy + docker-templates） |
 | `contracts/` | 结构化契约 JSON 文件 |
 | `docker/` | Docker Compose 模板（milvus/qdrant/weaviate/pgvector/crawl4ai） |
 | `scripts/` | 辅助 Python 脚本（crawl_fetch, preflight, hook_runner 等） |
 | `commands/` | 用户命令定义（`/testvdb:mine`） |
 | `results/` | 测试运行结果（按 target/version/timestamp 组织） |
+| `intelligence/` | **v2.1 新增** — Phase 0 战略情报数据（per-DB 缓存，Git 不跟踪；包含历史 bug shapes、威胁模型、认知盲点，TTL 30 天） |
+| `issues/` | 已生成的缺陷报告存档（Markdown 格式，按 DB 组织） |
+| `strategy_registry/` | 跨会话策略注册表（global + per-DB 策略，含 evolution 日志） |
 
 ## For AI Agents
 
 ### Working In This Directory
 - 启动挖掘流水线：`/testvdb:mine <db> <version> [--max-rounds N] [--min-defects N]`
-- 修改 Agent 行为前务必阅读 `THEORETICAL_FRAMEWORK.md` 理解四型缺陷分类法
+- **v2.1 战略情报缓存在 `intelligence/{target}/` 下，TTL 30 天（`intelligence.cache_ttl_hours`）**
+- Phase 0 采集由 `intelligence.enabled` 控制，可独立开关不影响核心流水线
+- 修改 Agent 行为前务必阅读 `THEORETICAL_FRAMEWORK.md` 理解四型缺陷分类法和认知盲点理论
 - Docker 沙箱是测试执行的核心基础设施，所有探针在隔离容器中运行
-- 12 个 Agent 通过文件系统（structured_contract.json, pipeline_state.json, debate_logs/*.json）通信
+- 16 个 Agent 通过文件系统（structured_contract.json, threat_model.json, pipeline_state.json, debate_logs/*.json）通信
 
 ### ⛔ 架构约束：子 Agent 无法可靠嵌套派发孙 Agent
 
@@ -102,8 +114,26 @@ claude --plugin-dir TestVDB
 ### Common Patterns
 - Orchestrator 使用 Agent 工具派发子 Agent（subagent_type="testvdb:xxx"）
 - Agent 间通信通过 .done 标记文件确保写入原子性
+- **v2.1 Phase 0 数据流**：issue-miner → bug-shape-extractor → threat-modeler → 产出注入 Attack/Judge Agent
 - 缺陷分类：Type-1（非法操作成功）、Type-2（诊断不足）、Type-3（运行时失败）、Type-4（状态/逻辑违规）
 - 4-Judge 辩论：judge-doc（文档验证）+ judge-evidence（证据审查）+ judge-novelty（新颖性）+ judge-severity（严重性）
+- 认知盲点映射：BS-01(参数信任) → boundary attack, BS-02(错误消息) → semantic attack, BS-03(并发盲区) → state attack
+
+### Error Log Conventions (v2.1)
+
+为保持多 Agent 系统的一致性，所有 Agent 按以下约定记录错误：
+
+| 位置 | 写入者 | 内容 |
+|------|--------|------|
+| `mine_state.json` → `error_log[]` | 主进程 (Orchestrator) | 流水线级别的错误（Agent 超时、产出缺失、门控失败） |
+| `results/{target}/{version}/{timestamp}/error_log.json` | Reporter | 报告生成阶段的错误（复现失败、格式错误） |
+| `session_metadata.json` → `errors[]` | 主进程 | 会话级别的汇总错误 |
+| Agent 内部处理 | 各 Agent | 重试逻辑（静默重试 ≤3 次，超过后输出错误标记文件） |
+
+**约定**：
+- Agent 内部错误（网络重试、格式重试）不写全局 error_log，由 Agent 自行消化
+- 只有跨 Agent 边界的问题（产出缺失、格式不可解析）才写全局 error_log
+- 错误消息格式：`{agent_name}: {brief_description} (severity: {critical|high|medium|low})`
 
 ## Dependencies
 

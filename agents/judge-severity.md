@@ -39,19 +39,50 @@ Turn 2: touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done
 
 ---
 
-## 严重性判定（纯基于 defect_id 中的端点信息）
+## 严重性判定
 
-从 stage2_doc.json 中读取每个 defect 的 endpoint 字段，按以下规则直接映射：
+从 stage2_doc.json 中读取每个 defect 的信息，按以下规则判定：
 
-| 端点关键词 | 严重性 | 优先级 | 理由 |
-|-----------|--------|--------|------|
-| users / roles / password | **Medium** | P2 | 管理端点，影响面较窄 |
-| entities+search / search | **High** | P1 | 核心搜索API，影响所有用户 |
-| entities+insert / insert | **High** | P1 | 数据写入API，影响数据完整性 |
-| collections+create | **High** | P1 | 核心CRUD，影响所有集合创建 |
-| 其他 | **High** | P1 | 默认：API接受非法输入是高优先级 |
+**规则 1: 基于 defect_type 的基线映射**
 
-**不需要读任何日志文件。端点名称足以判定严重性。**
+| defect_type | 基线严重性 | 理由 |
+|------------|-----------|------|
+| Type1_IllegalSuccess | **High** | 非法操作被接受是最危险的合规性缺陷 |
+| Type2_PoorDiagnostics | **Medium** | 诊断不足影响调试体验但非功能性缺陷 |
+| Type3_RuntimeFailure | **Critical** | 运行时崩溃直接影响可用性 |
+| Type4_StateViolation | **High** | 状态不一致导致数据完整性风险 |
+
+**规则 2: 端点敏感度调节**
+
+在基线严重性上叠加端点权重：
+
+| 端点类别 | 调节 | 示例关键词 |
+|---------|------|-----------|
+| 核心数据面（search, insert, upsert, query, get） | +1 级 | entities+search, points/search, graphql |
+| 管理面（create/delete collection, index） | 不变 | collections+create, indexes/create |
+| 运维面（users, roles, cluster, health） | -1 级 | users/update_password, roles/create |
+| 元数据面（describe, list, stats） | -1 级 | collections/describe, collections/list |
+
+**规则 3: 批量影响放大**
+
+如果缺陷影响批量操作（batch insert, bulk search 等）→ +1 级。
+如果仅影响单条操作 → 不变。
+
+**规则 4: 证据质量折扣**
+
+如果 stage2_doc.json 中 doc_verification_result = DOC_PARTIAL → -1 级。
+如果 doc_verification_result = DOC_MISMATCH → -2 级（上限 Low）。
+
+**规则 5: 边界情况**
+
+- 端点类型无法识别 → 默认 Medium，confidence=0.5
+- 只有 1 个脚本触发 → -1 级（复现证据不足）
+- 3+ 脚本独立触发同一 endpoint → +1 级（高置信度）
+
+**示例**：
+- Type1_IllegalSuccess + search endpoint (+1) + 3 scripts (+1) = Critical
+- Type2_PoorDiagnostics + users endpoint (-1) = Low
+- Type4_StateViolation + insert endpoint (+1) + DOC_PARTIAL (-1) = High
 
 ---
 

@@ -39,7 +39,8 @@
   },
   "knowledge": {
     "cache_enabled": true,
-    "cache_ttl_hours": 168
+    "cache_ttl_hours": 168,
+    "_cache_ttl_note": "v2.1: knowledge cache (168h) 与 intelligence cache (720h) 独立管理。Phase 0 情报数据（issue corpus, bug shapes, threat model）版本无关，跨版本共享，TTL 更长。Phase 1 知识数据（raw_knowledge, contract）绑定特定版本，每次版本升级需要重新采集。"
   },
   "github": {
     "token": ""
@@ -77,6 +78,19 @@
     "enabled": true,
     "hash_algorithm": "sha256",
     "reject_on_tamper": true
+  },
+  "intelligence": {
+    "enabled": true,
+    "cache_ttl_hours": 720,
+    "_cache_ttl_hours_comment": "历史缺陷情报缓存 TTL（30 天 = 720 小时）。issue-miner + bug-shape-extractor + threat-modeler 的产出缓存。设置为 0 禁用缓存。注意：此为 DB 级别缓存（intelligence/{target}/），与版本无关的 knowledge cache（168h，results/{target}/{version}/）互补使用。",
+    "time_window_months": 24,
+    "_time_window_months_comment": "回溯时间窗口（月）。从当前日期向前回溯 N 个月来采集 Issue 和 Commit。",
+    "max_issues": 500,
+    "max_commits": 200,
+    "inject_to_attack_agents": true,
+    "_inject_to_attack_agents_comment": "是否将 threat_model.json 的 attack_priority_map 注入到 Attack Agent 的 prompt。",
+    "inject_to_judge_agents": true,
+    "_inject_to_judge_agents_comment": "是否将 threat_model.json 的 judge_enhancements 注入到 Judge Agent 的 prompt。"
   },
   "log_level": "info"
 }

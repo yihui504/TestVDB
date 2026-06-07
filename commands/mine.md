@@ -98,6 +98,129 @@ python scripts/strategy_injector.py {target} --text-only
 
 如果 `evolution.enabled=false`，跳过此步骤。
 
+### Step 3.6: 历史情报采集（v2.1 新增，intelligence.enabled=true 时）
+
+**⛔ 铁律：主进程只做编排，不做执行。** 本步骤的所有实质性工作通过 `Agent(subagent_type="testvdb:xxx")` 派发。
+
+如果 `intelligence.enabled=false`，跳过整个 Step 3.6。
+
+**主进程在派发以下 Agent 前，先从 settings.json 读取 intelligence 配置并提取为模板变量：**
+```bash
+python -c "
+import json
+with open('settings.json', encoding='utf-8') as f:
+    c = json.load(f).get('intelligence', {})
+print(f'INTEL_TW={c.get(\"time_window_months\", 24)}')
+print(f'INTEL_MI={c.get(\"max_issues\", 500)}')
+print(f'INTEL_MC={c.get(\"max_commits\", 200)}')
+print(f'INTEL_TTL={c.get(\"cache_ttl_hours\", 720)}')
+"
+默认值（未自定义时）：time_window_months=24, max_issues=500, max_commits=200, cache_ttl_hours=720。
+将输出值作为 shell 变量 source，在后续 prompt 模板中替换 `{INTEL_TW}`、`{INTEL_MI}`、`{INTEL_MC}`、`{INTEL_TTL}`。
+
+#### 3.6a: 检查情报缓存
+
+检查 `intelligence/{target}/threat_model.json` 是否存在且未过期（TTL 由 `settings.json` 的 `intelligence.cache_ttl_hours` 决定，默认 720h = 30 天）。
+
+```bash
+# 检查缓存
+ls -la intelligence/{target}/threat_model.json 2>/dev/null && echo "CACHE_HIT" || echo "CACHE_MISS"
+# 如果命中，检查 TTL
+python -c "
+import json, os, time
+from datetime import datetime, timezone
+with open('intelligence/{target}/threat_model.json', encoding='utf-8') as f:
+    data = json.load(f)
+generated = data['_meta']['generated_at']
+# 鲁棒的 ISO 8601 解析（处理带/不带毫秒和时区的格式）
+try:
+    ts = datetime.fromisoformat(generated)
+except ValueError:
+    ts = datetime.strptime(generated[:19], '%Y-%m-%dT%H:%M:%S')
+age_hours = (time.time() - ts.timestamp()) / 3600
+print(f'Age: {age_hours:.1f}h')
+" 2>/dev/null
+```
+
+如果缓存有效 → 跳到 Step 3.6e（仅加载 threat_model 到上下文）。
+
+#### 3.6b: 派发 issue-miner（⛔ 禁止自己爬取 GitHub）
+
+```
+Agent(
+  subagent_type="testvdb:issue-miner",
+  description="采集 {target} 历史 Issues 和 Commits",
+  prompt="按照 agents/issue-miner.md 规范，为 {target} 采集历史 Issues 和已合并修复 PR。输入参数: target={target}, version={version}, intelligence_dir=intelligence/{target}/, time_window_months={INTEL_TW}, max_issues={INTEL_MI}, max_commits={INTEL_MC}。将结果写入 intelligence/{target}/issue_corpus.json 和 intelligence/{target}/commit_corpus.json。"
+)
+```
+
+**等待完成后验证：**
+```bash
+ls -la intelligence/{target}/issue_corpus.json && ls -la intelligence/{target}/commit_corpus.json && echo "ISSUE_MINER_OK" || echo "ISSUE_MINER_FAILED"
+```
+
+**如果 `ISSUE_MINER_FAILED`** → 记录警告到 error_log，跳过后续 3.6c/3.6d，继续 Step 4（Phase 0 非关键路径，不阻塞流水线）。
+
+#### 3.6c: 派发 bug-shape-extractor（⛔ 禁止自己分析 issue）
+
+```
+Agent(
+  subagent_type="testvdb:bug-shape-extractor",
+  description="提取 {target} 历史 Bug Shapes",
+  prompt="按照 agents/bug-shape-extractor.md 规范，对 intelligence/{target}/issue_corpus.json 和 intelligence/{target}/commit_corpus.json 进行分类和根因模式提取。输入参数: target={target}, intelligence_dir=intelligence/{target}/, strategy_registry_dir=strategy_registry/。将结果写入 intelligence/{target}/classified_issues.json、intelligence/{target}/bug_shapes.json、intelligence/{target}/developer_cognition.json。"
+)
+```
+
+**等待完成后验证：**
+```bash
+ls -la intelligence/{target}/bug_shapes.json && ls -la intelligence/{target}/developer_cognition.json && echo "SHAPE_EXTRACTOR_OK" || echo "SHAPE_EXTRACTOR_FAILED"
+```
+
+如果失败 → 记录警告，跳过 3.6d，继续 Step 4。
+
+#### 3.6d: 派发 threat-modeler（⛔ 禁止自己构建威胁模型）
+
+```
+Agent(
+  subagent_type="testvdb:threat-modeler",
+  description="构建 {target} 威胁模型",
+  prompt="按照 agents/threat-modeler.md 规范，基于 intelligence/{target}/bug_shapes.json、intelligence/{target}/classified_issues.json、intelligence/{target}/developer_cognition.json 和 THEORETICAL_FRAMEWORK.md 构建威胁模型和认知盲点模型。输入参数: target={target}, version={version}, intelligence_dir=intelligence/{target}/, contract_path=results/{target}/{version}/structured_contract.json（如果存在）。将结果写入 intelligence/{target}/threat_model.json。"
+)
+```
+
+**等待完成后验证：**
+```bash
+ls -la intelligence/{target}/threat_model.json && echo "THREAT_MODEL_OK" || echo "THREAT_MODEL_FAILED"
+```
+
+如果失败 → 记录警告，继续 Step 4（不阻塞流水线）。
+
+#### 3.6e: 加载情报到上下文
+
+读取威胁模型的简化摘要到内存变量 `threat_model_summary`，供后续步骤使用：
+
+```bash
+python -c "
+import json
+with open('intelligence/{target}/threat_model.json', encoding='utf-8') as f:
+    tm = json.load(f)
+# 输出关键字段的摘要
+print(json.dumps({
+    'blindspot_count': len(tm.get('cognitive_blindspots', {}).get('blindspots', [])),
+    'high_priority_areas': [a['area'] for a in tm.get('attack_surface', {}).get('high_priority_areas', [])],
+    'top_blindspots': [b['blindspot_id'] for b in tm.get('cognitive_blindspots', {}).get('blindspots', [])[:3]],
+    'by_design_patterns_count': len(tm.get('defect_criteria', {}).get('by_design_behaviors', [])),
+}, indent=2, ensure_ascii=False)
+" 2>/dev/null || echo "THREAT_MODEL_NOT_AVAILABLE"
+```
+
+**📊 stdout 日志输出（模板，实际运行时替换为 3.6e Python 脚本的实际输出值）：**
+```
+[Step 3.6] Intelligence: N blindspots identified, M priority areas
+[Step 3.6] Top blindspots: BS-XX, BS-YY, BS-ZZ
+[Step 3.6] Cache TTL: {INTEL_TTL}h
+```
+
 ### Step 4: 派 Knowledge Extractor（⛔ 禁止自己爬取文档）
 ```
 Agent(
@@ -139,15 +262,91 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
 
 每轮执行以下子步骤。timestamp 子目录在第一轮开始时创建。
 
-#### 8a. 注入 reflection_context
-第一轮：无。后续轮次：从上轮 `experience_handoff.json` 读取。
+#### 8a. 注入 reflection_context + threat_model
 
-**v2.0 新增 — 跨会话策略注入（evolution.enabled=true 时）：**
+第一轮：无 reflection_context，Attack Agents 自由探索。
+后续轮次：注入上轮 reflection_context 到 Attack Agents 的 context。
 
-将 Step 3.5 读取的 `cross_session_strategies` 追加到 Attack Agent 的 prompt 末尾。
-如果策略文本为「（无跨会话策略可用）」，跳过注入。
+**v2.0 新增 — reflection_context 结构：**
+```json
+{
+  "key_learnings": ["...", "..."],
+  "rejection_patterns": [{ "endpoint": "...", "reason": "..." }],
+  "high_value_endpoints": ["..."],
+  "exhausted_endpoints": ["..."],
+  "last_round_summary": "..."
+}
+```
 
-#### 8b. Fan-Out Attack Trio（⛔ 禁止自己写脚本）
+**reflection_context 注入模板**：在 Agent 调用的 prompt 参数中，将 reflection_context 以纯文本形式注入：
+```
+上轮经验：{key_learnings 的要点}。已排除的端点：{exhausted_endpoints}。高价值端点：{high_value_endpoints}。驳回模式：{rejection_patterns 的摘要}
+```
+
+### v2.0 跨会话策略注入（evolution.enabled=true）
+
+在 reflection_context 之后，追加从 Strategy Registry 读取的策略：
+```
+## 跨会话策略注入
+
+以下策略来自之前成功挖掘的经验（跨 DB 迁移）：
+
+{cross_session_strategies 的输出}
+
+使用这些策略作为初始 seed。对于标记了 applicable_dbs 包含当前 DB 的策略，
+应用 migration_rules 中的 DB 特定适配规则。
+```
+
+策略由 `scripts/strategy_injector.py {target} --text-only` 生成。
+
+### v2.1 威胁模型与认知盲点注入（intelligence.enabled=true 且 inject_to_attack_agents=true）
+
+在跨会话策略之后，追加从 Threat Model 提取的攻击优先级和认知盲点：
+
+```
+## 威胁模型与认知盲点注入（v2.1 Strategic Intelligence）
+
+### 攻击面优先级
+
+以下区域在当前 DB 的历史中具有最高缺陷密度，应优先攻击：
+
+{从 threat_model.json 的 attack_priority_map 提取的 top-5 endpoints 及其推荐攻击策略}
+
+### 开发者认知盲点
+
+以下盲点是开发者在该代码库中系统性遗漏的模式。你的攻击应重点针对这些盲点：
+
+{从 threat_model.json 的 cognitive_blindspots 提取的 top-3 blindspots}
+
+### 已知 by-design 行为（避免误报）
+
+以下行为开发者已声明为 by-design，不要攻击这些场景：
+
+{从 threat_model.json 的 defect_criteria.by_design_behaviors 提取}
+
+### 全局策略权重
+
+基于历史缺陷分布，建议各攻击策略分配如下权重：
+- boundary_attacks: {weight}（如参数校验问题高发则提高）
+- type_confusion_attacks: {weight}
+- state_consistency_attacks: {weight}
+- semantic_contract_attacks: {weight}
+```
+
+**注入条件汇总**：
+- `reflection_context != null` → 注入本轮经验
+- `evolution.enabled=true` 且 `cross_session_strategies` 有实质内容 → 注入跨会话策略
+- `intelligence.enabled=true` 且 `inject_to_attack_agents=true` 且 `threat_model.json` 存在 → 注入威胁模型与认知盲点
+
+### v2.1 Judge Agent 增强注入（intelligence.enabled=true 且 inject_to_judge_agents=true）
+
+在派发 Judge Agent 之前（Step 8e），将威胁模型的 `judge_enhancements` 部分注入到对应 Judge 的 prompt：
+
+**judge-severity 增强：** 注入 `severity_calibration` 规则（by_design 降级、历史高严重性模式确认、wontfix 降级）
+
+**judge-novelty 增强：** 注入 `novelty_context`（最近修复的模式、已知进行中的 issue）
+
+**judge-evidence 增强：** 注入 `submission_success_probability`（基于开发者历史态度预测提交成功率）
 
 **v2.0 新增 — Fan-Out 模式（fan_out.enabled=true 时）：**
 
@@ -313,6 +512,14 @@ results/{target}/{version}/{timestamp}/
 ├── coverage.json
 ├── experience_handoff.json
 └── session_metadata.json
+
+intelligence/{target}/
+├── issue_corpus.json         # 原始 Issue 语料（v2.1 新增）
+├── commit_corpus.json        # 原始 Commit/PR 语料（v2.1 新增）
+├── classified_issues.json    # 三分类结果（v2.1 新增）
+├── bug_shapes.json           # 根因模式提取（v2.1 新增）
+├── developer_cognition.json  # 开发者认知分析（v2.1 新增）
+└── threat_model.json         # 威胁模型 + 认知盲点模型（v2.1 新增）
 ```
 
 ## Error Recovery

@@ -8,7 +8,6 @@ tools:
   - Read
   - Write
   - Bash
-  - WebSearch
 ---
 
 # TestVDB Attack Agent — 语义攻击 (Semantic)

@@ -2,7 +2,7 @@
 name: judge-novelty
 description: 新颖性审查 Agent — 通过 GitHub Issues 搜索验证缺陷是否为首次报告。
 model: sonnet
-dataAccess: verified_only
+dataAccess: raw
 maxTurns: 22
 tools:
   - Bash
@@ -14,11 +14,11 @@ tools:
   - Write
 ---
 
-## 数据访问级别: verified_only
+## 数据访问级别: raw
 
 你可以访问:
 - 执行结果（output_*.log, exit_code_*.txt）
-- GitHub MCP（搜索已有 issues/PRs 判断新颖性）
+- GitHub MCP / WebSearch / WebFetch（搜索已有 issues/PRs 判断新颖性）
 
 禁止访问:
 - 契约文件 —— 新颖性判断不依赖契约内容
