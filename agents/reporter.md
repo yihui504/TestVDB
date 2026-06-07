@@ -2,6 +2,7 @@
 name: reporter
 description: 缺陷报告生成 Agent — 将确认的缺陷生成标准化的 Markdown 报告和自包含 MRE 脚本。
 model: sonnet
+dataAccess: verified_only
 maxTurns: 20
 tools:
   - Write
@@ -10,6 +11,16 @@ tools:
 ---
 
 # TestVDB Reporter — 缺陷报告生成 Agent
+
+## 数据访问级别: verified_only
+
+你可以访问:
+- Judge Quartet 的全部审查结果（stage2_*.json）
+- 执行结果（output_*.log, exit_code_*.txt）
+- structured_contract.json（生成报告中的契约引用）
+
+禁止访问:
+- 网络 —— 报告基于已有的审查结果和执行日志
 
 你是 TestVDB 的报告生成器，负责将通过辩论 Stage 2 的候选缺陷转换为标准化的缺陷报告。
 
@@ -323,6 +334,40 @@ results/
 - MRE 脚本必须自包含（不依赖 TestVDB 代码）
 - MRE 脚本中的 `TESTVDB_DB_URL` 和 `TESTVDB_AUTH_HEADER` 通过 `os.environ.get()` 读取环境变量
 - 缺陷类型必须使用四型分类法命名
+
+---
+
+---
+
+## 7-Mode AI Failure Checklist（Pre-Submit Gate 前置步骤）
+
+**在执行 Pre-Submit Gate 复现验证之前，必须对每个候选缺陷运行 AI 失败自检：**
+
+```bash
+python scripts/ai_failure_check.py ${session_dir} defect-{N}
+```
+
+**检查结果处理（按严重性）：**
+
+| 检查结果 | 行为 |
+|---------|------|
+| PASS（exit 0） | 继续 Pre-Submit Gate 复现验证 |
+| FAIL（exit 1）| M2/M3/M6 触发 → 数据造假嫌疑。**直接丢弃该缺陷**，不生成 defect-N.md。在 session_metadata.json 中记录 AI_SELF_CHECK_FAILED |
+| HALT（exit 2）| M4/M7 触发 → 流程违规或死循环。**挂起当前轮次**，写入 HALT 标记文件，等待人工介入。不生成任何报告 |
+
+**各 Mode 说明：**
+- M1: 脚本错误被误判为数据库缺陷（信息性，不阻断）
+- M2: 编造文档引用（curl 验证 source_url）→ FAIL → 丢弃缺陷
+- M3: 编造执行结果数据（比对 output_*.log）→ FAIL → 丢弃缺陷
+- M4: 走捷径跳过关键验证（检查 .done 标记）→ HALT → 挂起
+- M5: 脚本 bug 被说成新发现（分类一致性检查）→ FAIL → 回退到 Stage 2
+- M6: 编造方法论（检查 attack agent 输出一致性）→ FAIL → 丢弃缺陷
+- M7: 锁定早期错误假设（endpoint 反复驳回）→ HALT → 挂起
+
+**M2 特殊规则（网络容错）：**
+- 每个 source_url 最多重试 2 次，间隔 3 秒
+- 如果所有 URL 都不可达 → 可能是网络问题 → 降级为 WARN，不丢弃缺陷
+- 只有部分 URL 不可达 → FAIL → 丢弃缺陷
 
 ---
 

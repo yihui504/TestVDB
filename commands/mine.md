@@ -76,6 +76,28 @@ docker compose -f docker/crawl4ai.yml up -d --wait 2>/dev/null || true
 ### Step 3: 缓存检查
 检查 `results/{target}/{version}/structured_contract.json` 是否存在且未过期（TTL 见 settings.json 的 `knowledge.cache_ttl_hours`，默认 168h）。如果缓存有效 → 跳到 Step 6。
 
+**v2.0 新增 — Passport Hash 验证（material_passport.enabled=true 时）：**
+```bash
+python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
+```
+- 退出码 0（PASS）→ 缓存有效，跳到 Step 6
+- 退出码 1（NO_PASSPORT）→ 旧格式契约，输出警告但继续使用缓存
+- 退出码 2（TAMPERED）→ 契约被篡改，强制重新生成（继续 Step 4）
+- 退出码 3（INVALID_JSON/FILE_NOT_FOUND）→ 视为缓存无效
+
+如果 `material_passport.enabled=false`，跳过 hash 验证，仅按 TTL 判断。
+
+### Step 3.5: 跨会话策略注入准备（v2.0 新增，evolution.enabled=true 时）
+
+读取 Strategy Registry 中适用于当前 target 的策略：
+```bash
+python scripts/strategy_injector.py {target} --text-only
+```
+
+将输出文本保存为临时变量 `cross_session_strategies`，供 Step 8a 注入 Attack Agent 使用。
+
+如果 `evolution.enabled=false`，跳过此步骤。
+
 ### Step 4: 派 Knowledge Extractor（⛔ 禁止自己爬取文档）
 ```
 Agent(
@@ -99,6 +121,15 @@ Agent(
 ### Step 6: 合同门控检查
 检查 `structured_contract.json` 的核心 CRUD 端点覆盖率 ≥ 90%。不通过 → 输出缺失端点 + 终止。
 
+**v2.0 新增 — Passport Hash 验证（material_passport.enabled=true 时）：**
+对新生成的 structured_contract.json 执行 hash 验证：
+```bash
+python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
+```
+- 退出码 0（PASS）→ 契约完整性确认
+- 退出码 2（TAMPERED）→ 异常：契约刚生成 hash 就不匹配，可能是 Agent 写入不完整。
+  重试 `contract-formalizer` 一次。如果重试后仍不匹配，标记为 `PASSPORT_TAMPERED` 并终止。
+
 ### Step 7: 初始化状态
 - 生成 `session_id`: `{target}-{version_short}-{counter}`（sanitize: `[a-z0-9-]`，≤63字符）
 - 创建 `results/{target}/{version}/` 目录
@@ -111,25 +142,60 @@ Agent(
 #### 8a. 注入 reflection_context
 第一轮：无。后续轮次：从上轮 `experience_handoff.json` 读取。
 
-#### 8b. 并发出动 Attack Trio（⛔ 禁止自己写脚本）
+**v2.0 新增 — 跨会话策略注入（evolution.enabled=true 时）：**
 
-**同时派发 3 个 Agent（并发，非顺序）：**
+将 Step 3.5 读取的 `cross_session_strategies` 追加到 Attack Agent 的 prompt 末尾。
+如果策略文本为「（无跨会话策略可用）」，跳过注入。
+
+#### 8b. Fan-Out Attack Trio（⛔ 禁止自己写脚本）
+
+**v2.0 新增 — Fan-Out 模式（fan_out.enabled=true 时）：**
+
+每个 Attack Agent 派发 `fan_out.seeds_per_agent` 次（默认 3），每次使用不同的 `focus_profile`：
+
 ```
-Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}",
-  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} focus=priority_first",
+  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}, focus_profile=priority_first")
 
-Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}",
-  prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} focus=coverage_gap",
+  prompt="按照 agents/attack-boundary.md 规范，focus_profile=coverage_gap。优先测试 coverage.json 中覆盖率最低的端点。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
 
-Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}",
-  prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} focus=rejection_pattern",
+  prompt="按照 agents/attack-boundary.md 规范，focus_profile=rejection_pattern。从上轮驳回模式反向推导新攻击，绕过已知驳回路径。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} focus=priority_first",
+  prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}, focus_profile=priority_first")
+
+Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} focus=coverage_gap",
+  prompt="按照 agents/attack-state.md 规范，focus_profile=coverage_gap。优先测试 coverage.json 中覆盖率最低的端点。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} focus=rejection_pattern",
+  prompt="按照 agents/attack-state.md 规范，focus_profile=rejection_pattern。从上轮驳回模式反向推导新攻击，绕过已知驳回路径。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} focus=priority_first",
+  prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}, focus_profile=priority_first")
+
+Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} focus=coverage_gap",
+  prompt="按照 agents/attack-semantic.md 规范，focus_profile=coverage_gap。优先测试 coverage.json 中覆盖率最低的端点。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} focus=rejection_pattern",
+  prompt="按照 agents/attack-semantic.md 规范，focus_profile=rejection_pattern。从上轮驳回模式反向推导新攻击，绕过已知驳回路径。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
 ```
 
-**等待全部完成后验证：**
+**9 个 Agent 全部并行派发**。超时机制不变（3 分钟无产出 → 超时）。部分超时不影响其他 seed。
+
+**汇聚与去重（fan_out.enabled=true 时）：**
 ```bash
 find results/{target}/{version}/{timestamp} -name "*.py" -type f ! -path "*/mre/*" ! -name "_stage1*" ! -name "script_*" 2>/dev/null | wc -l
 ```
-为 0 则报错终止。不为 0 则 collect 所有脚本进入 Stage 1 审查。
+为 0 则报错终止。
+
+**3 级去重（主进程自行执行）：**
+1. 按 (endpoint, constraint_id, strategy) 三元组去重
+2. 相同三元组 → 保留 confidence 最高的版本
+3. 不同 seed 独立生成相同脚本 → confidence +0.1（独立验证奖励）
+
+**如果 fan_out.enabled=false 或 seeds_per_agent=1 → 回退到 v1.x 行为（3 并发，无 focus_profile）。**
 
 #### 8c. 辩论 Stage 1（主进程自行审查——这是编排工作，可自己做）
 
@@ -207,6 +273,18 @@ Agent(
 
 ### Step 9: 生成汇总 + 清理
 - 生成 `summary.md`
+
+**v2.0 新增 — 策略提取（evolution.enabled=true 时）：**
+
+本轮挖掘结束后，提取经验至 Strategy Registry：
+```bash
+python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {target}
+```
+
+检查输出中的 `extracted` 和 `merged` 计数，在 stdout 日志中输出：
+```
+[Step 9] Strategy extraction: N new strategies extracted, M existing strategies updated
+```
 - 清理 Docker 容器和网络
 - 更新 `.session.lock` status 为 `completed`
 

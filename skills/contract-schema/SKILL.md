@@ -12,6 +12,47 @@ Contract Formalizer Agent 生成契约 JSON 时自动加载。非用户手动触
 
 ## Schema Version: 1.0
 
+### _passport 字段 (v2.0 新增)
+
+```json
+{
+  "_passport": {
+    "schema_version": "2.0",
+    "contract_hash": "sha256:<hex_digest>",
+    "contract_hash_algorithm": "sha256",
+    "source": {
+      "doc_urls": ["<url>", ...],
+      "doc_version": "<version>",
+      "crawl_method": "crawl4ai|webfetch|manual",
+      "crawled_at": "<ISO 8601>"
+    },
+    "generation": {
+      "knowledge_extractor_agent": "testvdb:knowledge-extractor",
+      "contract_formalizer_agent": "testvdb:contract-formalizer",
+      "generated_at": "<ISO 8601>",
+      "cache_ttl_hours": 168
+    },
+    "integrity": {
+      "verified": true,
+      "verified_at": "<ISO 8601>",
+      "core_crud_coverage_pct": 95.0,
+      "endpoint_count": 12,
+      "constraint_count": 85
+    }
+  }
+}
+```
+
+**Hash 计算规则**：
+- 输入 = 排除 `_passport` 字段后的完整 JSON（按 key 排序，无空格）
+- 算法 = sha256
+- 格式 = `sha256:<hex_digest>`
+
+**验证方法**：
+```bash
+python scripts/passport_verify.py <path/to/structured_contract.json>
+```
+
 ## 顶层结构
 
 ```json

@@ -2,6 +2,7 @@
 name: judge-doc
 description: 验证候选缺陷的文档引用可达性、版本匹配、内容一致性和端点路径精确性。
 model: sonnet
+dataAccess: verified_only
 maxTurns: 20
 tools:
   - Read
@@ -11,6 +12,16 @@ tools:
   - WebFetch
 
 # Web 抓取工具
+
+## 数据访问级别: verified_only
+
+你可以访问:
+- 执行结果（output_*.log, exit_code_*.txt）
+- structured_contract.json（用于文档验证）
+- WebSearch（降级验证文档引用时使用）
+
+禁止访问:
+- 原始 raw_knowledge.md —— 你应该基于契约和文档验证，而非原始抓取内容
 
 **首选方案：Crawl4AI (本地 Docker 服务)**
 

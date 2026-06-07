@@ -2,6 +2,7 @@
 name: orchestrator
 description: TestVDB 缺陷挖掘流水线主编排器。协调全部12个 Agent 完成从知识提取到缺陷报告的全流程。
 model: opus
+dataAccess: redacted
 maxTurns: 120
 tools:
   - Read
@@ -13,6 +14,18 @@ tools:
 ---
 
 # TestVDB Orchestrator — 缺陷挖掘流水线主编排器 SOP
+
+## 数据访问级别: redacted
+
+你只能访问所有 Agent 的产出文件（structured_contract.json, raw_knowledge.md, pipeline_state.json,
+debate_logs/*.json, execution_summary.txt, output_*.log, defect-*.md, experience_handoff.json,
+coverage.json, mine_state.json, strategy_registry/*.json）。
+
+禁止直接访问:
+- 网络（WebSearch/WebFetch/Crawl4AI）—— 爬取由 knowledge-extractor 完成
+- 外部 API —— 所有外部数据获取由对应子 Agent 完成
+
+如果你需要访问网络或外部数据，请派发对应权限的 Agent（如 knowledge-extractor）。
 
 > **⛔ 执行模型变更（2026-06-06）：** 由于 Claude Code 插件体系的子 Agent 无法可靠嵌套派发
 > 孙 Agent（plugin-registered agent_type 在孙 Agent 上下文中不可用），本文件现在是 **SOP 参考文档**，
@@ -213,6 +226,22 @@ Agent(
 上轮经验：{key_learnings 的要点}。已排除的端点：{exhausted_endpoints}。高价值端点：{high_value_endpoints}。驳回模式：{rejection_patterns 的摘要}
 ```
 
+### v2.0 跨会话策略注入（evolution.enabled=true）
+
+在 reflection_context 之后，追加从 Strategy Registry 读取的策略：
+```
+## 跨会话策略注入
+
+以下策略来自之前成功挖掘的经验（跨 DB 迁移）：
+
+{cross_session_strategies 的输出}
+
+使用这些策略作为初始 seed。对于标记了 applicable_dbs 包含当前 DB 的策略，
+应用 migration_rules 中的 DB 特定适配规则。
+```
+
+策略由 `scripts/strategy_injector.py {target} --text-only` 生成。
+
 #### 8b. 并发出动 Attack Trio
 **并发（非顺序）** 派三个 Attack Agent，**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
@@ -237,6 +266,25 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 2. 标记该子 agent 为 `timed_out`，跳过其产出
 3. 在 mine_state.json 的 error_log 中记录超时事件
 4. 如果 3 个 Attack Agent 全部超时，终止当前轮次并记录错误
+
+### v2.0 Fan-Out 模式（fan_out.enabled=true）
+
+当 Fan-Out 启用时，每个 Attack Agent 使用 3 种 focus_profile 各派发一次：
+
+| Profile | 策略 | Agent prompt 差异 |
+|---------|------|-------------------|
+| `priority_first` | 从 contract 中 severity 最高的约束开始 | 无额外指令（默认行为） |
+| `coverage_gap` | 从 coverage.json 中覆盖率最低的端点开始 | 注入 uncovered_endpoints 列表 |
+| `rejection_pattern` | 从上轮 false positive 反向推导新攻击 | 注入 rejection_patterns，"绕过已知驳回模式" |
+
+9 组脚本 → 统一汇聚 → Stage 1 去重 + 交叉审查
+
+**去重规则（3 级）：**
+1. 按 (endpoint, constraint_id, strategy) 三级去重
+2. 相同三元组 → 保留 confidence 最高的版本
+3. 跨 profile 重复检测 → 不同 seed 独立生成相同脚本 → confidence +0.1
+
+**首轮建议：** 先用 `seeds_per_agent=2` 测试，确认去重逻辑正确后再增加到 3。
 
 #### 8c. 辩论 Stage 1（自动化审查 + 去重 + 交叉审查）
 
@@ -464,6 +512,20 @@ ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -
 - 驳回原因分类（by-design / 假阳性 / 不可复现 / 证据不足）
 - endpoint 覆盖率更新
 - 生成 reflection_context 供下轮使用
+
+### v2.0 策略提取（evolution.enabled=true）
+
+每轮结束后（或在 Step 9 统一执行），运行：
+```bash
+python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {target}
+```
+
+策略提取逻辑：
+1. 读取本轮 experience_handoff.json
+2. 提取 confirmed_defects 的策略模式 → 泛化 → 合并
+3. 新策略 → 写入 strategy_registry（global + per-DB）
+4. 已有策略 → 更新 performance 计数 + 调整 confidence
+5. 追加 evolution_log.jsonl 审计条目
 
 #### 8i. 检查终止条件
 以下任一满足即终止循环：

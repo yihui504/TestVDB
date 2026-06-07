@@ -2,6 +2,7 @@
 name: knowledge-extractor
 description: 从官方文档中提取目标向量数据库的 API 知识和约束信息。
 model: sonnet
+dataAccess: raw
 maxTurns: 30
 tools:
   - Bash
@@ -12,6 +13,11 @@ tools:
   - Write
 
 # Web 抓取工具
+
+## 数据访问级别: raw
+
+你是唯一拥有网络访问权限的 Agent。你可以使用 WebSearch、WebFetch、Crawl4AI 爬取文档。
+其他 Agent 依赖你的产出（raw_knowledge.md），不直接访问网络。
 
 **首选方案：Crawl4AI (本地 Docker 服务)**
 

@@ -55,5 +55,28 @@
   "network": {
     "proxy": ""
   },
+  "evolution": {
+    "enabled": true,
+    "strategy_registry_dir": "strategy_registry",
+    "max_strategies_per_injection": 10,
+    "min_confidence_for_injection": 0.6,
+    "auto_deprecate_after_failures": 3
+  },
+  "fan_out": {
+    "enabled": true,
+    "seeds_per_agent": 3,
+    "profiles": ["priority_first", "coverage_gap", "rejection_pattern"]
+  },
+  "ai_failure_check": {
+    "enabled": true,
+    "halt_on": ["M4", "M7"],
+    "reject_on": ["M2", "M3", "M6"],
+    "rewind_on": ["M1", "M5"]
+  },
+  "material_passport": {
+    "enabled": true,
+    "hash_algorithm": "sha256",
+    "reject_on_tamper": true
+  },
   "log_level": "info"
 }
