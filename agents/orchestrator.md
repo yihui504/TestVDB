@@ -2,6 +2,7 @@
 name: orchestrator
 description: TestVDB 缺陷挖掘流水线主编排器。协调全部12个 Agent 完成从知识提取到缺陷报告的全流程。
 model: opus
+dataAccess: redacted
 maxTurns: 120
 tools:
   - Read
@@ -13,6 +14,18 @@ tools:
 ---
 
 # TestVDB Orchestrator — 缺陷挖掘流水线主编排器 SOP
+
+## 数据访问级别: redacted
+
+你只能访问所有 Agent 的产出文件（structured_contract.json, raw_knowledge.md, pipeline_state.json,
+debate_logs/*.json, execution_summary.txt, output_*.log, defect-*.md, experience_handoff.json,
+coverage.json, mine_state.json, strategy_registry/*.json）。
+
+禁止直接访问:
+- 网络（WebSearch/WebFetch/Crawl4AI）—— 爬取由 knowledge-extractor 完成
+- 外部 API —— 所有外部数据获取由对应子 Agent 完成
+
+如果你需要访问网络或外部数据，请派发对应权限的 Agent（如 knowledge-extractor）。
 
 > **⛔ 执行模型变更（2026-06-06）：** 由于 Claude Code 插件体系的子 Agent 无法可靠嵌套派发
 > 孙 Agent（plugin-registered agent_type 在孙 Agent 上下文中不可用），本文件现在是 **SOP 参考文档**，
