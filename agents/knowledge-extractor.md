@@ -128,9 +128,10 @@ curl -sf http://127.0.0.1:11235/health && echo "Crawl4AI OK" || echo "Crawl4AI D
 ### Step 4: 提取 SDK 和版本信息
 
 1. 记录目标版本下的官方 SDK 推荐版本和安装命令
-2. 查询 Docker Hub API 获取目标版本的可用 Docker images（**注意：Docker Hub API 有速率限制，未认证请求限流严格。必须设置 `DOCKER_HUB_TOKEN` 环境变量（通过 `echo $TOKEN | docker login --username $USER --password-stdin` 获取）。如果 Docker Hub 不可用，使用 GitHub Container Registry 作为备选源**）：
-   - `curl -s -H "Authorization: Bearer $DOCKER_HUB_TOKEN" "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&name={version}*"`
-   - 备选：`curl -s "https://ghcr.io/v2/{org}/{repo}/tags/list"`
+2. 查询 Docker Hub API 获取目标版本的可用 Docker images（**注意：优先使用 Docker CLI（`docker manifest inspect`）验证 tag 存在性。Docker Hub API 有匿名限流，仅在 CLI 方式失败时作为备选。`DOCKER_HUB_TOKEN` 环境变量可提升 API 频率限制，但非必须**）：
+   - 首选：`docker manifest inspect {repo}:{version_tag}`
+   - API 备选：`curl -s "https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=25&name={version}*"`
+   - 最终备选：`curl -s "https://ghcr.io/v2/{org}/{repo}/tags/list"`
 
 | Target | Docker Hub Repo |
 |--------|----------------|

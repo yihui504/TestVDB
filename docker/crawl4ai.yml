@@ -10,7 +10,7 @@
 
 services:
   crawl4ai:
-    image: unclecode/crawl4ai:latest
+    image: unclecode/crawl4ai:${CRAWL4AI_VERSION:-latest}
     container_name: testvdb-crawl4ai-standalone
     ports:
       - "${CRAWL4AI_PORT:-11235}:11235"

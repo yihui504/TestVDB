@@ -292,7 +292,7 @@ Configures the GitHub MCP server used by the novelty judge to search for duplica
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| **LLM Model** | Claude Sonnet/Opus or DeepSeek | Use `claude --model sonnet` for Claude. DeepSeek models are also supported. |
+| **LLM Model** | Claude Sonnet/Opus | Runs via Claude Code. |
 | Claude Code CLI | Latest | `npm install -g @anthropic-ai/claude-code` |
 | Docker Engine | 20+ | Must be running before pipeline start |
 | Python | 3.9+ | Used by hooks and helper scripts |

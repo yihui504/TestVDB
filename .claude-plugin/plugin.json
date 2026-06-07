@@ -26,10 +26,10 @@
   ],
   "mcpServers": "./.mcp.json",
   "requirements": {
-    "model": "Claude Sonnet/Opus or DeepSeek (via Anthropic API compatible mode).",
+    "model": "Claude Sonnet/Opus via Claude Code.",
     "network": "WebFetch 被某些文档站点封锁。Crawl4AI 本地 Docker 服务作为首要网页抓取方案 (docker/crawl4ai.yml)。WebFetch 保留作为降级备选。",
-    "docker": "Docker Hub authentication required (set DOCKER_HUB_TOKEN). Unauthenticated requests are rate-limited. Crawl4AI container requires ~2GB shared memory (shm_size). Security: Crawl4AI runs in isolated Docker container with no host network access. All web scraping is restricted to documentation sites only.",
-    "python": "3.9+ with httpx, html2text (pip install httpx html2text)",
+    "docker": "Docker CLI commands (pull/manifest inspect) work without authentication. Docker Hub REST API for tag listing has anonymous rate limits — set DOCKER_HUB_TOKEN for higher limits. Crawl4AI container requires ~2GB shared memory (shm_size). Security: Crawl4AI runs in isolated Docker container with no host network access. All web scraping is restricted to documentation sites only.",
+    "python": "3.9+ with httpx, html2text, requests (pip install httpx html2text requests)",
     "security": "Scripts execute in resource-limited Docker containers (--memory=1g --cpus=2). No privileged containers. No host network access. All tokens via environment variables."
   }
 }

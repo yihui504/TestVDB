@@ -135,6 +135,14 @@ def check_github_token():
     print(f"[TestVDB] GitHub Token: {status}")
 
 
+def check_docker_hub_token():
+    dh = os.environ.get("DOCKER_HUB_TOKEN", "")
+    if dh:
+        print("[TestVDB] Docker Hub Token: configured (higher API rate limits)")
+    else:
+        print("[TestVDB] Docker Hub Token: WARNING - not set. Docker CLI commands (pull/manifest) work without token. Only Docker Hub REST API queries for tag listing may be rate-limited.")
+
+
 def check_network():
     # Cross-platform network check using Python urllib (avoids curl dependency on Windows)
     try:
@@ -153,6 +161,7 @@ def main():
     check_session_env()
     check_disk()
     check_github_token()
+    check_docker_hub_token()
     check_network()
     print("[TestVDB] Checks done. Python<3.9 is fatal per Orchestrator spec.")
 

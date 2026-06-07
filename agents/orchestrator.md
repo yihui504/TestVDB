@@ -9,12 +9,34 @@ tools:
   - Bash
   - Grep
   - Glob
-  - Task
+  - Agent
 ---
 
-# TestVDB Orchestrator — 缺陷挖掘流水线主编排器
+# TestVDB Orchestrator — 缺陷挖掘流水线主编排器 SOP
 
-你是 TestVDB 的核心编排 Agent，负责协调全部子 Agent 完成向量数据库自动化缺陷挖掘。
+> **⛔ 执行模型变更（2026-06-06）：** 由于 Claude Code 插件体系的子 Agent 无法可靠嵌套派发
+> 孙 Agent（plugin-registered agent_type 在孙 Agent 上下文中不可用），本文件现在是 **SOP 参考文档**，
+> 由主进程（`commands/mine.md`）按照此 SOP 直接执行编排。
+>
+> `testvdb:orchestrator` agent 类型保留用于未来平台能力就绪时恢复自治模式。
+>
+> **主进程执行时遵循的核心铁律：只编排，不执行。所有实质性工作必须通过
+> `Agent(subagent_type="testvdb:xxx")` 派发给对应子 Agent。**
+
+---
+
+## ⚠️ 已废弃：子 Agent 嵌套派发模式
+
+**以下调用方式已废弃：**
+```
+// ❌ 废弃：主进程 → orchestrator(子Agent) → knowledge-extractor(孙Agent) — 不可靠
+Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
+```
+
+**当前正确方式：主进程按照本 SOP 逐步直接派发子 Agent。**
+详见 `commands/mine.md` 的完整执行流程。
+
+---
 
 ---
 
@@ -79,12 +101,12 @@ tools:
 - Python 3.9+ 可用（**Python < 3.9 为致命错误，终止会话**）
 - Python 依赖安装：`pip install httpx html2text`（crawl_fetch.py 的降级方案依赖）
 - 磁盘剩余空间 ≥ 10GB
-- **模型兼容性**：支持 Claude Sonnet/Opus 和 DeepSeek（通过 Anthropic API 兼容模式）。
+- **模型兼容性**：Claude Sonnet/Opus，通过 Claude Code 原生支持。
 
 **确定项目根目录**：使用 Bash 执行 `git rev-parse --show-toplevel 2>/dev/null || pwd`，将结果存储为 `PROJECT_ROOT` 变量。后续所有路径操作使用 `${PROJECT_ROOT}/` 前缀确保绝对路径。
 - GitHub PAT（可选，MCP GitHub 工具需要）
 - 网络连接（Crawl4AI 服务需要出站网络访问文档站点）
-- `DOCKER_HUB_TOKEN` 环境变量（**必须**，Docker Hub 未认证请求被严格限流）
+- `DOCKER_HUB_TOKEN` 环境变量（**推荐**，Docker Hub API 查询 tags 时有更高频率限制；Docker CLI 命令如 `docker pull` / `docker manifest inspect` 无需 token）
 
 ### Step 3: 缓存检查
 检查路径 `results/{target}/{version}/structured_contract.json`：
@@ -94,26 +116,26 @@ tools:
 **TTL 过期计算**：从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取 TTL（默认 168 小时 = 7 天）。读取 `structured_contract.json` 中的 `cached_at`（ISO 8601 时间戳），计算 `当前时间 - cached_at > cache_ttl_hours`。如果 `cached_at` 字段缺失，视为缓存无效。
 
 ### Step 4: 派 Knowledge Extractor
-使用 Task 工具派 knowledge-extractor agent。**Agent 分发模式**：所有子 Agent 通过 `subagent_type="general-purpose"` 派发，Agent 定义（frontmatter 中的 tools/maxTurns/model）由插件系统自动加载。使用 general-purpose 而非直接指定 agent type 的好处是：可在 query 中注入运行时参数（session_dir, session_id 等）。
+使用 Agent 工具派 knowledge-extractor agent。所有子 Agent 通过对应的 `testvdb:` 命名类型派发，Agent 定义（frontmatter 中的 tools/maxTurns/model）由插件系统自动加载。
 
 ```
-Task(
-  subagent_type="general-purpose",
+Agent(
+  subagent_type="testvdb:knowledge-extractor",
   description="提取 {target} {version} 文档知识",
-  query="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识，产出 raw_knowledge.md。输入参数: target={target}, version={version}, session_dir=results/{target}/{version}。将结果写入 results/{target}/{version}/raw_knowledge.md"
+  prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识，产出 raw_knowledge.md。输入参数: target={target}, version={version}, session_dir=results/{target}/{version}。将结果写入 results/{target}/{version}/raw_knowledge.md"
 )
 ```
 
 确保产出 raw_knowledge.md 后继续。使用 Bash 执行 `ls -la results/{target}/{version}/raw_knowledge.md` 验证文件存在。
 
 ### Step 5: 派 Contract Formalizer
-使用 Task 工具派 contract-formalizer agent：
+使用 Agent 工具派 contract-formalizer agent：
 
 ```
-Task(
-  subagent_type="general-purpose",
+Agent(
+  subagent_type="testvdb:contract-formalizer",
   description="形式化 {target} v{version} API 契约",
-  query="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.md 转换为 structured_contract.json。输入参数: target={target}, version={version}, session_dir=results/{target}/{version}。将结果写入 results/{target}/{version}/structured_contract.json"
+  prompt="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.md 转换为 structured_contract.json。输入参数: target={target}, version={version}, session_dir=results/{target}/{version}。将结果写入 results/{target}/{version}/structured_contract.json"
 )
 ```
 
@@ -141,7 +163,7 @@ Task(
    - `counter`：从 `r1` 递增，同 target+version 下避免冲突
 2. **Sanitization 规则**：只保留 `[a-z0-9-]`，大写转小写，删除 `T`/`:`/`/` 等无效字符，长度限制 63 字符（Docker 容器名限制）
 3. **立即设置环境变量**：`export TESTVDB_SESSION_ID="{session_id}"`，确保后续所有子 agent 和 Docker 容器使用统一的 session_id
-4. 在所有 Task 调用的 query 中显式传递 `session_id={session_id}`
+4. 在所有 Agent 调用的 prompt 中显式传递 `session_id={session_id}`
 5. Docker Compose 模板通过 `${TESTVDB_SESSION_ID:-standalone}` 环境变量读取，确保容器名唯一
 
 **Session 锁机制**：创建目录后立即写入 `.session.lock` 文件：
@@ -186,31 +208,31 @@ Task(
 }
 ```
 
-**reflection_context 注入模板**：在 Task 调用的 query 参数中，将 reflection_context 以纯文本形式注入：
+**reflection_context 注入模板**：在 Agent 调用的 prompt 参数中，将 reflection_context 以纯文本形式注入：
 ```
 上轮经验：{key_learnings 的要点}。已排除的端点：{exhausted_endpoints}。高价值端点：{high_value_endpoints}。驳回模式：{rejection_patterns 的摘要}
 ```
 
 #### 8b. 并发出动 Attack Trio
-**并发（非顺序）** 派三个 Attack Agent，**必须使用 Task 工具派生子 agent**，禁止自己直接执行攻击生成：
+**并发（非顺序）** 派三个 Attack Agent，**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
-**⛔ 绝对禁止：** Orchestrator 自己生成攻击脚本、自己执行测试、自己审查结果。Orchestrator 只负责编排和协调，所有实质性工作必须通过 Task 工具派发给对应的子 agent。如果你发现自己正在直接编写 Python 攻击脚本或直接执行 curl 测试，立即停止，改用 Task 派发。
+**⛔ 绝对禁止：** Orchestrator 自己生成攻击脚本、自己执行测试、自己审查结果。Orchestrator 只负责编排和协调，所有实质性工作必须通过 Agent 工具派发给对应的子 agent。如果你发现自己正在直接编写 Python 攻击脚本或直接执行 curl 测试，立即停止，改用 Agent 派发。
 
 ```
-Task(subagent_type="general-purpose", description="边界攻击 {target} v{version}", query="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Task(subagent_type="general-purpose", description="状态攻击 {target} v{version}", query="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Task(subagent_type="general-purpose", description="语义攻击 {target} v{version}", query="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}", prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}", prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}", prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
 **自动化输出验证**：每轮 Attack Trio 完成后，使用 Bash 工具执行以下命令验证子 agent 产出：
 ```bash
 ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 ```
-如果输出为 0（3 个 Task 均未产出任何脚本文件），说明子 agent 未正常执行，必须终止并报错。如果 >0，继续下一步。
+如果输出为 0（3 个 Agent 均未产出任何脚本文件），说明子 agent 未正常执行，必须终止并报错。如果 >0，继续下一步。
 
-**注意**：不依赖 `subagent-tracking.json` 文件（Claude Code 的 Task 工具不会自动生成此文件），而是通过检查实际产出文件来验证子 agent 执行结果。
+**注意**：不依赖 `subagent-tracking.json` 文件（Claude Code 的 Agent 工具不会自动生成此文件），而是通过检查实际产出文件来验证子 agent 执行结果。
 
-**Subagent 超时机制**：每个 Task 调用后，如果 3 分钟内子 agent 未产出任何文件（检查目标目录是否有新文件写入），则：
+**Subagent 超时机制**：每个 Agent 调用后，如果 3 分钟内子 agent 未产出任何文件（检查目标目录是否有新文件写入），则：
 1. 在日志中记录超时
 2. 标记该子 agent 为 `timed_out`，跳过其产出
 3. 在 mine_state.json 的 error_log 中记录超时事件
@@ -232,11 +254,22 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
    - 交叉验证通过的脚本 confidence 提升 0.1
 6. **抽样审查**：只对 confidence < 0.7 或跨 Agent 重复的脚本做详细审查（评估预期是否合理、攻击策略是否匹配）
 7. **记录审查结果**：将审查结果写入 `debate_logs/stage1.json`
-8. **脚本路径标准化**：将通过审查的脚本复制到 `${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/script_{script_id}.py`，确保 Executor 在 Step 8d 能找到它们。使用 Bash 执行：
+8. **脚本路径标准化**：将通过审查的脚本按来源复制到对应的子目录（Executor 在此搜索）。使用 Bash 执行：
    ```bash
-   mkdir -p ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}
-   cp ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/debate_logs/{approved_script}.py ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/script_{script_id}.py
-   touch ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/debate_logs/stage1.json.done
+   SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}
+   mkdir -p ${SESSION_DIR}/boundary_scripts ${SESSION_DIR}/state_scripts ${SESSION_DIR}/scripts
+   # 按脚本来源（boundary/state/semantic）复制到对应子目录
+   # 同时保留 script_{id}.py 在根目录做兜底
+   for src in ${SESSION_DIR}/debate_logs/*.py; do
+     [ ! -f "$src" ] && continue
+     B=$(basename "$src")
+     case "$B" in
+       boundary_*) cp "$src" "${SESSION_DIR}/boundary_scripts/$B" ;;
+       state_*)    cp "$src" "${SESSION_DIR}/state_scripts/$B" ;;
+       semantic_*|*) cp "$src" "${SESSION_DIR}/scripts/$B" ;;
+     esac
+   done
+   touch ${SESSION_DIR}/debate_logs/stage1.json.done
    ```
 
 **审查判定规则**：
@@ -247,10 +280,10 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 辩论日志写入 `debate_logs/stage1.json`。**Orchestrator 使用 Write 工具写入此文件**，将审查结果序列化为 JSON 后写入 `results/{target}/{version}/{timestamp}/debate_logs/stage1.json`。
 
 #### 8d. 派 Executor 执行通过辩论的脚本
-**必须使用 Task 工具派生 docker-executor 子 agent**，禁止自己直接执行：
+**必须使用 Agent 工具派生 docker-executor 子 agent**，禁止自己直接执行：
 
 ```
-Task(subagent_type="general-purpose", description="执行 {target} v{version} 攻击脚本", query="按照 agents/docker-executor.md 规范，在 Docker 沙箱中执行以下攻击脚本：{approved_scripts}。target={target}, version={version}, contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:docker-executor", description="执行 {target} v{version} 攻击脚本", prompt="按照 agents/docker-executor.md 规范，在 Docker 沙箱中执行攻击脚本。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, session_id={session_id}。⛔ 立即执行 Step 1 命令，不要分析、不要检查、不要读取脚本内容。脚本位于 SESSION_DIR 下的 boundary_scripts/、state_scripts/、scripts/ 子目录和 script_*.py 文件中。所有脚本已通过语法验证，无需再检查。")
 ```
 
 每个脚本一个独立沙箱执行，并发处理。
@@ -268,7 +301,7 @@ ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l
 
 **阶段 1：先派 judge-doc（文档契约验证）**
 ```
-Task(subagent_type="general-purpose", description="文档契约验证 {target}", query="按照 agents/judge-doc.md 规范，验证以下候选缺陷的文档引用有效性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:judge-doc", description="文档契约验证 {target}", prompt="按照 agents/judge-doc.md 规范，验证以下候选缺陷的文档引用有效性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
 **自动化输出验证**：等待 judge-doc 完成后，使用 Bash 工具执行以下命令验证产出（检查 .done 标记确保写入完成）：
@@ -279,9 +312,9 @@ test -f "results/{target}/{version}/{timestamp}/debate_logs/stage2_doc.json.done
 
 **阶段 2：确认 stage2_doc.json 存在后，并发派其他 3 个 Judge**
 ```
-Task(subagent_type="general-purpose", description="证据审查 {target}", query="按照 agents/judge-evidence.md 规范，审查以下执行结果的证据可信度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Task(subagent_type="general-purpose", description="新颖性审查 {target}", query="按照 agents/judge-novelty.md 规范，审查以下候选缺陷的新颖性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Task(subagent_type="general-purpose", description="严重性评估 {target}", query="按照 agents/judge-severity.md 规范，评估以下候选缺陷的严重程度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:judge-evidence", description="证据审查 {target}", prompt="按照 agents/judge-evidence.md 规范，审查以下执行结果的证据可信度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:judge-novelty", description="新颖性审查 {target}", prompt="按照 agents/judge-novelty.md 规范，审查以下候选缺陷的新颖性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:judge-severity", description="严重性评估 {target}", prompt="按照 agents/judge-severity.md 规范，评估以下候选缺陷的严重程度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
 **自动阻断**：4 个 Judge 全部完成后，使用 Bash 工具执行以下命令验证产出（所有文件必须都有 .done 标记）：
@@ -322,10 +355,10 @@ evidence 和 severity 按 is_defect/not_defect 投票，novelty 永远投 is_def
 辩论日志写入 `debate_logs/stage2.json`（含 stage2_doc.json 的文档验证结果）。
 
 #### 8f. 派 Reporter
-**必须使用 Task 工具派生 reporter 子 agent**：
+**必须使用 Agent 工具派生 reporter 子 agent**：
 
 ```
-Task(subagent_type="general-purpose", description="生成缺陷报告 {target}", query="按照 agents/reporter.md 规范，为以下确认的缺陷生成报告：{confirmed_defects}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}", prompt="按照 agents/reporter.md 规范，为以下确认的缺陷生成报告：{confirmed_defects}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
 **自动化输出验证**：Reporter 完成后，使用 Bash 工具执行以下命令验证产出：
@@ -365,7 +398,7 @@ ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -
 
 ### Agent 间通信可靠性机制（.done 标记文件）
 
-由于 Agent 通过 Task 工具异步派发，所有 Agent 间通信通过文件系统。为确保文件写入的原子性和可见性：
+由于子 Agent 通过 Agent 工具异步派发，所有 Agent 间通信通过文件系统。为确保文件写入的原子性和可见性：
 
 1. **子 Agent 输出规范**：先写入输出文件，完成后创建同名 `.done` 标记文件
 2. **Orchestrator 检查规范**：**必须**检查 `.done` 标记文件存在性（而非仅检查输出文件——文件可能正在写入）

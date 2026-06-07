@@ -41,6 +41,7 @@ contracts/weaviate_behavioral_templates.json
 .mine_state.json
 session_metadata.json
 subagent-tracking.json
+.omc/
 
 # Mining session artifacts (auto-generated, not source)
 qdrant_report_*.md
