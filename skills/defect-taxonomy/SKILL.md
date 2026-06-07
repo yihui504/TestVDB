@@ -76,3 +76,17 @@ Judge Agents（evidence/novelty/severity）审查候选缺陷时自动加载。A
    ├── 是 → Type 4（State/Logic Violation）
    └── 否 → 重新分类或非缺陷
 ```
+
+## 7-Mode AI Failure Checklist (v2.0)
+
+Reporter 在 Pre-Submit Gate 之前运行的自检机制。详见 `scripts/ai_failure_check.py`。
+
+| Mode | 检查内容 | 检测方法 | 触发行为 |
+|------|---------|---------|---------|
+| M1 | 脚本错误被误判为数据库缺陷 | 检查 execution_summary.txt | 信息性 |
+| M2 | 编造文档引用（幻觉 URL） | curl source_url | REJECT |
+| M3 | 编造执行结果数据 | 比对 output_*.log | REJECT |
+| M4 | 走捷径跳过关键验证 | 检查 .done 标记 | HALT |
+| M5 | 脚本 bug 被说成新发现 | 分类一致性检查 | REWIND |
+| M6 | 编造方法论 | attack agent 输出一致性 | REJECT |
+| M7 | 锁定早期错误假设 | endpoint 反复驳回 | HALT |
