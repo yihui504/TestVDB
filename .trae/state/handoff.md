@@ -1,8 +1,8 @@
 # TestVDB 交接信息
 
-## 最后更新: 2026-06-01
+## 最后更新: 2026-06-06
 
-## 项目状态: 🎯 新一轮 deep-interview 已完成，等待 Ralph 执行
+## 项目状态: 🔧 33 GAP + 19 残问题全部修复完成，待集成测试验证
 
 ---
 
@@ -17,12 +17,44 @@
 | Spec (三重提升) | `.trae/specs/deep-interview-triple-pillar-2026-06-01.md` | **ACTIVE — 7轮deep-interview，模糊度11.3%，等待执行** |
 | Plan (Oracle优化) | `.trae/plans/conditional-branch-llm-next.md` | COMPLETED |
 | Plan (技术债修复) | `.trae/plans/tech-debt-remediation.md` | COMPLETED |
+| Plan (审查流水线重设计) | `.trae/plans/audit-pipeline-redesign.md` | COMPLETED |
 | Spec (条件分支) | `.trae/specs/deep-interview-llm-defect-discovery-next.md` | ARCHIVED |
 | PRD (技术债) | `.trae/prd.json` | COMPLETED |
 | Goal State | `.trae/state/goal-state.json` | COMPLETED |
 | Ralph State | `.trae/state/ralph-state.json` | INACTIVE（等待新PRD） |
 | Handoff | `.trae/state/handoff.md` | 本文件 |
 | Progress | `.trae/progress.txt` | ACTIVE |
+
+---
+
+## 2026-06-06: 33 GAP 全链路修复
+
+### 修复的文件清单
+
+| 文件 | 修复的 GAP | 修改内容 |
+|------|-----------|---------|
+| `testvdb-plugin/hooks/hooks.json` | #2,#29 | 路径改用 `${CLAUDE_PLUGIN_ROOT}`，添加 timeout |
+| `testvdb-plugin/scripts/preflight.py` | #1,#3,#4,#30 | Python 版本扫描 + CLAUDE_ENV_FILE 持久化 |
+| `testvdb-plugin/scripts/cleanup_stop.py` | #4,#29 | 多源 session_id 查找 + plugin_root 定位 |
+| `testvdb-plugin/scripts/emergency_cleanup.py` | #4,#29 | 同上 |
+| `testvdb-plugin/scripts/log_execution.py` | #29 | plugin_root 定位 results |
+| `testvdb-plugin/scripts/notify_check.py` | #29 | os.path.dirname 定位 settings.json |
+| `testvdb-plugin/scripts/retry_policy.py` | #29 | 同上 |
+| `testvdb-plugin/scripts/precompact_save.py` | #29 | plugin_root 定位 |
+| `testvdb-plugin/scripts/postcompact_verify.py` | #29 | 同上 |
+| `testvdb-plugin/agents/orchestrator.md` | #9,#10,#23,#24,#26,#27,#12,#16,#18,#19,#20,#21,#22,#13,#14,#28,#33 | maxTurns 80, Session ID sanitization, 自动化审查, 强制验证, reflection_context 注入模板 |
+| `testvdb-plugin/agents/attack-boundary.md` | #31 | Milvus REST v2 优先，SDK 仅作补充 |
+| `testvdb-plugin/agents/knowledge-extractor.md` | #5,#6,#25,#32 | 强化 Write 输出 + 明确路径 + Step 7 最终验证 + maxTurns 25 |
+| `testvdb-plugin/agents/contract-formalizer.md` | #7,#8 | category 别名映射 + 自检步骤 |
+| `testvdb-plugin/agents/judge-doc.md` | #17,#25 | 强化 Write 输出 + Step 5 最终验证 |
+| `testvdb-plugin/agents/docker-executor.md` | #25,#32 | 执行结果自检 + maxTurns 8 |
+| `testvdb-plugin/agents/reporter.md` | #25,#32 | 输出自检 + maxTurns 15 + Bash 工具 |
+
+### 三大根因修复总结
+
+1. **Hook 系统全链路静默失败** → 所有 hook 使用 `${CLAUDE_PLUGIN_ROOT}` 绝对路径 + Python 版本扫描 + CLAUDE_ENV_FILE 持久化
+2. **Agent 派发无输出验证** → 每个子 agent 添加最终验证步骤 + Orchestrator 添加强制验证检查点
+3. **Orchestrator 越权替代子 Agent** → 添加 docker-executor/Judge/Reporter 强制派发指令 + 输出文件验证
 
 ---
 

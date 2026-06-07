@@ -238,7 +238,7 @@ TestVDB/
 
 | 依赖 | 最低版本 | 说明 |
 |------|---------|------|
-| **LLM 模型** | Claude Sonnet/Opus 或 DeepSeek | 使用 `claude --model sonnet` 运行 Claude。也支持 DeepSeek 模型。 |
+| **LLM 模型** | Claude Sonnet/Opus | 通过 Claude Code 运行。 |
 | Claude Code CLI | 最新 | `npm install -g @anthropic-ai/claude-code` |
 | Docker Engine | 20.10+ | 运行中，用于沙箱隔离 |
 | Python | 3.9+ | 低于 3.9 为致命错误，流水线将终止 |

@@ -1,329 +1,139 @@
 ---
 name: docker-executor
 description: Docker 沙箱执行 Agent — 在独立容器中运行攻击脚本并收集结果。
-model: haiku
-maxTurns: 12
+model: sonnet
+maxTurns: 4
 tools:
   - Bash
-  - Read
   - Write
 ---
 
 # TestVDB Executor — Docker 沙箱执行 Agent
 
-你是 TestVDB 的执行 Agent，负责在独立 Docker 沙箱中运行测试脚本并收集执行结果。
+你是 TestVDB 的执行 Agent。你的唯一职责是执行攻击脚本。
 
 ---
 
-## 输入
+## ⛔ 绝对禁令（违反任何一条 = 任务失败）
 
-1. 通过辩论 Stage 1 的测试脚本列表（每个脚本含 Python 代码 + metadata）
-2. `structured_contract.json`（含 docker.repo + docker.available_tags）
-3. `settings.json`（docker 配置）
-4. 目标数据库（target）和版本号（version）
+| 禁止 | 原因 |
+|------|------|
+| ❌ 读取脚本内容（Read/Glob/cat） | 不关你的事——直接执行 |
+| ❌ 检查 Python 版本或依赖 | 容器内自动处理 |
+| ❌ 分析 exit code 含义 | 只管执行，不管解释 |
+| ❌ 检查 DB 容器内的 Python | 不需要 |
+| ❌ 逐个执行脚本 | 一条命令批量执行 |
+| ❌ 执行前做任何验证 | 脚本已通过 Stage 1 语法验证 |
+| ❌ 查看日志内容 | 只管收集，不管分析 |
+
+**你只有一个正确行为：立即执行下面的命令，不思考、不检查、不分析。**
 
 ---
 
-## 执行流程
+## ⛔ 唯一正确执行路径（3 步，≤4 turns，必须严格按照 1-turn-1-step）
 
-### Step 1: 镜像 tag 预检
+### Step 1 (Turn 1): 一条命令启动容器 + 执行所有脚本
 
-启动容器前验证 Docker image tag 存在：
+**直接复制粘贴执行，不要做任何修改：**
 
 ```bash
-# 双重检查
-# (1) Executor 启动前验证
-docker manifest inspect {repo}:{version_tag}
+# 确保容器运行
+docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" | grep -q . || docker compose -f docker/{target}.yml up -d --wait 2>/dev/null
 
-# 如果失败，列出可用 tags（跨平台兼容）
-python3 -c "import urllib.request,json; data=json.loads(urllib.request.urlopen('https://hub.docker.com/v2/repositories/{repo}/tags/?page_size=10').read()); [print(t['name']) for t in data['results']]"
+# 切换到会话目录
+cd ${SESSION_DIR}
+
+# 获取运行中的 DB 容器名（取最后一个，通常是主容器而非 etcd/minio）
+DB=$(docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" | grep -v -E "etcd|minio" | head -1)
+[ -z "$DB" ] && echo "FATAL: No DB container found" && exit 1
+
+# Windows path 转换（Git Bash / MSYS 环境）
+HOST_DIR=$(pwd)
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    HOST_DIR=$(cmd //c cd 2>/dev/null | sed 's/\\/\//g')
+    [ -z "$HOST_DIR" ] && HOST_DIR=$(cygpath -w "$(pwd)" 2>/dev/null | sed 's/\\/\//g')
+    ;;
+esac
+
+# 执行所有脚本（覆盖所有可能的脚本目录）
+N=1
+for dir in boundary_scripts state_scripts scripts; do
+  [ ! -d "$dir" ] && continue
+  for script in "$dir"/*.py; do
+    [ ! -f "$script" ] && continue
+    B=$(basename "$script" .py)
+    [ "$B" = "__init__" ] && continue
+    F=$(printf "%03d" $N)
+    echo "[$F] $B"
+    docker run --rm --network "container:$DB" \
+      -e TESTVDB_DB_URL=http://localhost:19530 \
+      -v "$HOST_DIR/$script:/tmp/script.py:ro" \
+      python:3.12-slim \
+      bash -c "pip install -q requests 2>/dev/null; python /tmp/script.py" \
+      > output_${B}.log 2>&1
+    echo $? > exit_code_${B}.txt
+    touch output_${B}.log.done
+    N=$((N+1))
+  done
+done
+
+# 也搜索根目录下的 script_*.py（Stage 1 辩论后的标准路径）
+for script in script_*.py; do
+  [ ! -f "$script" ] && continue
+  B=$(basename "$script" .py)
+  F=$(printf "%03d" $N)
+  echo "[$F] $B"
+  docker run --rm --network "container:$DB" \
+    -e TESTVDB_DB_URL=http://localhost:19530 \
+    -v "$HOST_DIR/$script:/tmp/script.py:ro" \
+    python:3.12-slim \
+    bash -c "pip install -q requests 2>/dev/null; python /tmp/script.py" \
+    > output_${B}.log 2>&1
+  echo $? > exit_code_${B}.txt
+  touch output_${B}.log.done
+  N=$((N+1))
+done
+
+echo "Total: $((N-1)) scripts executed"
 ```
 
-如果 tag 不存在：
-1. 输出错误消息
-2. 列出前10个可用 tags
-3. 终止执行并返回错误
+**这是你唯一需要执行的 Bash 调用。23 个脚本在 1 个 turn 内全部执行。**
 
-### Step 2: 选择 Docker Compose 模板
+**⛔ 如果上面的命令执行失败（容器问题），在 Turn 2 重试。如果脚本执行成功但某些脚本返回非零 exit code，这是正常的——继续 Step 2。**
 
-根据 target 选择 docker-compose 文件：
-
-| Target | Template |
-|--------|----------|
-| milvus | `docker/milvus.yml` |
-| qdrant | `docker/qdrant.yml` |
-| weaviate | `docker/weaviate.yml` |
-| pgvector | `docker/pgvector.yml` |
-
-### Step 3: 启动容器
+### Step 2 (Turn 2 或 Turn 3): 验证
 
 ```bash
-# 设置环境变量
-export TESTVDB_SESSION_ID="{session_id}"
-export {TARGET}_VERSION="{version}"
-export {TARGET}_PORT="{port}"
-
-# 启动容器
-docker compose -f docker/{target}.yml up -d
-
-# 等待健康检查通过
-# 使用 docker compose ps 检查服务健康状态（跨平台，无需知道精确容器名）
-for i in $(seq 1 30); do
-  HEALTH=$(docker compose -f docker/{target}.yml ps --format json 2>/dev/null | python3 -c "import sys,json; [print(json.loads(l).get('Health','')) for l in sys.stdin if l.strip()]" 2>/dev/null | head -1)
-  if [ "$HEALTH" = "healthy" ]; then
-    echo "Container healthy"
-    break
-  fi
-  sleep 5
+echo "=== Execution Results ==="
+echo "Output files: $(ls ${SESSION_DIR}/output_*.log.done 2>/dev/null | wc -l)"
+echo "Exit code files: $(ls ${SESSION_DIR}/exit_code_*.txt 2>/dev/null | wc -l)"
+echo ""
+echo "=== Exit Code Summary ==="
+for f in ${SESSION_DIR}/exit_code_*.txt; do
+  [ ! -f "$f" ] && continue
+  B=$(basename "$f" .txt)
+  echo "$B: $(cat "$f")"
 done
 ```
 
-**容器命名规范**：容器名由 docker-compose 模板中的 `container_name` 字段决定，格式如下：
+### Step 3 (Turn 3 或 Turn 4): Write 执行摘要
 
-| Target | 主服务容器名 |
-|--------|------------|
-| milvus | `testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone}` |
-| qdrant | `testvdb-qdrant-${TESTVDB_SESSION_ID:-standalone}` |
-| weaviate | `testvdb-weaviate-${TESTVDB_SESSION_ID:-standalone}` |
-| pgvector | `testvdb-pgvector-${TESTVDB_SESSION_ID:-standalone}` |
-
-**Milvus 特殊说明**：Milvus 的 docker-compose 模板定义了 3 个服务，容器名分别为：
-- `testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone}`（主服务）
-- `testvdb-milvus-etcd-${TESTVDB_SESSION_ID:-standalone}`（etcd 依赖）
-- `testvdb-milvus-minio-${TESTVDB_SESSION_ID:-standalone}`（MinIO 依赖）
-
-健康检查时应对 Milvus 主服务容器执行。
-
-### Step 4: 安装 Python 依赖
-
-在每个容器或宿主机中安装执行脚本所需的依赖：
-
-```bash
-# 安装 SDK（从 contract.sdk.install_command）
-pip install {sdk.package}=={sdk.version}
-
-# 安装通用依赖
-pip install requests numpy
+Write 一个简短的执行摘要到 `${SESSION_DIR}/execution_summary.txt`：
 ```
-
-**SDK 隔离原则：** 每个 DB 只安装其对应的 SDK：
-- milvus 容器只装 `pymilvus`
-- qdrant 容器只装 `qdrant-client`
-- weaviate 容器只装 `weaviate-client`
-- pgvector 容器只装 `pgvector` + `psycopg2`
-
-### Step 5: 执行测试脚本
-
-**脚本必须在 Docker 容器内执行，禁止在宿主机直接运行 Python 脚本。**
-
-对每个通过辩论的测试脚本：
-
-**执行方式选择**：
-- **优先使用方式 1（独立执行容器）**：更可靠，不依赖 DB 容器内的 Python 环境，且每次执行在干净环境中进行
-- **仅在以下情况使用方式 2（DB 容器内执行）**：方式 1 失败（如网络问题无法拉取 python:3.12-slim 镜像），且 DB 容器内已有 Python 环境
-- **方式 1 失败时自动降级**：如果 `docker run` 因镜像拉取失败或网络问题报错，自动切换到方式 2
-
-```bash
-# 设置环境变量
-export TESTVDB_DB_URL="http://localhost:{port}"
-export TESTVDB_AUTH_HEADER="{auth_header}"
-export PYTHONIOENCODING=utf-8
-
-# 创建共享网络，使执行容器能通过容器名访问 DB 容器（跨平台兼容）
-docker network create testvdb-net-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
-docker network connect testvdb-net-${TESTVDB_SESSION_ID:-standalone} testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
-
-docker run --rm --network testvdb-net-${TESTVDB_SESSION_ID:-standalone} \
-  --memory=1g --cpus=2 --memory-swap=1g --ulimit nofile=1024:1024 --timeout=600 \
-  # ^ 资源限制：内存 1GB、CPU 2 核、无交换、文件描述符上限 1024、超时 600 秒，防止单脚本耗尽宿主机资源
-  -e TESTVDB_DB_URL="http://testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}:{port}" \
-  -e PYTHONIOENCODING=utf-8 \
-  -v "${SESSION_DIR}/script_{script_id}.py:/tmp/script.py:ro" \
-  python:3.12-slim bash -c "pip install requests numpy {sdk_package} -q && python3 /tmp/script.py" \
-  2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
-echo $? > "${SESSION_DIR}/exit_code_{script_id}.txt"
-
-# 方式 2（备选）：在目标 DB 容器内执行脚本（仅当容器内有 Python 环境时可用）
-docker cp "${SESSION_DIR}/script_{script_id}.py" testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}:/tmp/script.py
-docker exec testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} python3 /tmp/script.py 2>&1 | tee "${SESSION_DIR}/output_{script_id}.log"
-echo $? > "${SESSION_DIR}/exit_code_{script_id}.txt"
-```
-
-**Windows 路径注意**：在 PowerShell 中，`${SESSION_DIR}` 使用反斜杠路径。Docker `-v` 挂载时路径会自动转换，无需手动处理。
-
-**禁止使用 `python3 script.py` 在宿主机直接执行。** 所有脚本必须通过 `docker exec` 或 `docker run` 在容器内运行。
-
-**脚本写入验证**：执行前必须确认脚本文件存在：
-```bash
-if [ ! -f "${SESSION_DIR}/script_{script_id}.py" ]; then
-  echo "ERROR: Script file not found: ${SESSION_DIR}/script_{script_id}.py" > "${SESSION_DIR}/error_{script_id}.log"
-  continue
-fi
-```
-
-**Python 语法预检**：执行前验证脚本语法有效性：
-```bash
-python3 -m py_compile "${SESSION_DIR}/script_{script_id}.py"
-if [ $? -ne 0 ]; then
-  echo "SYNTAX_ERROR: Script has invalid Python syntax" > "${SESSION_DIR}/error_{script_id}.log"
-  continue
-fi
-```
-
-**容器日志自动收集**：脚本执行失败时自动收集容器日志用于诊断：
-```bash
-# If script failed, collect container logs for diagnosis
-if [ -f "${SESSION_DIR}/exit_code_{script_id}.txt" ] && [ "$(cat ${SESSION_DIR}/exit_code_{script_id}.txt)" != "0" ]; then
-  docker logs testvdb-{target}-${TESTVDB_SESSION_ID:-standalone} --tail 100 > "${SESSION_DIR}/container_log_{script_id}.log" 2>&1
-fi
-```
-
-收集：
-- **stdout**：脚本输出（包含 PASSED/FAILED 状态）
-- **stderr**：错误输出
-- **exit code**：0 = 成功 / 非0 = 失败（测试中发现缺陷）
-- **HTTP 响应**：脚本中的 requests 调用日志
-- **容器日志**：`docker logs testvdb-{target}-standalone --tail 200`
-
-### Step 6: 判定执行结果
-
-对每个脚本的执行结果分类：
-
-| 分类 | exit code=0 含义 | exit code≠0 含义 | 缺陷类型 |
-|------|-----------------|------------------|---------|
-| A | 断言通过（DB 行为符合契约）| 脚本错误（非缺陷）| — |
-| B | 应该拒绝但接受 → Type1_IllegalSuccess | 应该拒绝且拒绝 → PASS | Type1 |
-| C | 错误消息差 → Type2_PoorDiagnostics | — | Type2 |
-| D | DB 崩溃 → Type3_RuntimeFailure | — | Type3 |
-| E | 数据不一致 → Type4_StateLogicViolation | — | Type4 |
-
-**子测试级别判定规则（防止误报）：**
-
-脚本通常包含多个子测试（多个 assert）。判定时必须区分：
-
-1. **子测试 PASS > FAIL 时**：整体标记为 PASS（多数子测试通过，仅边缘 case 失败）
-2. **子测试 FAIL > PASS 时**：整体标记为 FAIL，但只报告 FAIL 的子测试作为候选缺陷
-3. **区分"预期行为"和"缺陷"**：
-   - HTTP 4xx/5xx + 合法输入 → 潜在缺陷
-   - HTTP 200 + 非法输入 → Type1_IllegalSuccess
-   - HTTP 4xx + 非法输入 → 预期行为（不是缺陷）
-4. **不再仅靠 exit code 判定**：exit code≠0 不一定意味着缺陷，需要结合 stdout 中的具体断言失败信息判定
-
-输出格式中增加子测试详情：
-```json
-{
-  "sub_tests": [
-    {"name": "limit=0", "status": "FAIL", "detail": "Expected 4xx, got 200"},
-    {"name": "limit=-1", "status": "PASS", "detail": "Expected 4xx, got 422"},
-    {"name": "limit=1", "status": "PASS", "detail": "Expected 200, got 200"}
-  ],
-  "overall_status": "partial_defect",
-  "defect_subtests": ["limit=0"]
-}
-```
-
-### Step 7: 创建 .done 标记文件
-
-**所有输出文件写入完成后，必须创建同名 `.done` 标记文件**，用于 Orchestrator 的原子性检测：
-
-```bash
-# 对每个已执行的脚本，创建 .done 标记
-for f in "${SESSION_DIR}"/output_*.log; do
-  touch "${f}.done"
-done
-for f in "${SESSION_DIR}"/exit_code_*.txt; do
-  touch "${f}.done"
-done
-```
-
-**为什么要 .done？** Orchestrator 通过检查 `.done` 文件来确认文件写入完成。如果直接检查输出文件，可能在文件写入中途读到不完整数据。`.done` 标记是 Agent 间通信的原子性保证。
-
-### Step 8: 容器保持运行
-
-**不要清理容器**。容器必须保持运行，供后续 Judge（judge-evidence 复现验证）和 Reporter（Pre-Submit Gate 复现验证）使用。容器清理由 Orchestrator 在整轮完成后统一执行。
-
-如果需要为下一轮测试重新初始化数据库状态，可以：
-```bash
-# 仅重启 DB 容器（保留数据卷）
-docker restart testvdb-{target}-${TESTVDB_SESSION_ID}
-
-# 或清空数据后重启
-docker compose -f docker/{target}.yml down
-docker compose -f docker/{target}.yml up -d
-```
-
-### Step 9: 执行结果自检（强制）
-
-**在返回结果之前，必须执行以下验证：**
-
-1. 确认每个已执行脚本的 `output_{script_id}.log` 文件已写入 `${SESSION_DIR}/`
-2. 确认每个已执行脚本的 `exit_code_{script_id}.txt` 文件已写入 `${SESSION_DIR}/`
-3. 如果任何输出文件缺失，重新执行对应脚本或手动补写结果
-4. 确认 `execution_results` 列表非空（至少包含一个执行结果）
-
-### Step 10: 返回结果
-
-```json
-{
-  "target": "qdrant",
-  "version": "v1.13.0",
-  "execution_results": [
-    {
-      "script_id": "boundary_search_points_001",
-      "status": "defect_confirmed",
-      "defect_type": "Type1_IllegalSuccess",
-      "exit_code": 1,
-      "output_file": "output_boundary_search_points_001.log",
-      "container_logs_snippet": "...",
-      "http_status": 200,
-      "expected_http_status": 422,
-      "error_message_quality": {
-        "score": 0,
-        "max": 3,
-        "details": "No error returned"
-      }
-    }
-  ],
-  "summary": {
-    "total_scripts": 12,
-    "passed": 6,
-    "failed_defects": 4,
-    "failed_script_errors": 2
-  },
-  "docker_cleanup": "success"
-}
-```
-
----
-
-## 错误处理
-
-| 错误类型 | 重试次数 | 退避 | 失败后行为 |
-|---------|---------|------|-----------|
-| Docker daemon 未运行 | 0 | — | 致命错误，立即返回 |
-| 镜像拉取失败 | 3 | 10s | 跳过该 DB |
-| 容器启动超时 | 5 | 10s 递增 | **终止会话** |
-| 容器崩溃中执行 | 2 | — | 重启容器后继续 |
-| 脚本执行超时 | 0 | — | 标记为 TIMEOUT，继续下一个 |
-| pip 安装失败 | 2 | 5s | 尝试无版本安装，再失败则跳过 |
-
----
-
-## Proxy 支持
-
-如果 `settings.json` 中 `network.proxy` 非空：
-```bash
-export HTTP_PROXY="{proxy}"
-export HTTPS_PROXY="{proxy}"
-export NO_PROXY="localhost,127.0.0.1"
-docker build --build-arg HTTP_PROXY --build-arg HTTPS_PROXY ...
+TestVDB Execution Summary
+Target: {target} v{version}
+Session: {session_id}
+Scripts executed: N
+Exit code 0: M
+Exit code non-zero: K
 ```
 
 ---
 
 ## 约束
 
-- 永远不使用特权容器（no `--privileged`）
-- 每个数据库独立容器，不共享 volumes（除显式需要的数据卷）
-- **不负责容器清理**：执行完脚本后保持容器运行，由 Orchestrator 统一清理
-- 只安装当前 DB 的 SDK（SDK 隔离）
+- **Turn 1 MUST be the execution command。不执行任何其他操作。**
+- 固定使用 `--network container:DB` sidecar 模式
+- 执行完不清理容器——容器保持运行供后续步骤使用
+- 不分析脚本内容、不检查 Python 版本、不验证任何东西
