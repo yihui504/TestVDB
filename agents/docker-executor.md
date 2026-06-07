@@ -45,30 +45,68 @@ tools:
 
 ### Step 1 (Turn 1): 一条命令启动容器 + 执行所有脚本
 
-**直接复制粘贴执行，不要做任何修改：**
+**直接复制粘贴执行，不要做任何修改。**
+
+**架构说明：** 使用**双轨执行策略**——优先主机 Python 直接执行（Tier 1，最快），失败时回退到 Docker stdin pipe（Tier 2，无路径挂载问题）。
 
 ```bash
-# 确保容器运行
-docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" | grep -q . || docker compose -f docker/{target}.yml up -d --wait 2>/dev/null
+# ============================================================
+# Phase 1: 确保 DB 容器运行 + 检测端口和 Python
+# ============================================================
+
+# 1a. 确保容器运行
+docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" | grep -q . || \
+  docker compose -f docker/{target}.yml up -d --wait 2>/dev/null
+
+# 1b. 获取 DB 容器名（排除 etcd/minio 辅助容器）
+DB_CONTAINER=$(docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" | grep -v -E "etcd|minio" | head -1)
+[ -z "$DB_CONTAINER" ] && echo "FATAL: No DB container found" && exit 1
+echo "[Executor] DB container: $DB_CONTAINER"
+
+# 1c. 检测 DB 端口（从容器端口映射中提取）
+DB_PORT=""
+case "{target}" in
+  milvus) DB_PORT=19530 ;;
+  qdrant) DB_PORT=6333 ;;
+  weaviate) DB_PORT=8080 ;;
+  pgvector) DB_PORT=5432 ;;
+esac
+# 尝试从 docker port 获取实际映射端口（动态端口支持）
+DETECTED_PORT=$(docker port "$DB_CONTAINER" 2>/dev/null | head -1 | sed 's/\/.*//' 2>/dev/null)
+[ -n "$DETECTED_PORT" ] && DB_PORT="$DETECTED_PORT"
+echo "[Executor] DB port: $DB_PORT"
+
+# 1d. 检测 Python（优先级：py -3 > python3 > python）
+PYTHON=""
+for py_cmd in "py -3" "python3" "python"; do
+  _py=$(echo "$py_cmd" | awk '{print $1}')
+  if command -v "$_py" >/dev/null 2>&1; then
+    if $py_cmd --version >/dev/null 2>&1; then
+      PYTHON="$py_cmd"
+      break
+    fi
+  fi
+done
+if [ -n "$PYTHON" ]; then
+  echo "[Executor] Python: $PYTHON ($($PYTHON --version 2>&1)) → Tier 1 (host execution)"
+else
+  echo "[Executor] Python: NOT FOUND → Tier 2 (Docker stdin pipe)"
+  # 预拉取 Python 镜像（后台异步，避免首个脚本等待下载）
+  docker pull python:3.12-slim >/dev/null 2>&1 &
+fi
+
+# ============================================================
+# Phase 2: 执行所有脚本
+# ============================================================
 
 # 切换到会话目录
-cd ${SESSION_DIR}
+cd {SESSION_DIR} || { echo "FATAL: Cannot cd to session dir"; exit 1; }
+export TESTVDB_DB_URL="http://localhost:$DB_PORT"
 
-# 获取运行中的 DB 容器名（取最后一个，通常是主容器而非 etcd/minio）
-DB=$(docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" | grep -v -E "etcd|minio" | head -1)
-[ -z "$DB" ] && echo "FATAL: No DB container found" && exit 1
-
-# Windows path 转换（Git Bash / MSYS 环境）
-HOST_DIR=$(pwd)
-case "$(uname -s)" in
-  MINGW*|MSYS*|CYGWIN*)
-    HOST_DIR=$(cmd //c cd 2>/dev/null | sed 's/\\/\//g')
-    [ -z "$HOST_DIR" ] && HOST_DIR=$(cygpath -w "$(pwd)" 2>/dev/null | sed 's/\\/\//g')
-    ;;
-esac
-
-# 执行所有脚本（覆盖所有可能的脚本目录）
 N=1
+TOTAL_SCRIPTS=0
+
+# 2a: 子目录脚本 (boundary_scripts/, state_scripts/, scripts/)
 for dir in boundary_scripts state_scripts scripts; do
   [ ! -d "$dir" ] && continue
   for script in "$dir"/*.py; do
@@ -77,60 +115,92 @@ for dir in boundary_scripts state_scripts scripts; do
     [ "$B" = "__init__" ] && continue
     F=$(printf "%03d" $N)
     echo "[$F] $B"
-    docker run --rm --network "container:$DB" \
-      -e TESTVDB_DB_URL=http://localhost:19530 \
-      -v "$HOST_DIR/$script:/tmp/script.py:ro" \
-      python:3.12-slim \
-      bash -c "pip install -q requests 2>/dev/null; python /tmp/script.py" \
-      > output_${B}.log 2>&1
-    echo $? > exit_code_${B}.txt
-    touch output_${B}.log.done
+
+    if [ -n "$PYTHON" ]; then
+      # Tier 1: 主机 Python 直接执行（最快，无 Docker 路径问题）
+      $PYTHON "$script" > "output_${B}.log" 2>&1
+      echo $? > "exit_code_${B}.txt"
+    else
+      # Tier 2: Docker stdin pipe（无 volume mount，脚本通过 stdin 传入容器）
+      # 关键：< "$script" 将脚本内容通过 stdin 管道传入，完全避免路径挂载问题
+      cat "$script" | docker run --rm -i --network "container:$DB_CONTAINER" \
+        -e "TESTVDB_DB_URL=http://localhost:$DB_PORT" \
+        python:3.12-slim \
+        bash -c "pip install -q requests 2>/dev/null; python -" \
+        > "output_${B}.log" 2>&1
+      echo $? > "exit_code_${B}.txt"
+    fi
+
+    touch "output_${B}.log.done"
     N=$((N+1))
+    TOTAL_SCRIPTS=$((TOTAL_SCRIPTS+1))
   done
 done
 
-# 也搜索根目录下的 script_*.py（Stage 1 辩论后的标准路径）
+# 2b: 根目录 script_*.py（Stage 1 辩论后的标准路径）
 for script in script_*.py; do
   [ ! -f "$script" ] && continue
   B=$(basename "$script" .py)
   F=$(printf "%03d" $N)
   echo "[$F] $B"
-  docker run --rm --network "container:$DB" \
-    -e TESTVDB_DB_URL=http://localhost:19530 \
-    -v "$HOST_DIR/$script:/tmp/script.py:ro" \
-    python:3.12-slim \
-    bash -c "pip install -q requests 2>/dev/null; python /tmp/script.py" \
-    > output_${B}.log 2>&1
-  echo $? > exit_code_${B}.txt
-  touch output_${B}.log.done
+
+  if [ -n "$PYTHON" ]; then
+    $PYTHON "$script" > "output_${B}.log" 2>&1
+    echo $? > "exit_code_${B}.txt"
+  else
+    cat "$script" | docker run --rm -i --network "container:$DB_CONTAINER" \
+      -e "TESTVDB_DB_URL=http://localhost:$DB_PORT" \
+      python:3.12-slim \
+      bash -c "pip install -q requests 2>/dev/null; python -" \
+      > "output_${B}.log" 2>&1
+    echo $? > "exit_code_${B}.txt"
+  fi
+
+  touch "output_${B}.log.done"
   N=$((N+1))
+  TOTAL_SCRIPTS=$((TOTAL_SCRIPTS+1))
 done
 
-echo "Total: $((N-1)) scripts executed"
+echo "Total: $TOTAL_SCRIPTS scripts executed"
 ```
 
-**这是你唯一需要执行的 Bash 调用。23 个脚本在 1 个 turn 内全部执行。**
+**这是你唯一需要执行的 Bash 调用。所有脚本在 1 个 turn 内全部执行。**
 
-**⛔ 如果上面的命令执行失败（容器问题），在 Turn 2 重试。如果脚本执行成功但某些脚本返回非零 exit code，这是正常的——继续 Step 2。**
+**Tier 1 (主机 Python) vs Tier 2 (Docker stdin pipe) 的区别：**
+- Tier 1: 脚本直接在主机运行，通过 `localhost:$DB_PORT` 连接 DB — **约 0.1s/脚本**
+- Tier 2: 脚本通过 stdin 管道传入 `python:3.12-slim` 容器，通过 sidecar 网络连接 DB — **约 2s/脚本**（无路径挂载问题）
+
+**⛔ 如果上面的命令执行失败（容器未启动），在 Turn 2 重试。如果脚本执行成功但某些脚本返回非零 exit code，这是正常的——继续 Step 2。**
 
 ### Step 2 (Turn 2 或 Turn 3): 验证
 
+（工作目录已在 Step 1 中通过 `cd {SESSION_DIR}` 设置）
+
 ```bash
 echo "=== Execution Results ==="
-echo "Output files: $(ls ${SESSION_DIR}/output_*.log.done 2>/dev/null | wc -l)"
-echo "Exit code files: $(ls ${SESSION_DIR}/exit_code_*.txt 2>/dev/null | wc -l)"
+echo "Output files: $(ls output_*.log.done 2>/dev/null | wc -l)"
+echo "Exit code files: $(ls exit_code_*.txt 2>/dev/null | wc -l)"
 echo ""
 echo "=== Exit Code Summary ==="
-for f in ${SESSION_DIR}/exit_code_*.txt; do
+for f in exit_code_*.txt; do
   [ ! -f "$f" ] && continue
-  B=$(basename "$f" .txt)
+  B=$(basename "$f" .txt | sed 's/exit_code_//')
   echo "$B: $(cat "$f")"
+done
+echo ""
+echo "=== Non-Zero Exit Scripts ==="
+grep -v '^0$' exit_code_*.txt 2>/dev/null | while read line; do
+  name=$(echo "$line" | cut -d: -f1 | sed 's/exit_code_//;s/\.txt//')
+  code=$(echo "$line" | cut -d: -f2)
+  echo "  $name: exit=$code"
 done
 ```
 
 ### Step 3 (Turn 3 或 Turn 4): Write 执行摘要
 
-Write 一个简短的执行摘要到 `${SESSION_DIR}/execution_summary.txt`：
+（工作目录已在 Step 1 中设置，写入当前目录即可）
+
+Write 一个简短的执行摘要到 `execution_summary.txt`：
 ```
 TestVDB Execution Summary
 Target: {target} v{version}
@@ -145,6 +215,7 @@ Exit code non-zero: K
 ## 约束
 
 - **Turn 1 MUST be the execution command。不执行任何其他操作。**
-- 固定使用 `--network container:DB` sidecar 模式
+- **Tier 1 (主机 Python)**: 优先使用主机 Python 直接执行，通过 localhost 端口连接 DB
+- **Tier 2 (Docker stdin pipe)**: 回退方案——`docker run -i python:3.12-slim`，脚本通过 stdin 管道传入，无 volume mount，无路径转换问题
 - 执行完不清理容器——容器保持运行供后续步骤使用
-- 不分析脚本内容、不检查 Python 版本、不验证任何东西
+- 不分析脚本内容、不检查依赖、不验证任何东西——只执行

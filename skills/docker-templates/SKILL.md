@@ -69,7 +69,7 @@ docker compose -f docker/pgvector.yml up -d
 | DB | Health Endpoint | Expected |
 |----|----------------|----------|
 | Milvus | `curl -f http://localhost:9091/healthz` | `{...}`, exit 0 |
-| Qdrant | `curl -f http://localhost:6333/health` | —, exit 0 |
+| Qdrant | `curl -f http://localhost:6333/healthz` | `healthz check passed`, exit 0 |
 | Weaviate | `curl -f http://localhost:8080/v1/.well-known/ready` | —, exit 0 |
 | PGVector | `pg_isready -U postgres -d testvdb` | accepting connections |
 
