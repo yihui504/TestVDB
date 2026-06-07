@@ -102,6 +102,62 @@
       "type": "string",
       "enum": ["debug", "info", "warn", "error"],
       "default": "info"
+    },
+    "evolution": {
+      "type": "object",
+      "description": "v2.0 跨会话自进化配置",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "strategy_registry_dir": { "type": "string", "default": "strategy_registry" },
+        "max_strategies_per_injection": { "type": "integer", "minimum": 1, "maximum": 50, "default": 10 },
+        "min_confidence_for_injection": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.6 },
+        "auto_deprecate_after_failures": { "type": "integer", "minimum": 1, "maximum": 20, "default": 3 }
+      }
+    },
+    "fan_out": {
+      "type": "object",
+      "description": "v2.0 Fan-Out 并行攻击生成配置",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "seeds_per_agent": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
+        "profiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["priority_first", "coverage_gap", "rejection_pattern"]
+        }
+      }
+    },
+    "ai_failure_check": {
+      "type": "object",
+      "description": "v2.0 AI 幻觉检测 7-Mode Checklist 配置",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "halt_on": { "type": "array", "items": { "type": "string" }, "default": ["M4", "M7"] },
+        "reject_on": { "type": "array", "items": { "type": "string" }, "default": ["M2", "M3", "M6"] },
+        "rewind_on": { "type": "array", "items": { "type": "string" }, "default": ["M1", "M5"] }
+      }
+    },
+    "material_passport": {
+      "type": "object",
+      "description": "v2.0 契约完整性校验（sha256 防篡改）配置",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "hash_algorithm": { "type": "string", "enum": ["sha256"], "default": "sha256" },
+        "reject_on_tamper": { "type": "boolean", "default": true }
+      }
+    },
+    "intelligence": {
+      "type": "object",
+      "description": "v2.1 Phase 0 战略情报采集层配置。控制历史 Issue 挖掘、Bug Shape 提取和威胁模型构建。",
+      "properties": {
+        "enabled": { "type": "boolean", "default": true },
+        "cache_ttl_hours": { "type": "integer", "minimum": 0, "maximum": 8760, "default": 720 },
+        "time_window_months": { "type": "integer", "minimum": 1, "maximum": 60, "default": 24 },
+        "max_issues": { "type": "integer", "minimum": 10, "maximum": 2000, "default": 500 },
+        "max_commits": { "type": "integer", "minimum": 10, "maximum": 1000, "default": 200 },
+        "inject_to_attack_agents": { "type": "boolean", "default": true },
+        "inject_to_judge_agents": { "type": "boolean", "default": true }
+      }
     }
   }
 }

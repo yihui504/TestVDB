@@ -4,7 +4,7 @@ English | [中文](./README_zh.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Version](https://img.shields.io/badge/version-2.0.0-orange.svg)](https://github.com/yihui504/TestVDB/releases)
+[![Version](https://img.shields.io/badge/version-2.1.0-orange.svg)](https://github.com/yihui504/TestVDB/releases)
 
 **Automated Defect Mining for Vector Databases**
 
@@ -14,13 +14,13 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ---
 
-## What's New in v2.0
+## What's New in v2.1
 
-- **Fan-Out Attack Trio**: 9 concurrent agents × 3 focus profiles per type, with 3-tier deduplication
-- **Cross-Session Strategy Evolution**: Extracts mining strategies, persists to registry, auto-injects across DB targets
-- **7-Mode AI Failure Checklist**: LLM hallucination detection — 7 validation modes with halt/reject/rewind policies
-- **Material Passport**: SHA-256 hash integrity verification for structured contracts, detects tampering
-- **Data Access Level**: 4-tier permission declarations (`raw` / `redacted` / `verified_only`) on every agent
+- **Phase 0: Strategic Intelligence Layer**: Pre-mining historical defect analysis — crawls target DB GitHub repos for past issues and merged PRs, builds threat models and cognitive blindspot profiles
+- **Issue Tri-Classification**: Classifies historical issues into positive (acknowledged bugs), negative (by-design / wontfix), and invalid (no response) — extracts root cause patterns from positive samples
+- **Developer Cognitive Blindspot Model**: 5-category taxonomy (BS-01 through BS-05) mapping systemic developer oversights to attack strategies
+- **Cross-DB Bug Shape Migration**: Marks extracted bug patterns as `cross_db_applicable` for Milvus→Qdrant→Weaviate→PGVector strategy reuse
+- **3 New Agents**: `issue-miner` (raw), `bug-shape-extractor` (redacted), `threat-modeler` (redacted) — total agent fleet: 16
 
 [Full Changelog →](#whats-new-in-v20)
 
@@ -46,18 +46,19 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## How It Works
 
-TestVDB operates as a **Claude Code plugin** with a 6-phase pipeline orchestrated by 13 specialized agents:
+TestVDB operates as a **Claude Code plugin** with a 7-phase pipeline orchestrated by 16 specialized agents:
 
 ```
-Phase 1: Knowledge Extraction     -- WebSearch + WebFetch official docs
-Phase 2: Contract Formalization   -- Structured JSON contract from raw docs
-Phase 3: Attack Script Generation -- 9 concurrent agents (Fan-Out) + Stage 1 debate
-Phase 4: Sandbox Execution        -- Dual-tier execution (host Python / Docker stdin pipe)
-Phase 5: Defect Judgment          -- 4 judge agents + Stage 2 voting debate
-Phase 6: Report Generation        -- Defect reports with MRE scripts + strategy extraction
+Phase 0: Strategic Intelligence      -- Historical issue mining + bug shape extraction + threat modeling
+Phase 1: Knowledge Extraction        -- WebSearch + WebFetch official docs
+Phase 2: Contract Formalization      -- Structured JSON contract from raw docs
+Phase 3: Attack Script Generation    -- 9 concurrent agents (Fan-Out) + Stage 1 debate
+Phase 4: Sandbox Execution           -- Dual-tier execution (host Python / Docker stdin pipe)
+Phase 5: Defect Judgment             -- 4 judge agents + Stage 2 voting debate
+Phase 6: Report Generation           -- Defect reports with MRE scripts + strategy extraction
 ```
 
-The pipeline runs iteratively: each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
+The pipeline runs iteratively: each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Phase 0 intelligence (threat model + cognitive blindspots) is also injected to prioritize attack surfaces with historically high defect density. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
 
 ---
 
@@ -262,26 +263,37 @@ results/qdrant/v1.12.0/2026-06-07T15-30-00Z/
   session_metadata.json            # Session metadata
   coverage.json                    # Endpoint coverage tracking
   experience_handoff.json          # Cross-round reflection context
+
+intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB, TTL 30d)
+  issue_corpus.json                # Raw historical issue corpus
+  commit_corpus.json               # Raw historical commit/PR corpus
+  classified_issues.json           # Tri-classification results
+  bug_shapes.json                  # Extracted root cause patterns
+  developer_cognition.json         # Developer cognitive boundary analysis
+  threat_model.json                # Threat model + cognitive blindspots
 ```
 
 ---
 
 ## Architecture
 
-### Agent Fleet (13 agents)
+### Agent Fleet (16 agents)
 
 | Agent | dataAccess | Role |
 |-------|-----------|------|
 | **orchestrator** | redacted | Pipeline coordinator; dispatches all sub-agents |
+| **issue-miner** | raw | Crawls historical issues and merged PRs from target repos |
+| **bug-shape-extractor** | redacted | Tri-classifies issues (positive/negative/invalid), extracts root cause patterns |
+| **threat-modeler** | redacted | Builds threat model and cognitive blindspot model from historical data |
 | **knowledge-extractor** | raw | Crawls official docs, extracts endpoints/parameters/constraints |
-| **contract-formalizer** | raw | Converts raw knowledge into structured JSON contract with `_passport` |
+| **contract-formalizer** | redacted | Converts raw knowledge into structured JSON contract with `_passport` |
 | **attack-boundary** | redacted | Generates boundary-value attack scripts |
 | **attack-state** | redacted | Generates state-transition attack scripts |
 | **attack-semantic** | redacted | Generates semantic/logic attack scripts |
 | **docker-executor** | redacted | Dual-tier script execution (host Python / Docker stdin pipe) |
-| **judge-doc** | verified_only | Validates document reference accessibility and content consistency |
+| **judge-doc** | raw | Validates document reference accessibility and content consistency (with network verification) |
 | **judge-evidence** | verified_only | Validates evidence chain completeness |
-| **judge-novelty** | verified_only | Checks defect novelty against known issues (GitHub) |
+| **judge-novelty** | raw | Checks defect novelty via GitHub search |
 | **judge-severity** | verified_only | Assesses defect severity |
 | **reporter** | verified_only | Generates defect reports with MRE scripts |
 | **model-test** | redacted | CCSwitch tier routing verification |
@@ -313,8 +325,11 @@ Every confirmed defect is re-verified in a fresh Docker container before report 
 TestVDB/
   .claude-plugin/plugin.json      Plugin manifest (name, version, commands, agents)
   .mcp.json                       MCP server config (GitHub API)
-  agents/                         13 agent definitions
+  agents/                         16 agent definitions
     orchestrator.md
+    issue-miner.md
+    bug-shape-extractor.md
+    threat-modeler.md
     knowledge-extractor.md
     contract-formalizer.md
     attack-boundary.md
@@ -340,6 +355,7 @@ TestVDB/
     contract-schema/SKILL.md
     defect-taxonomy/SKILL.md
     docker-templates/SKILL.md
+  intelligence/                   v2.1 Strategic intelligence cache (per-DB, TTL 30d)
   contracts/                      Reference contracts & schema
     AGENTS.md
     settings_schema.json          Settings validation schema
@@ -394,6 +410,7 @@ Configuration parameters organized into sections:
 | `fan_out` | `enabled`, `seeds_per_agent`, `profiles` | Fan-Out attack dispatch (9 concurrent agents) |
 | `ai_failure_check` | `enabled`, `halt_on`, `reject_on`, `rewind_on` | 7-mode AI failure detection |
 | `material_passport` | `enabled`, `hash_algorithm`, `reject_on_tamper` | Contract hash integrity verification |
+| `intelligence` | `enabled`, `cache_ttl_hours`, `time_window_months`, `max_issues`, `max_commits`, `inject_to_attack_agents`, `inject_to_judge_agents` | v2.1 Phase 0 strategic intelligence config |
 
 ### .mcp.json
 

@@ -27,6 +27,10 @@ reviewer.log
 # Runtime output - not tracked in git
 results/
 shadow_mode_results/
+intelligence/
+
+# Large generated schema files (not source code)
+weaviate_openapi_schema.json
 
 # Contracts - runtime artifacts (crawled pages, generated JSONs)
 contracts/*_crawled_pages.json

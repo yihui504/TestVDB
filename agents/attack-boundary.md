@@ -8,7 +8,6 @@ tools:
   - Read
   - Write
   - Bash
-  - WebSearch
 ---
 
 # TestVDB Attack Agent — 边界攻击 (Boundary)

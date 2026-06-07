@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: TestVDB 缺陷挖掘流水线主编排器。协调全部12个 Agent 完成从知识提取到缺陷报告的全流程。
+description: TestVDB 缺陷挖掘流水线主编排器。协调全部 16 个 Agent 完成从战略情报采集到缺陷报告的全流程。
 model: opus
 dataAccess: redacted
 maxTurns: 120
@@ -59,16 +59,17 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 □ [Step 1] 解析参数（target, version, max_rounds, min_defects）
 □ [Step 2] 前置条件检查（Docker/Python/磁盘/网络）
 □ [Step 3] 检查缓存（raw_knowledge.md + structured_contract.json，含 TTL 计算）
+□ [Step 3.6] 如 intelligence.enabled=true：历史情报采集（issue-miner → bug-shape-extractor → threat-modeler）
 □ [Step 4] 如缓存未命中：派 Knowledge Extractor 获取文档
 □ [Step 5] 如缓存未命中：派 Contract Formalizer 生成契约
 □ [Step 6] 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）
 □ [Step 7] 初始化 mine_state.json + 设置 TESTVDB_SESSION_ID 环境变量
 □ [Step 8] 开始挖掘循环（最多 max_rounds 轮）：
-  □ 8a. 注入 reflection_context 到 Attack Agents
+  □ 8a. 注入 reflection_context + threat_model + cognitive_blindspots 到 Attack Agents
   □ 8b. 并发出动 Attack Trio（boundary + state + semantic）
   □ 8c. Orchestrator 自行执行辩论 Stage 1（交叉审查 + 去重）
   □ 8d. 派 Executor 在沙箱中执行通过辩论的脚本（容器保持运行）
-  □ 8e. 收集执行结果 → 辩论 Stage 2（Judge Quartet 分两阶段）
+  □ 8e. 收集执行结果 → 辩论 Stage 2（Judge Quartet 分两阶段，注入 judge_enhancements）
   □ 8f. 派 Reporter 为通过辩论的缺陷生成报告（含 Pre-Submit Gate 复现验证）
   □ 8g. 保存 mine_state.json + coverage.json + experience_handoff.json
   □ 8h. 分析本轮产出，生成 reflection_context
@@ -111,7 +112,8 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 执行检查脚本，验证：
 - Docker Engine 运行中
 - **Crawl4AI 网页抓取服务**：执行 `docker compose -f docker/crawl4ai.yml up -d --wait` 启动。等待 `/health` 端点返回 200。如果 Docker 不可用，警告但继续（Agent 将降级为 WebFetch）。Crawl4AI 是 WebFetch 封锁的解决方案 — 所有文档抓取优先走 Crawl4AI。
-- Python 3.9+ 可用（**Python < 3.9 为致命错误，终止会话**）
+- Python 3.9+ 可用（**Python < 3.9 为致命错误，终止会话**）。
+  - **v2.0 更新**：docker-executor 支持双轨执行（Tier 1: 主机 Python / Tier 2: Docker stdin pipe），Python 缺失时 Executor 可自动回退到 Tier 2。但 Python 仍为知识提取和脚本预处理阶段的必需依赖——缺少 Python 会阻塞 Phase 1，故保持致命错误判定。
 - Python 依赖安装：`pip install httpx html2text`（crawl_fetch.py 的降级方案依赖）
 - 磁盘剩余空间 ≥ 10GB
 - **模型兼容性**：Claude Sonnet/Opus，通过 Claude Code 原生支持。
@@ -127,6 +129,63 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 - 否则执行完整知识提取流程
 
 **TTL 过期计算**：从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取 TTL（默认 168 小时 = 7 天）。读取 `structured_contract.json` 中的 `cached_at`（ISO 8601 时间戳），计算 `当前时间 - cached_at > cache_ttl_hours`。如果 `cached_at` 字段缺失，视为缓存无效。
+
+### Step 3.6: 历史情报采集（v2.1 新增，intelligence.enabled=true 时）
+
+**⛔ 铁律：主进程只做编排，不做执行。** 本步骤的所有实质性工作通过 `Agent(subagent_type="testvdb:xxx")` 派发。
+
+如果 `intelligence.enabled=false`，跳过整个 Step 3.6。
+
+**主进程在派发以下 Agent 前，先从 settings.json 读取 intelligence 配置并提取为模板变量：**
+```bash
+python -c "
+import json
+with open('settings.json', encoding='utf-8') as f:
+    c = json.load(f).get('intelligence', {})
+print(f'INTEL_TW={c.get(\"time_window_months\", 24)}')
+print(f'INTEL_MI={c.get(\"max_issues\", 500)}')
+print(f'INTEL_MC={c.get(\"max_commits\", 200)}')
+print(f'INTEL_TTL={c.get(\"cache_ttl_hours\", 720)}')
+"
+```
+
+#### 3.6a: 检查情报缓存
+
+检查 `intelligence/{target}/threat_model.json` 是否存在且未过期（TTL = `intelligence.cache_ttl_hours`，默认 720h）。
+
+如果缓存有效 → 跳到 Step 3.6e（仅加载 threat_model 到上下文）。
+
+#### 3.6b: 派发 issue-miner（⛔ 禁止自己爬取 GitHub）
+
+```
+Agent(
+  subagent_type="testvdb:issue-miner",
+  description="采集 {target} 历史 Issues 和 Commits",
+  prompt="按照 agents/issue-miner.md 规范...target={target}, version={version}, intelligence_dir=intelligence/{target}/, time_window_months={INTEL_TW}, max_issues={INTEL_MI}, max_commits={INTEL_MC}。"
+)
+```
+
+**如果失败** → 记录警告到 error_log，跳过 3.6c/3.6d，继续 Step 4（Phase 0 非关键路径）。
+
+#### 3.6c: 派发 bug-shape-extractor
+
+```
+Agent(subagent_type="testvdb:bug-shape-extractor", ...)
+```
+
+失败 → 记录警告，继续 Step 4。
+
+#### 3.6d: 派发 threat-modeler
+
+```
+Agent(subagent_type="testvdb:threat-modeler", ...)
+```
+
+失败 → 记录警告，继续 Step 4。
+
+#### 3.6e: 加载情报摘要到上下文
+
+从 threat_model.json 提取关键字段（blindspot_count、priority_areas、top_blindspots）供后续步骤注入。
 
 ### Step 4: 派 Knowledge Extractor
 使用 Agent 工具派 knowledge-extractor agent。所有子 Agent 通过对应的 `testvdb:` 命名类型派发，Agent 定义（frontmatter 中的 tools/maxTurns/model）由插件系统自动加载。
@@ -208,7 +267,8 @@ Agent(
 
 **每轮开始前**：如果是第一轮，创建 `results/{target}/{version}/{timestamp}/` 目录结构。
 
-#### 8a. 注入 reflection_context
+#### 8a. 注入 reflection_context + threat_model + cognitive_blindspots
+
 第一轮：无 reflection_context，Attack Agents 自由探索。
 后续轮次：注入上轮 reflection_context 到 Attack Agents 的 context：
 ```json
@@ -227,6 +287,45 @@ Agent(
 ```
 
 ### v2.0 跨会话策略注入（evolution.enabled=true）
+
+### v2.1 威胁模型与认知盲点注入（intelligence.enabled=true 且 inject_to_attack_agents=true）
+
+在跨会话策略之后，追加从 Threat Model 提取的攻击优先级和认知盲点：
+
+```
+## 威胁模型与认知盲点注入（v2.1 Strategic Intelligence）
+
+### 攻击面优先级
+以下区域在当前 DB 的历史中具有最高缺陷密度，应优先攻击：
+{从 threat_model.json 的 attack_priority_map 提取的 top-5 endpoints 及其推荐攻击策略}
+
+### 开发者认知盲点
+以下盲点是开发者在该代码库中系统性遗漏的模式：
+{从 threat_model.json 的 cognitive_blindspots 提取的 top-3 blindspots}
+
+### 已知 by-design 行为（避免误报）
+{从 threat_model.json 的 defect_criteria.by_design_behaviors 提取}
+
+### 全局策略权重
+基于历史缺陷分布，建议各攻击策略权重：
+- boundary_attacks: {weight}
+- type_confusion_attacks: {weight}
+- state_consistency_attacks: {weight}
+- semantic_contract_attacks: {weight}
+```
+
+**注入条件汇总**：
+- `reflection_context != null` → 注入本轮经验
+- `evolution.enabled=true` 且 `cross_session_strategies` 有实质内容 → 注入跨会话策略
+- `intelligence.enabled=true` 且 `inject_to_attack_agents=true` 且 `threat_model.json` 存在 → 注入威胁模型与认知盲点
+
+### v2.1 Judge Agent 增强注入（intelligence.enabled=true 且 inject_to_judge_agents=true）
+
+在派发 Judge Agent 之前（Step 8e），将威胁模型的 `judge_enhancements` 部分注入到对应 Judge 的 prompt：
+
+- **judge-severity**：注入 `severity_calibration` 规则
+- **judge-novelty**：注入 `novelty_context`（最近修复的模式、已知进行中的 issue）
+- **judge-evidence**：注入 `submission_success_probability`（基于开发者历史态度预测提交成功率）
 
 在 reflection_context 之后，追加从 Strategy Registry 读取的策略：
 ```
@@ -306,16 +405,19 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
    ```bash
    SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}
    mkdir -p ${SESSION_DIR}/boundary_scripts ${SESSION_DIR}/state_scripts ${SESSION_DIR}/scripts
-   # 按脚本来源（boundary/state/semantic）复制到对应子目录
+   # 从攻击 Agent 输出目录收集脚本（非 debate_logs/——攻击 Agent 直接写入这些目录）
    # 同时保留 script_{id}.py 在根目录做兜底
-   for src in ${SESSION_DIR}/debate_logs/*.py; do
-     [ ! -f "$src" ] && continue
-     B=$(basename "$src")
-     case "$B" in
-       boundary_*) cp "$src" "${SESSION_DIR}/boundary_scripts/$B" ;;
-       state_*)    cp "$src" "${SESSION_DIR}/state_scripts/$B" ;;
-       semantic_*|*) cp "$src" "${SESSION_DIR}/scripts/$B" ;;
-     esac
+   for dir in boundary_scripts state_scripts scripts; do
+     [ ! -d "${SESSION_DIR}/${dir}" ] && continue
+     for src in "${SESSION_DIR}/${dir}"/*.py; do
+       [ ! -f "$src" ] && continue
+       B=$(basename "$src")
+       case "$B" in
+         boundary_*) cp "$src" "${SESSION_DIR}/boundary_scripts/$B" ;;
+         state_*)    cp "$src" "${SESSION_DIR}/state_scripts/$B" ;;
+         semantic_*|*) cp "$src" "${SESSION_DIR}/scripts/$B" ;;
+       esac
+     done
    done
    touch ${SESSION_DIR}/debate_logs/stage1.json.done
    ```
@@ -632,6 +734,20 @@ python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {t
 ```
 Orchestrator
   │
+  ├──▶ [Phase 0: Strategic Intelligence — v2.1 NEW]
+  │     │
+  │     ├──▶ Issue Miner ──▶ issue_corpus.json + commit_corpus.json
+  │     │                          │
+  │     ├──▶ Bug Shape Extractor ◀─┘
+  │     │           │
+  │     │           ▼
+  │     │     bug_shapes.json + classified_issues.json + developer_cognition.json
+  │     │           │
+  │     ├──▶ Threat Modeler ◀──────┘
+  │     │           │
+  │     │           ▼
+  │     │     threat_model.json (attack priorities + cognitive blindspots + judge enhancements)
+  │     │
   ├──▶ Knowledge Extractor ──▶ raw_knowledge.md
   │                                      │
   ├──▶ Contract Formalizer ◀─────────────┘
@@ -639,7 +755,7 @@ Orchestrator
   │           ▼
   │     structured_contract.json + sdk.version + available_tags
   │           │
-  ├──▶ Attack Trio (并发) ◀── contract + reflection_context
+  ├──▶ Attack Trio (并发) ◀── contract + reflection_context + threat_model + cognitive_blindspots
   │     boundary │ state │ semantic
   │           ▼
   │     test_scripts[]
@@ -654,7 +770,7 @@ Orchestrator
   │           ▼
   │     execution_results[]
   │           │
-  ├──▶ Judge Quartet (分两阶段) ◀── execution_results[]
+  ├──▶ Judge Quartet (分两阶段) ◀── execution_results[] + threat_model(judge_enhancements)
   │     Phase 1: judge-doc (文档契约验证)
   │     Phase 2: evidence │ novelty │ severity (读取 doc 结果后执行)
   │           │
@@ -684,4 +800,12 @@ results/{target}/{version}/{timestamp}/
 ├── coverage.json       # 覆盖率跟踪
 ├── session_metadata.json     # 会话元数据
 └── experience_handoff.json   # 经验交接
+
+intelligence/{target}/                # v2.1 战略情报层
+├── issue_corpus.json                 # 原始 Issue 语料
+├── commit_corpus.json                # 原始 Commit/PR 语料
+├── classified_issues.json            # 三分类结果 (positive/negative/invalid)
+├── bug_shapes.json                   # 根因模式 (root cause patterns)
+├── developer_cognition.json          # 开发者认知边界分析
+└── threat_model.json                 # 威胁模型 + 认知盲点 + 攻击优先级
 ```
