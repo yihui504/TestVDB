@@ -251,6 +251,25 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 3. 在 mine_state.json 的 error_log 中记录超时事件
 4. 如果 3 个 Attack Agent 全部超时，终止当前轮次并记录错误
 
+### v2.0 Fan-Out 模式（fan_out.enabled=true）
+
+当 Fan-Out 启用时，每个 Attack Agent 使用 3 种 focus_profile 各派发一次：
+
+| Profile | 策略 | Agent prompt 差异 |
+|---------|------|-------------------|
+| `priority_first` | 从 contract 中 severity 最高的约束开始 | 无额外指令（默认行为） |
+| `coverage_gap` | 从 coverage.json 中覆盖率最低的端点开始 | 注入 uncovered_endpoints 列表 |
+| `rejection_pattern` | 从上轮 false positive 反向推导新攻击 | 注入 rejection_patterns，"绕过已知驳回模式" |
+
+9 组脚本 → 统一汇聚 → Stage 1 去重 + 交叉审查
+
+**去重规则（3 级）：**
+1. 按 (endpoint, constraint_id, strategy) 三级去重
+2. 相同三元组 → 保留 confidence 最高的版本
+3. 跨 profile 重复检测 → 不同 seed 独立生成相同脚本 → confidence +0.1
+
+**首轮建议：** 先用 `seeds_per_agent=2` 测试，确认去重逻辑正确后再增加到 3。
+
 #### 8c. 辩论 Stage 1（自动化审查 + 去重 + 交叉审查）
 
 收集三个 Agent 产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。

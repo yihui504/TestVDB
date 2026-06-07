@@ -131,25 +131,55 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
 #### 8a. 注入 reflection_context
 第一轮：无。后续轮次：从上轮 `experience_handoff.json` 读取。
 
-#### 8b. 并发出动 Attack Trio（⛔ 禁止自己写脚本）
+#### 8b. Fan-Out Attack Trio（⛔ 禁止自己写脚本）
 
-**同时派发 3 个 Agent（并发，非顺序）：**
+**v2.0 新增 — Fan-Out 模式（fan_out.enabled=true 时）：**
+
+每个 Attack Agent 派发 `fan_out.seeds_per_agent` 次（默认 3），每次使用不同的 `focus_profile`：
+
 ```
-Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}",
-  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} focus=priority_first",
+  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}, focus_profile=priority_first")
 
-Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}",
-  prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} focus=coverage_gap",
+  prompt="按照 agents/attack-boundary.md 规范，focus_profile=coverage_gap。优先测试 coverage.json 中覆盖率最低的端点。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
 
-Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}",
-  prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} focus=rejection_pattern",
+  prompt="按照 agents/attack-boundary.md 规范，focus_profile=rejection_pattern。从上轮驳回模式反向推导新攻击，绕过已知驳回路径。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} focus=priority_first",
+  prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}, focus_profile=priority_first")
+
+Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} focus=coverage_gap",
+  prompt="按照 agents/attack-state.md 规范，focus_profile=coverage_gap。优先测试 coverage.json 中覆盖率最低的端点。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} focus=rejection_pattern",
+  prompt="按照 agents/attack-state.md 规范，focus_profile=rejection_pattern。从上轮驳回模式反向推导新攻击，绕过已知驳回路径。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} focus=priority_first",
+  prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}, focus_profile=priority_first")
+
+Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} focus=coverage_gap",
+  prompt="按照 agents/attack-semantic.md 规范，focus_profile=coverage_gap。优先测试 coverage.json 中覆盖率最低的端点。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
+
+Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} focus=rejection_pattern",
+  prompt="按照 agents/attack-semantic.md 规范，focus_profile=rejection_pattern。从上轮驳回模式反向推导新攻击，绕过已知驳回路径。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
 ```
 
-**等待全部完成后验证：**
+**9 个 Agent 全部并行派发**。超时机制不变（3 分钟无产出 → 超时）。部分超时不影响其他 seed。
+
+**汇聚与去重（fan_out.enabled=true 时）：**
 ```bash
 find results/{target}/{version}/{timestamp} -name "*.py" -type f ! -path "*/mre/*" ! -name "_stage1*" ! -name "script_*" 2>/dev/null | wc -l
 ```
-为 0 则报错终止。不为 0 则 collect 所有脚本进入 Stage 1 审查。
+为 0 则报错终止。
+
+**3 级去重（主进程自行执行）：**
+1. 按 (endpoint, constraint_id, strategy) 三元组去重
+2. 相同三元组 → 保留 confidence 最高的版本
+3. 不同 seed 独立生成相同脚本 → confidence +0.1（独立验证奖励）
+
+**如果 fan_out.enabled=false 或 seeds_per_agent=1 → 回退到 v1.x 行为（3 并发，无 focus_profile）。**
 
 #### 8c. 辩论 Stage 1（主进程自行审查——这是编排工作，可自己做）
 

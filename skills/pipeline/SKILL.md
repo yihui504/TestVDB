@@ -30,13 +30,18 @@ version: 1.1.0
 5. 输出 `structured_contract.json`
 6. 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）
 
-### Phase 3: 测试生成
+### Phase 3: 测试生成 (v2.0 Fan-Out)
 
 1. Orchestrator 并发派 Attack Trio（boundary + state + semantic）
-2. 每个 Agent 独立生成测试脚本（最多 30 个/Agent/轮）
-3. 注入 reflection_context（首轮无，后续轮包含上轮经验）
-4. 辩论 Stage 1：自动化审查（去重 + 语法验证 + 约束验证 + 跨 Agent 交叉审查）
-5. 通过脚本存入 `results/{target}/{version}/{timestamp}/script_*.py`
+2. **v2.0 Fan-Out**：每个 Agent 使用 3 种 focus_profile 各派发一次（共 9 并发）
+   - priority_first: 优先高严重性约束
+   - coverage_gap: 优先低覆盖率端点
+   - rejection_pattern: 绕过已知驳回模式
+3. 每个 Agent 独立生成测试脚本（最多 30 个/Agent/profile/轮）
+4. 注入 reflection_context + 跨会话策略（首轮无）
+5. **汇聚去重**：3 级去重（endpoint + constraint_id + strategy）
+6. 辩论 Stage 1：自动化审查（去重 + 语法验证 + 约束验证 + 跨 Agent 交叉审查）
+7. 通过脚本存入 `results/{target}/{version}/{timestamp}/script_*.py`
 
 ### Phase 4: 沙箱执行
 
