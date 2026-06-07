@@ -3,6 +3,26 @@
 
 # TestVDB
 
+## Installation
+
+```bash
+# Marketplace (recommended)
+/plugin marketplace add yihui504/TestVDB
+/plugin install testvdb@yihui504-TestVDB
+
+# Local development
+git clone https://github.com/yihui504/TestVDB.git
+claude --plugin-dir TestVDB
+```
+
+## What's New in v2.0
+
+- **跨会话自进化**: 从 Milvus 挖掘中学到的策略自动迁移到 Qdrant/Weaviate/PGVector
+- **Fan-Out Attack Trio**: 3 Agent × 3 seed = 9 并行生成流，策略多样性提升 3x
+- **7-Mode AI Failure Checklist**: Reporter 自检 7 种 LLM 幻觉模式，造假→丢弃，违规→挂起
+- **Material Passport**: 契约 sha256 防篡改 + 版本化追溯
+- **data_access_level**: Agent 数据权限声明式标记
+
 ## Purpose
 基于 LLM 的向量数据库自动化缺陷挖掘工具（Claude Code 插件）。通过自然语言契约逆向工程从官方文档提取结构化约束，结合 12 个 Agent 的 4-Judge 辩论机制，在 Docker 沙箱中自动发现向量数据库的合规性缺陷。支持 Milvus、Qdrant、Weaviate、PGVector 四种向量数据库。
 

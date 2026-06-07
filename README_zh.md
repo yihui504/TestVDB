@@ -128,6 +128,20 @@ Orchestrator
 
 ---
 
+## 安装
+
+### 方式 1: Marketplace（推荐）
+```bash
+/plugin marketplace add yihui504/TestVDB
+/plugin install testvdb@yihui504-TestVDB
+```
+
+### 方式 2: 本地开发
+```bash
+git clone https://github.com/yihui504/TestVDB.git
+claude --plugin-dir TestVDB
+```
+
 ## 快速开始
 
 ### 1. 安装 Claude Code CLI
