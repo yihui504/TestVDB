@@ -4,7 +4,7 @@ English | [中文](./README_zh.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Version](https://img.shields.io/badge/version-2.1.0-orange.svg)](https://github.com/yihui504/TestVDB/releases)
+[![Version](https://img.shields.io/badge/version-2.1.1-orange.svg)](https://github.com/yihui504/TestVDB/releases)
 
 **Automated Defect Mining for Vector Databases**
 
@@ -14,13 +14,29 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ---
 
+## What's New in v2.1.1
+
+- **Quality Hardening**: All attack scripts now use `safe_request()` pattern — zero bare API calls, zero script crashes on connection/timeout errors
+- **AST-based API Format Validation**: New `validate_api_format.py` in Stage 1 debate performs AST-level checking of attack scripts, rejecting bare `.json()` chains before execution
+- **Reporter Split**: `reporter.md` (defect reports) split from `reporter-mre.md` (MRE scripts) — separation of concerns, smaller file sizes
+- **Code Deduplication**: `_session_utils.py` shared across 7 hook/maintenance scripts, eliminating ~100 lines of duplicate `_plugin_root()` / `is_session_locked()` implementations
+- **Nested Dispatch Prohibition**: Explicit prohibition of nested agent dispatch across all agent prompts — a platform limitation discovered and codified
+- **Orchestrator Lifecycle Management**: Extracted to `orchestrator-lifecycle.md` (error handling strategy, PreCompact/PostCompact context protection, progress visibility, multi-DB parallelism)
+- **pgvector SQL Endpoint Patterns**: Completed `strategy_extractor.py` with DDL/DML/Search/Index regex patterns for SQL-based vector databases
+- **Exception Hardening**: Bare `except:` → specific exception types, `--target` missing-value validation, `.env` quote stripping
+- **Agent Fleet**: 18 agents (+ `orchestrator-lifecycle`, + `reporter-mre`), 24 scripts (+ `_session_utils.py`, + `validate_api_format.py`)
+
+[Full Changelog →](#whats-new-in-v21)
+
+---
+
 ## What's New in v2.1
 
 - **Phase 0: Strategic Intelligence Layer**: Pre-mining historical defect analysis — crawls target DB GitHub repos for past issues and merged PRs, builds threat models and cognitive blindspot profiles
 - **Issue Tri-Classification**: Classifies historical issues into positive (acknowledged bugs), negative (by-design / wontfix), and invalid (no response) — extracts root cause patterns from positive samples
 - **Developer Cognitive Blindspot Model**: 5-category taxonomy (BS-01 through BS-05) mapping systemic developer oversights to attack strategies
 - **Cross-DB Bug Shape Migration**: Marks extracted bug patterns as `cross_db_applicable` for Milvus→Qdrant→Weaviate→PGVector strategy reuse
-- **3 New Agents**: `issue-miner` (raw), `bug-shape-extractor` (redacted), `threat-modeler` (redacted) — total agent fleet: 16
+- **3 New Agents**: `issue-miner` (raw), `bug-shape-extractor` (redacted), `threat-modeler` (redacted) — total agent fleet: 18
 
 [Full Changelog →](#whats-new-in-v20)
 
@@ -28,6 +44,8 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## Table of Contents
 
+- [What's New in v2.1.1](#whats-new-in-v211)
+- [What's New in v2.1](#whats-new-in-v21)
 - [What's New in v2.0](#whats-new-in-v20)
 - [How It Works](#how-it-works)
 - [Defect Taxonomy](#defect-taxonomy)
@@ -46,19 +64,19 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## How It Works
 
-TestVDB operates as a **Claude Code plugin** with a 7-phase pipeline orchestrated by 16 specialized agents:
+TestVDB operates as a **Claude Code plugin** with a 7-phase pipeline orchestrated by 18 specialized agents:
 
 ```
 Phase 0: Strategic Intelligence      -- Historical issue mining + bug shape extraction + threat modeling
 Phase 1: Knowledge Extraction        -- WebSearch + WebFetch official docs
 Phase 2: Contract Formalization      -- Structured JSON contract from raw docs
-Phase 3: Attack Script Generation    -- 9 concurrent agents (Fan-Out) + Stage 1 debate
+Phase 3: Attack Script Generation    -- 9 concurrent agents (Fan-Out) + Stage 1 debate (inc. AST validation)
 Phase 4: Sandbox Execution           -- Dual-tier execution (host Python / Docker stdin pipe)
 Phase 5: Defect Judgment             -- 4 judge agents + Stage 2 voting debate
-Phase 6: Report Generation           -- Defect reports with MRE scripts + strategy extraction
+Phase 6: Report Generation           -- Defect reports + MRE scripts + strategy extraction
 ```
 
-The pipeline runs iteratively: each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Phase 0 intelligence (threat model + cognitive blindspots) is also injected to prioritize attack surfaces with historically high defect density. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
+The pipeline runs iteratively: each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Phase 0 intelligence (threat model + cognitive blindspots) is also injected to prioritize attack surfaces with historically high defect density. Stage 1 debate now includes AST-level API format validation. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
 
 ---
 
@@ -277,11 +295,12 @@ intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB
 
 ## Architecture
 
-### Agent Fleet (16 agents)
+### Agent Fleet (18 agents)
 
 | Agent | dataAccess | Role |
 |-------|-----------|------|
 | **orchestrator** | redacted | Pipeline coordinator; dispatches all sub-agents |
+| **orchestrator-lifecycle** | redacted | Lifecycle management: error handling, Pre/PostCompact, progress visibility (extracted from orchestrator) |
 | **issue-miner** | raw | Crawls historical issues and merged PRs from target repos |
 | **bug-shape-extractor** | redacted | Tri-classifies issues (positive/negative/invalid), extracts root cause patterns |
 | **threat-modeler** | redacted | Builds threat model and cognitive blindspot model from historical data |
@@ -295,7 +314,8 @@ intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB
 | **judge-evidence** | verified_only | Validates evidence chain completeness |
 | **judge-novelty** | raw | Checks defect novelty via GitHub search |
 | **judge-severity** | verified_only | Assesses defect severity |
-| **reporter** | verified_only | Generates defect reports with MRE scripts |
+| **reporter** | verified_only | Generates defect reports with evidence chains |
+| **reporter-mre** | verified_only | Generates self-contained MRE scripts for confirmed defects |
 | **model-test** | redacted | CCSwitch tier routing verification |
 
 ### Skills (4 skills)
@@ -325,8 +345,9 @@ Every confirmed defect is re-verified in a fresh Docker container before report 
 TestVDB/
   .claude-plugin/plugin.json      Plugin manifest (name, version, commands, agents)
   .mcp.json                       MCP server config (GitHub API)
-  agents/                         16 agent definitions
+  agents/                         18 agent definitions
     orchestrator.md
+    orchestrator-lifecycle.md
     issue-miner.md
     bug-shape-extractor.md
     threat-modeler.md
@@ -341,6 +362,7 @@ TestVDB/
     judge-novelty.md
     judge-severity.md
     reporter.md
+    reporter-mre.md
     model-test.md
   commands/mine.md                Entry command (/testvdb:mine)
   docker/                         Docker Compose templates
@@ -361,11 +383,13 @@ TestVDB/
     settings_schema.json          Settings validation schema
     pgvector_contract.json        PGVector reference contract
     weaviate_contract.json        Weaviate reference contract
-  scripts/                        Infrastructure scripts (20 scripts)
+  scripts/                        Infrastructure scripts (24 scripts)
     passport_verify.py            Material Passport hash verification
     strategy_extractor.py         Cross-session strategy extraction
     strategy_injector.py          Cross-DB strategy injection
     ai_failure_check.py           7-mode AI failure checklist
+    validate_api_format.py        AST-based API call format validation (v2.1.1)
+    _session_utils.py             Shared session utilities (v2.1.1)
     preflight.py                  Session pre-flight checks
     crawl_fetch.py                Crawl4AI web scraper (primary)
     crawl_milvus.py               Milvus-specific doc crawler
@@ -382,6 +406,10 @@ TestVDB/
     postcompact_verify.py         Post-compaction state recovery
     precompact_save.py            Pre-compaction state preservation
     retry_policy.py               Retry policy reporter
+    gen_weaviate_contract.py      Weaviate contract generation
+    validate_weaviate_contract.py Weaviate contract validation
+  docs/                           Documentation
+    reviews/                      Code review reports
   settings.json                   Plugin configuration (26+ parameters)
   AGENTS.md                       Agent orchestration rules
   THEORETICAL_FRAMEWORK.md        Research paper

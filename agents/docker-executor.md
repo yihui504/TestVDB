@@ -76,17 +76,28 @@ DETECTED_PORT=$(docker port "$DB_CONTAINER" 2>/dev/null | head -1 | sed 's/\/.*/
 [ -n "$DETECTED_PORT" ] && DB_PORT="$DETECTED_PORT"
 echo "[Executor] DB port: $DB_PORT"
 
-# 1d. 检测 Python（优先级：py -3 > python3 > python）
+# 1d. 检测 Python（跨平台兼容：python3 > python > py -3）
 PYTHON=""
-for py_cmd in "py -3" "python3" "python"; do
-  _py=$(echo "$py_cmd" | awk '{print $1}')
-  if command -v "$_py" >/dev/null 2>&1; then
-    if $py_cmd --version >/dev/null 2>&1; then
-      PYTHON="$py_cmd"
-      break
-    fi
+# 先用 which/command 检测可执行文件，避免 awk 依赖
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON="python"
+elif command -v py >/dev/null 2>&1; then
+  # Windows: "py -3" 需要 shell 解析，直接检测 py 命令
+  if py -3 --version >/dev/null 2>&1; then
+    PYTHON="py -3"
   fi
-done
+fi
+# 验证检测结果
+if [ -n "$PYTHON" ]; then
+  if $PYTHON --version >/dev/null 2>&1; then
+    : # OK
+  else
+    echo "[Executor] WARNING: Detected Python '$PYTHON' but --version failed"
+    PYTHON=""
+  fi
+fi
 if [ -n "$PYTHON" ]; then
   echo "[Executor] Python: $PYTHON ($($PYTHON --version 2>&1)) → Tier 1 (host execution)"
 else
@@ -113,7 +124,7 @@ for dir in boundary_scripts state_scripts scripts; do
     [ ! -f "$script" ] && continue
     B=$(basename "$script" .py)
     [ "$B" = "__init__" ] && continue
-    F=$(printf "%03d" $N)
+    F=$(printf "%04d" $N)
     echo "[$F] $B"
 
     if [ -n "$PYTHON" ]; then
@@ -141,7 +152,7 @@ done
 for script in script_*.py; do
   [ ! -f "$script" ] && continue
   B=$(basename "$script" .py)
-  F=$(printf "%03d" $N)
+  F=$(printf "%04d" $N)
   echo "[$F] $B"
 
   if [ -n "$PYTHON" ]; then

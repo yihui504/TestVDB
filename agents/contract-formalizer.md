@@ -387,12 +387,13 @@ tools:
 6. sdk 和 docker 信息已从 raw_knowledge.md 提取
 7. **每个 api_endpoint 都有 source_url 和 doc_version 字段**
 8. **每个 constraint 都有 source_url 字段**
-9. **source_url 回溯验证**：
+9. **source_url 回溯验证**（⛔ source_status 是条件必填字段）：
    - 从 raw_knowledge.md 中提取每个端点的 Source URL
    - 验证 source_url 与 raw_knowledge.md 中记录的 URL 一致
    - 如果 source_url 不可达（无法通过 WebFetch 访问）→ 标记 `source_status: "unreachable"`
    - 如果 source_url 可达但版本不匹配 → 标记 `source_status: "degraded"`
    - 如果 source_url 可达且版本匹配 → 标记 `source_status: "reachable"`
+   - **每个有 source_url 的 constraint/assertion/api_endpoint 都必须填写 source_status**（Schema properties 中定义但 required 中未列出 — 这是条件必填：有 source_url 就必须有 source_status）
 10. **降级搜索**：对于 `source_status: "unreachable"` 的约束，使用 WebSearch 搜索替代文档源（如 GitHub README、社区文档、Stack Overflow），找到后更新 source_url 并标记 `source_status: "degraded"`
 11. **endpoint_registry 已生成且每个条目都有 source_url 和 doc_version**
 12. **category 别名已全部映射为标准分类名**（无 vector、partition、alias 等非标准分类名）
@@ -406,7 +407,7 @@ tools:
    - `generation.knowledge_extractor_agent`: "testvdb:knowledge-extractor"
    - `generation.contract_formalizer_agent`: "testvdb:contract-formalizer"
    - `generation.generated_at`: 当前时间（ISO 8601）
-   - `generation.cache_ttl_hours`: 从 settings.json 读取的 knowledge.cache_ttl_hours
+   - `generation.cache_ttl_hours`: 从 `${PROJECT_ROOT}/settings.json` 读取的 `knowledge.cache_ttl_hours`。使用 Bash 执行 `python -c "import json,os; s=json.load(open(os.path.join(os.environ.get('PROJECT_ROOT','.'),'settings.json'))); print(s.get('knowledge',{}).get('cache_ttl_hours',168))"` 获取值。如果 `${PROJECT_ROOT}` 环境变量未设置，回退到当前工作目录。如果文件不存在或字段缺失，默认值 168。
    - `integrity.verified`: true
    - `integrity.verified_at`: 当前时间（ISO 8601）
    - `integrity.core_crud_coverage_pct`: 核心 CRUD 覆盖率百分比

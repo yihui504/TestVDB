@@ -82,7 +82,11 @@ response = requests.post(
     "http://localhost:6333/collections/{name}/points/search",
     json={"vector": [0.1]*128, "limit": 0}
 )
-assert response.status_code in (400, 422), f"Expected 4xx, got {response.status_code}"
+if response.status_code not in (400, 422):
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
+    print(f"Expected 4xx, got {response.status_code}")
+    sys.exit(1)
+# Use explicit if-check, not assert (assert is stripped by python -O)
 ```
 
 ### 策略 2: 类型边界攻击（针对 type_constraints）
@@ -172,7 +176,7 @@ if AUTH_HEADER:
 def test_boundary():
     """Test: {brief description}"""
     # Arrange
-    # TODO: setup if needed
+    # Setup: create collection, insert test data as needed
     
     # Act
     response = requests.post(

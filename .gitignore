@@ -63,3 +63,7 @@ scripts/state/
 scripts/verify/
 __pycache__/
 .ruff_cache/
+list_dir.sh
+repro_upsert_autoid.py
+tmp_ls.sh
+tmp_qdrant_openapi.json

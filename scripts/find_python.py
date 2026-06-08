@@ -27,7 +27,7 @@ for path in common_paths:
         try:
             result = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5)
             print(f"Found: {path} -> {result.stdout.strip()}")
-        except:
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
 
 # Check PATH

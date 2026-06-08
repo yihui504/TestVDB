@@ -9,6 +9,7 @@ Respects .session.lock to avoid cleaning active sessions.
 import json
 import os
 import subprocess
+from _session_utils import find_session_id, is_session_locked, _plugin_root
 
 
 BASE_CONTAINER_NAMES = [
@@ -19,62 +20,6 @@ BASE_CONTAINER_NAMES = [
     "testvdb-weaviate",
     "testvdb-pgvector",
 ]
-
-
-def _plugin_root():
-    """Determine plugin root from script location."""
-    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def find_session_id():
-    """Find TESTVDB_SESSION_ID from multiple sources.
-
-    Priority: environment variable > .env file > settings.json
-    """
-    # 1. Environment variable
-    sid = os.environ.get("TESTVDB_SESSION_ID", "")
-    if sid:
-        return sid
-
-    # 2. .env file in plugin root
-    plugin_root = _plugin_root()
-    env_path = os.path.join(plugin_root, ".env")
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("TESTVDB_SESSION_ID="):
-                        return line.split("=", 1)[1].strip()
-        except OSError:
-            pass
-
-    # 3. settings.json in plugin root
-    settings_path = os.path.join(plugin_root, "settings.json")
-    if os.path.exists(settings_path):
-        try:
-            with open(settings_path, encoding="utf-8") as f:
-                settings = json.load(f)
-            sid = settings.get("session", {}).get("session_id", "")
-            if sid:
-                return sid
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    return ""
-
-
-def is_session_locked(session_dir):
-    """Check if a session has an active .session.lock file."""
-    lock_path = os.path.join(session_dir, ".session.lock")
-    if not os.path.exists(lock_path):
-        return False
-    try:
-        with open(lock_path, encoding="utf-8") as f:
-            lock = json.load(f)
-        return lock.get("status") == "active"
-    except (json.JSONDecodeError, OSError):
-        return False
 
 
 def main():

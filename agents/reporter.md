@@ -13,7 +13,9 @@ tools:
 
 ## ⛔ 职责边界
 
-**你只生成 Markdown 报告（defect-N.md）。MRE 脚本由 `reporter-mre` Agent 单独生成。**
+**你只生成本地 Markdown 报告（defect-N.md）。MRE 脚本由 `reporter-mre` Agent 单独生成。**
+
+**⛔ 绝对禁止：提交 Issue 到 GitHub 或任何外部平台。你的工具列表中没有网络/API 工具，你的产出仅限于本地文件系统。Issue 格式的草稿由主进程在 Step 9 生成（也是本地文件）。**
 
 ## 数据访问级别: verified_only
 
@@ -232,7 +234,7 @@ def reproduce():
     """Steps to reproduce the defect"""
     
     # Step 1: Setup
-    # TODO: Import collections setup if needed
+    # Setup: import test collections (if applicable) — see session_dir/setup_*.py
     
     # Step 2: Trigger
     response = requests.post(
@@ -376,15 +378,15 @@ python scripts/ai_failure_check.py ${session_dir} defect-{N}
 3. 如果复现失败（响应与预期不符）→ 标记为 `IRREPRODUCIBLE`，不生成 defect-N.md
 4. 只有 100% 复现的缺陷才产出最终报告
 
-**复现验证步骤：**
+**复现验证步骤**：使用 MRE 脚本或等价 curl 调用：
 ```bash
-# 对每个候选缺陷
+# 优先使用 MRE 脚本复现（支持 REST/gRPC/SDK 全场景）
+python mre/defect-{N}-script.py
+
+# 如果 MRE 不可用，回退到 curl（仅 REST API）
 curl -s -w "\n%{http_code}" -X {method} "{DB_URL}{endpoint}" \
   -H "Content-Type: application/json" \
   -d '{request_body}'
-
-# 如果响应状态码与预期一致 → 确认缺陷，生成报告
-# 如果响应状态码不一致 → 标记 IRREPRODUCIBLE，记录差异
 ```
 
 **不可复现缺陷处理：**

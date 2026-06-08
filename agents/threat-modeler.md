@@ -175,9 +175,9 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
       "name": "Parameter Coercion Trust",
       "description": "开发者过度信任框架/语言的自动参数校验和类型转换能力",
       "evidence": {
-        "historical_defects": 45,
-        "representative_issues": [50018, 50019, 49930],
-        "developer_acknowledgment_rate": 0.92
+        "historical_defects": "{count from bug_shapes.json — matching root_cause_category + affected_layer}",
+        "representative_issues": "{issue IDs from developer_cognition.json — top 3 most relevant}",
+        "developer_acknowledgment_rate": "{ratio from developer_cognition.json — accepted / (accepted + rejected)}"
       },
       "typical_manifestation": "REST handler 接收参数后直接使用，无显式校验逻辑",
       "attack_strategies": ["boundary_value_attack", "type_confusion_attack", "missing_param_attack"],
@@ -191,9 +191,9 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
       "name": "Error Message Negligence",
       "description": "开发者只处理成功路径，错误消息质量未被视为质量指标",
       "evidence": {
-        "historical_defects": 18,
-        "representative_issues": [48921, 47500],
-        "developer_acknowledgment_rate": 0.45
+        "historical_defects": "{count from bug_shapes.json — matching root_cause_category + affected_layer}",
+        "representative_issues": "{issue IDs from developer_cognition.json — top 3 most relevant}",
+        "developer_acknowledgment_rate": "{ratio from developer_cognition.json — accepted / (accepted + rejected)}"
       },
       "typical_manifestation": "错误返回通用 'Internal Error' 而非具体的参数违规提示",
       "attack_strategies": ["error_quality_evaluation", "semantic_contract_violation"],
@@ -207,9 +207,9 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
       "name": "Concurrency Blindness",
       "description": "开发者系统性低估并发操作的数据一致性问题",
       "evidence": {
-        "historical_defects": 12,
-        "representative_issues": [49001, 49550],
-        "developer_acknowledgment_rate": 0.78
+        "historical_defects": "{count from bug_shapes.json — matching root_cause_category + affected_layer}",
+        "representative_issues": "{issue IDs from developer_cognition.json — top 3 most relevant}",
+        "developer_acknowledgment_rate": "{ratio from developer_cognition.json — accepted / (accepted + rejected)}"
       },
       "typical_manifestation": "并发 insert + delete 后 count 不一致",
       "attack_strategies": ["state_consistency_attack", "race_condition_exploration"],
@@ -223,9 +223,9 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
       "name": "Boundary Default Optimism",
       "description": "开发者假设用户不会输入极端值，边界处理依赖默认值兜底",
       "evidence": {
-        "historical_defects": 30,
-        "representative_issues": [49930, 50100],
-        "developer_acknowledgment_rate": 0.85
+        "historical_defects": "{count from bug_shapes.json — matching root_cause_category + affected_layer}",
+        "representative_issues": "{issue IDs from developer_cognition.json — top 3 most relevant}",
+        "developer_acknowledgment_rate": "{ratio from developer_cognition.json — accepted / (accepted + rejected)}"
       },
       "typical_manifestation": "dimension=-1 或 limit=0 被接受且产生未定义行为",
       "attack_strategies": ["boundary_value_attack", "negative_value_attack"],
@@ -239,9 +239,9 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
       "name": "Documentation Drift Blindness",
       "description": "实现变更后文档未同步更新，导致 API 行为与文档不一致",
       "evidence": {
-        "historical_defects": 8,
-        "representative_issues": [50200],
-        "developer_acknowledgment_rate": 0.60
+        "historical_defects": "{count from bug_shapes.json — matching root_cause_category + affected_layer}",
+        "representative_issues": "{issue IDs from developer_cognition.json — top 3 most relevant}",
+        "developer_acknowledgment_rate": "{ratio from developer_cognition.json — accepted / (accepted + rejected)}"
       },
       "typical_manifestation": "文档说返回 400 但实际返回 200",
       "attack_strategies": ["api_contract_validation", "behavioral_drift_detection"],

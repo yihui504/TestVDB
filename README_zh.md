@@ -4,11 +4,27 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Version](https://img.shields.io/badge/version-2.1.0-orange.svg)](https://github.com/yihui504/TestVDB/releases)
+[![Version](https://img.shields.io/badge/version-2.1.1-orange.svg)](https://github.com/yihui504/TestVDB/releases)
 
 **基于 LLM 的向量数据库自动化缺陷挖掘工具**
 
 TestVDB 以 Claude Code 插件形式运行，通过自然语言契约逆向工程从官方文档自动提取结构化约束，结合多 Agent 辩论机制在 Docker 沙箱中自动发现 Milvus、Qdrant、Weaviate、pgvector 的合规性缺陷，产出可复现、可追溯的完整证据链报告。
+
+---
+
+## v2.1.1 新特性
+
+- **质量加固**：所有攻击策略统一使用 `safe_request()` 包装器——零裸 API 调用，零连接/超时导致的脚本崩溃
+- **AST 级 API 格式验证**：新增 `validate_api_format.py`，在 Stage 1 辩论中对攻击脚本进行 AST 级别检查，执行前拒绝裸 `.json()` 链式调用
+- **Reporter 拆分**：`reporter.md`（缺陷报告）与 `reporter-mre.md`（MRE 脚本）分离——关注点分离，文件大小更合理
+- **代码去重**：`_session_utils.py` 被 7 个 hook/维护脚本共享，消除约 100 行重复的 `_plugin_root()` / `is_session_locked()` 实现
+- **嵌套派发禁令**：在所有 Agent prompt 中明确禁止嵌套 Agent 派发——这是发现并编码化的平台限制
+- **Orchestrator 生命周期管理**：提取为 `orchestrator-lifecycle.md`（错误处理策略、PreCompact/PostCompact 上下文保护、进度可见性、多 DB 并行）
+- **pgvector SQL 端点模式**：完成 `strategy_extractor.py` 中 SQL 数据库的 DDL/DML/Search/Index 正则模式
+- **异常处理加固**：裸 `except:` → 具体异常类型、`--target` 缺值验证、`.env` 引号剥离
+- **Agent 舰队**：18 个 Agent（+ `orchestrator-lifecycle`、+ `reporter-mre`），24 个脚本（+ `_session_utils.py`、+ `validate_api_format.py`）
+
+[完整更新日志 →](#v21-新特性详解)
 
 ---
 
@@ -18,7 +34,7 @@ TestVDB 以 Claude Code 插件形式运行，通过自然语言契约逆向工�
 - **Issue 三分类**：将历史 Issues 分为正样本（开发者承认的 bug）、负样本（by-design / wontfix）、无效样本（无回应），从正样本提取根因模式
 - **开发者认知盲点模型**：5 类盲点体系（BS-01 ~ BS-05），将系统性开发者疏忽映射到攻击策略
 - **跨 DB Bug Shape 迁移**：标记 Bug Shape 的 `cross_db_applicable` 属性，实现 Milvus→Qdrant→Weaviate→PGVector 的策略复用
-- **3 个新 Agent**：`issue-miner`（raw）、`bug-shape-extractor`（redacted）、`threat-modeler`（redacted）——Agent 总数：16
+- **3 个新 Agent**：`issue-miner`（raw）、`bug-shape-extractor`（redacted）、`threat-modeler`（redacted）——Agent 总数：18
 
 [完整更新日志 →](#v20-新特性详解)
 
@@ -26,6 +42,8 @@ TestVDB 以 Claude Code 插件形式运行，通过自然语言契约逆向工�
 
 ## 目录
 
+- [v2.1.1 新特性](#v211-新特性)
+- [v2.1 新特性](#v21-新特性)
 - [v2.0 新特性详解](#v20-新特性详解)
 - [项目概述](#项目概述)
 - [缺陷分类体系](#缺陷分类体系)
@@ -264,11 +282,12 @@ claude --plugin-dir .
 
 ## 架构设计
 
-### Agent 体系（16 个 Agent）
+### Agent 体系（18 个 Agent）
 
 | Agent | dataAccess | 职责 |
 |-------|-----------|------|
 | **orchestrator** | redacted | 主编排器，协调全部子 Agent 完成流水线 |
+| **orchestrator-lifecycle** | redacted | 生命周期管理：错误处理、Pre/PostCompact、进度可见性（从 orchestrator 提取） |
 | **issue-miner** | raw | 爬取目标仓库历史 Issues 和已合并 PR，构建原始缺陷语料库 |
 | **bug-shape-extractor** | redacted | 对历史 Issues 三分类（positive/negative/invalid），提取根因模式和开发者认知边界 |
 | **threat-modeler** | redacted | 基于历史缺陷数据构建威胁模型和认知盲点模型，指导攻击优先级 |
@@ -282,7 +301,8 @@ claude --plugin-dir .
 | **judge-evidence** | verified_only | 证据审查，判定缺陷证据可信度 |
 | **judge-novelty** | raw | 新颖性审查，通过 GitHub 搜索判定缺陷是否为已知问题 |
 | **judge-severity** | verified_only | 严重性评估，判定缺陷影响等级 |
-| **reporter** | verified_only | 生成缺陷报告和汇总文档 |
+| **reporter** | verified_only | 生成缺陷报告（含三环证据链） |
+| **reporter-mre** | verified_only | 为确认的缺陷生成自包含 MRE 脚本 |
 | **model-test** | redacted | CCSwitch 模型路由验证 |
 
 ### Skill 体系（4 个 Skill）
@@ -340,8 +360,9 @@ Orchestrator
 TestVDB/
   .claude-plugin/plugin.json      插件清单（名称、版本、命令、Agent）
   .mcp.json                       MCP 服务器配置（GitHub API）
-  agents/                         16 个 Agent 定义文件
+  agents/                         18 个 Agent 定义文件
     orchestrator.md
+    orchestrator-lifecycle.md
     issue-miner.md
     bug-shape-extractor.md
     threat-modeler.md
@@ -356,6 +377,7 @@ TestVDB/
     judge-novelty.md
     judge-severity.md
     reporter.md
+    reporter-mre.md
     model-test.md
   commands/mine.md                入口命令（/testvdb:mine）
   docker/                         Docker Compose 模板
@@ -376,11 +398,13 @@ TestVDB/
     settings_schema.json          配置验证 Schema
     pgvector_contract.json        PGVector 参考契约
     weaviate_contract.json        Weaviate 参考契约
-  scripts/                        基础设施脚本（20 个）
+  scripts/                        基础设施脚本（24 个）
     passport_verify.py            Material Passport 哈希验证
     strategy_extractor.py         跨会话策略提取
     strategy_injector.py          跨 DB 策略注入
     ai_failure_check.py           7 模式 AI 故障检查
+    validate_api_format.py        AST 级 API 调用格式验证（v2.1.1）
+    _session_utils.py             共享会话工具函数（v2.1.1）
     preflight.py                  会话预检
     crawl_fetch.py                Crawl4AI 网页抓取器（主方案）
     crawl_milvus.py               Milvus 专用文档爬虫
@@ -397,6 +421,10 @@ TestVDB/
     postcompact_verify.py         压缩后状态恢复
     precompact_save.py            压缩前状态保存
     retry_policy.py               重试策略报告
+    gen_weaviate_contract.py      Weaviate 契约生成
+    validate_weaviate_contract.py Weaviate 契约验证
+  docs/                           文档
+    reviews/                      代码审查报告
   settings.json                   插件配置（26+ 可配置参数）
   AGENTS.md                       Agent 编排规则
   THEORETICAL_FRAMEWORK.md        理论框架论文
