@@ -73,6 +73,28 @@ python scripts/preflight.py
 docker compose -f docker/crawl4ai.yml up -d --wait 2>/dev/null || true
 ```
 
+**v2.2 新增 — 自动压缩检查**：多轮流水线会产生大量上下文，需确保 Claude Code 的自动压缩已开启：
+
+```bash
+python -c "
+import json, sys, os
+settings_path = os.path.expanduser('~/.claude/settings.json')
+try:
+    with open(settings_path, encoding='utf-8') as f:
+        s = json.load(f)
+    if s.get('autoCompactEnabled'):
+        print('[Preflight] autoCompactEnabled: OK')
+    else:
+        print('[Preflight] autoCompactEnabled: MISSING — 多轮流水线可能因上下文溢出而中断')
+        print('[Preflight] 建议: 在 ~/.claude/settings.json 中设置 \"autoCompactEnabled\": true')
+        sys.exit(0)  # 不阻断，仅警告
+except FileNotFoundError:
+    print('[Preflight] ~/.claude/settings.json 不存在，跳过 autoCompact 检查')
+except json.JSONDecodeError:
+    print('[Preflight] settings.json 格式错误，跳过 autoCompact 检查')
+"
+```
+
 ### Step 3: 缓存检查
 检查 `results/{target}/{version}/structured_contract.json` 是否存在且未过期（TTL 见 settings.json 的 `knowledge.cache_ttl_hours`，默认 168h）。如果缓存有效 → 跳到 Step 6。
 
@@ -422,15 +444,26 @@ find results/{target}/{version}/{timestamp} -name "*.py" -type f ! -path "*/mre/
    "
    ```
    标记输出中的 `RISKY_SCRIPT`，在后续执行日志中优先检查这些脚本的 SCRIPT_ERROR。
-6. 审查结果写入 `debate_logs/stage1.json`
-7. 将通过审查的脚本复制到标准路径
+
+6. **v2.2 新增 — API 调用格式结构化验证（AST 级别）**
+   用 AST 检测脚本是否使用 `safe_request()` 包装 API 调用，拒绝裸 `.json()` 链式调用：
+   ```bash
+   python scripts/validate_api_format.py "results/{target}/{version}/{timestamp}"
+   ```
+   **判定**：裸 `.json()` 链式调用 → **REJECT**（直接丢弃脚本）。`safe_request` 定义但未调用 → **REJECT**。**裸 `.json()` 被拒绝的脚本需从后续步骤中排除。**
+
+7. 审查结果写入 `debate_logs/stage1.json`
+8. 将通过审查的脚本复制到标准路径
 
 #### 8d. 派 Docker Executor（⛔ 禁止自己运行脚本）
+
+**⛔ 所有子 Agent prompt 末尾必须包含嵌套派发禁令（详见 `agents/orchestrator.md` 顶部执行模型变更）。**
+
 ```
 Agent(
   subagent_type="testvdb:docker-executor",
   description="执行 {target} v{version} 攻击脚本",
-  prompt="按照 agents/docker-executor.md 规范，在 Docker 沙箱中执行攻击脚本。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, session_id={session_id}。⛔ 立即执行 Step 1 命令，不要分析、不要检查、不要读取脚本内容。脚本位于 SESSION_DIR 下的 boundary_scripts/、state_scripts/、scripts/ 子目录和 script_*.py 文件中。所有脚本已通过语法验证，无需再检查。"
+  prompt="按照 agents/docker-executor.md 规范，在 Docker 沙箱中执行攻击脚本。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, session_id={session_id}。⛔ 立即执行 Step 1 命令，不要分析、不要检查、不要读取脚本内容。脚本位于 SESSION_DIR 下的 boundary_scripts/、state_scripts/、scripts/ 子目录和 script_*.py 文件中。所有脚本已通过语法验证，无需再检查。\n\n你是 TestVDB 流水线中被主进程派发的子 Agent。禁止使用 Agent 工具派发孙 Agent — 插件体系不支持嵌套派发，调用会静默失败。所有产出必须通过 Write/Bash/Read 工具直接完成。"
 )
 ```
 **等待完成后验证：** `ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l`，为 0 则报错终止。
@@ -497,9 +530,16 @@ print(json.dumps({'errored_count': len(errored), 'scripts': errored}, indent=2, 
 
    3c. **重新执行修复后的脚本**：
    ```bash
-   py -3 {session_dir}/{type}_scripts/{script_base}.py > {session_dir}/output_{script_base}.log 2>&1
-   echo $? > {session_dir}/output_{script_base}.log.exit
-   touch {session_dir}/output_{script_base}.log.done
+   # 使用 Docker Executor 统一执行（不绕过沙箱）
+   SCRIPT_PATH="{session_dir}/{type}_scripts/{script_base}.py"
+   # 优先使用已检测的 PYTHON，带引号防注入
+   if [ -n "$PYTHON" ]; then
+     "$PYTHON" "$SCRIPT_PATH" > "{session_dir}/output_{script_base}.log" 2>&1
+   else
+     python3 "$SCRIPT_PATH" > "{session_dir}/output_{script_base}.log" 2>&1 || python "$SCRIPT_PATH" > "{session_dir}/output_{script_base}.log" 2>&1
+   fi
+   echo $? > "{session_dir}/output_{script_base}.log.exit"
+   touch "{session_dir}/output_{script_base}.log.done"
    ```
 
    3d. **检查修复结果**：再次扫描修复后的日志。如果仍有 SCRIPT_ERROR → 第 2 轮打回。最多 2 轮，2 轮后仍失败 → 标记 `UNFIXABLE`，跳过该脚本。
@@ -548,6 +588,55 @@ echo "severity: $(test -f results/{target}/{version}/{timestamp}/debate_logs/sta
 
 **投票逻辑和缺陷确认规则见 `agents/orchestrator.md` Step 8e。**
 
+#### 8e.5 缺陷去重（v2.2 新增 — 防止同一根因的多个缺陷重复报告）
+
+**主进程在派发 Reporter 之前，必须对 confirmed_defects 执行去重。** 去重维度：
+
+1. **同 endpoint + 同 defect_type 去重**：相同端点、相同缺陷类型的多个候选 → 合并为单个缺陷，列出所有 reproduction scenario
+2. **跨轮次去重**：与本 session 前几轮已确认的缺陷比较，相同 root cause → 丢弃（记录到 `dedup_log.json`）
+3. **合并规则**：合并后的缺陷保留最高 severity，evidence 取 AND（所有场景的证据合并）
+
+去重脚本（主进程执行）：
+```bash
+python -c "
+import json, os
+session_dir = 'results/{target}/{version}/{timestamp}'
+# 加载本轮 confirmed
+with open(f'{session_dir}/debate_logs/stage2_aggregation.json') as f:
+    current = json.load(f)
+# 加载历史 confirmed（如果存在）
+history_file = f'{session_dir}/../dedup_state.json'
+history = []
+if os.path.exists(history_file):
+    with open(history_file) as f:
+        history = json.load(f).get('confirmed', [])
+
+# 去重逻辑
+seen = set()
+deduped = []
+for d in current.get('defects', []):
+    key = (d.get('endpoint',''), d.get('type',''))
+    if key in seen:
+        continue
+    # 跨轮检查
+    is_dup = False
+    for h in history:
+        if (h.get('endpoint',''), h.get('type','')) == key:
+            is_dup = True
+            break
+    if not is_dup:
+        seen.add(key)
+        deduped.append(d)
+
+print(f'Before dedup: {len(current.get(\"defects\",[]))}, After: {len(deduped)}')
+# 写入去重后列表
+with open(f'{session_dir}/debate_logs/stage2_deduped.json', 'w') as f:
+    from datetime import datetime, timezone
+    json.dump({'defects': deduped, 'deduped_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}, f, indent=2)
+"
+```
+**如果去重后数量为 0** → 本轮无新缺陷，跳过 Reporter，直接进入 8g。
+
 #### 8f. 派 Reporter（⛔ 禁止自己生成报告）
 ```
 Agent(
@@ -558,25 +647,61 @@ Agent(
 ```
 **等待完成后验证：** `ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -l`
 
+#### 8f.5 逐缺陷全面审查（v2.2 新增 — 每轮末尾逐条审核）
+
+**⛔ 铁律：主进程只做编排，不做执行。** 本步骤通过 `Agent(subagent_type="testvdb:judge-evidence")` 对 Reporter 产出逐条审查。
+
+对每个 `defect-N.md`，审查以下维度：
+1. **证据链完整性**：Ring 1（契约引用）、Ring 2（文档引用）、Ring 3（执行日志）是否齐全
+2. **严重性校准**：基于实际执行日志重新确认 severity 是否合理
+3. **脚本错误排除**：检查原始日志是否包含 SCRIPT_ERROR 标记
+4. **假阳性识别**：对比日志中的 VERDICT 行和 defect 报告的声称
+
+审查脚本（主进程执行）：
+```bash
+python scripts/verify_defects.py "results/{target}/{version}/{timestamp}"
+```
+产出 `defect-review.md`，标记每个缺陷为 CONFIRMED / FALSE_POSITIVE / NEEDS_IMPROVEMENT。
+
+**审查不通过的处理**：
+- FALSE_POSITIVE → 删除对应 defect-N.md
+- NEEDS_IMPROVEMENT → 打回 Reporter 重写（最多 1 次）
+- 全部通过 → 继续 8g
+
 #### 8g-8i: 保存状态、分析产出、检查终止条件
 主进程自行完成：保存 `mine_state.json` + `coverage.json` + `experience_handoff.json`，分析本抡产出，检查终止条件（连续5轮无新缺陷 / 覆盖率≥95% / max_rounds 达到 / min_defects 达到）。
+
+> **上下文压缩**：Claude Code 内置自动压缩 + `autoCompactEnabled: true`。PreCompact hook（`testvdb-pre-compact.js`）自动保存状态，PostCompact hook（`testvdb-post-compact.js`）自动注入恢复提示。流水线无需暂停，自动压缩后主进程从磁盘恢复继续执行。
 
 #### 8j: 轮次间容器管理
 继续下一轮 → `docker restart`。终止 → `docker compose down -v`。
 
-### Step 9: 生成汇总 + 清理
-- 生成 `summary.md`
+### Step 9: 生成 Issue 草稿 + 汇总 + 清理
+
+#### 9a. 生成 Issue 草稿（v2.2 新增 — 本地 MD 文件，不上传 GitHub）
+
+**⛔ 绝对禁止：主进程或任何 Agent 直接提交 Issue 到 GitHub。所有产出仅限本地文件系统。**
+
+对每个通过 8f.5 审查的缺陷，生成独立的 GitHub Issue 格式草稿：
+
+```bash
+mkdir -p results/{target}/{version}/{timestamp}/issues
+```
+
+每个 issue 草稿文件 `issues/issue-{N}-{slug}.md` 包含：
+- Title: `Bug: {简短描述}`
+- Description, Version, Steps to Reproduce, Expected Behavior, Actual Behavior, Impact, Environment
+- 关联的 MRE 脚本路径
+- 底部标注 `🤖 Generated with [Claude Code](https://claude.com/claude-code)`（本地草稿，需人工审核后手动提交）
+
+#### 9b. 生成 `summary.md` + `defect-review.md`
+
+#### 9c. 清理
 
 **v2.0 新增 — 策略提取（evolution.enabled=true 时）：**
 
-本轮挖掘结束后，提取经验至 Strategy Registry：
 ```bash
 python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {target}
-```
-
-检查输出中的 `extracted` 和 `merged` 计数，在 stdout 日志中输出：
-```
-[Step 9] Strategy extraction: N new strategies extracted, M existing strategies updated
 ```
 - 清理 Docker 容器和网络
 - 更新 `.session.lock` status 为 `completed`
@@ -596,11 +721,19 @@ python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {t
 
 ```
 results/{target}/{version}/{timestamp}/
-├── defects/defect-1.md
-├── mre/defect-1-script.py
-├── summary.md
-├── debate_logs/stage1.json
-├── debate_logs/stage2.json
+├── defects/defect-1.md              # Reporter 产出的详细报告
+├── mre/defect-1-script.py           # 自包含可复现脚本
+├── issues/issue-1-batch-atomicity.md # GitHub Issue 格式草稿（本地，不提交）
+├── defect-review.md                  # 8f.5 逐缺陷审查结果
+├── summary.md                        # 会话汇总
+├── debate_logs/
+│   ├── stage1.json
+│   ├── stage2_aggregation.json
+│   ├── stage2_deduped.json           # 8e.5 去重后结果
+│   ├── stage2_doc.json
+│   ├── stage2_evidence.json
+│   ├── stage2_novelty.json
+│   └── stage2_severity.json
 ├── structured_contract.json
 ├── mine_state.json
 ├── coverage.json

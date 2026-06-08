@@ -33,6 +33,9 @@ coverage.json, mine_state.json, strategy_registry/*.json）。
 >
 > `testvdb:orchestrator` agent 类型保留用于未来平台能力就绪时恢复自治模式。
 >
+> **⛔ 嵌套派发禁令（v2.2 新增）：** 主进程派发的每个子 Agent prompt 末尾必须包含：
+> `你是 TestVDB 流水线中被主进程派发的子 Agent。禁止使用 Agent 工具派发孙 Agent — 插件体系不支持嵌套派发，调用会静默失败。所有产出必须通过 Write/Bash/Read 工具直接完成。`
+>
 > **主进程执行时遵循的核心铁律：只编排，不执行。所有实质性工作必须通过
 > `Agent(subagent_type="testvdb:xxx")` 派发给对应子 Agent。**
 
@@ -395,6 +398,12 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 2. **自动去重**：按 `endpoint + constraint_id + strategy` 组合去重，只保留 confidence 最高的脚本。高 confidence（≥0.7）且无重复的脚本直接通过
 3. **语法验证**：对每个脚本执行 `python -m py_compile` 验证语法，语法错误直接丢弃
 4. **约束存在性验证**：检查脚本的 constraint_id 是否在 structured_contract.json 中存在，不存在的直接丢弃
+4.5. **v2.2 新增 — API 调用格式 AST 验证**：对通过语法验证的脚本，用 Python `ast` 模块检测 API 调用格式：
+   - 裸 `.json()` 链式调用（`requests.post(...).json()["key"]` 等）→ **REJECT**（必现 SCRIPT_ERROR）
+   - `safe_request` 定义但从未调用 → **REJECT**（欺骗性代码）
+   - 全部使用 `safe_request()` 或等效安全包装 → **PASS**
+   
+   具体执行脚本见 `commands/mine.md` Step 8c 第 6 步。
 5. **跨 Agent 交叉审查**：对跨 Agent 重复的脚本（相同 endpoint+constraint 被多个 Attack Agent 独立生成），比较各 Agent 的实现：
    - 各 Agent 使用不同测试值/策略 → 选择覆盖最广的版本
    - 各 Agent 使用相同测试值 → 保留 confidence 最高的版本
@@ -407,6 +416,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
    mkdir -p ${SESSION_DIR}/boundary_scripts ${SESSION_DIR}/state_scripts ${SESSION_DIR}/scripts
    # 从攻击 Agent 输出目录收集脚本（非 debate_logs/——攻击 Agent 直接写入这些目录）
    # 同时保留 script_{id}.py 在根目录做兜底
+   # v2.2: 脚本统一存放在按来源命名的子目录中，不再复制到根目录（避免 Executor 重复扫描）
    for dir in boundary_scripts state_scripts scripts; do
      [ ! -d "${SESSION_DIR}/${dir}" ] && continue
      for src in "${SESSION_DIR}/${dir}"/*.py; do
@@ -419,13 +429,14 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
        esac
      done
    done
+   # Executor 只扫描子目录，不再扫描根目录的 script_*.py 兜底文件
    touch ${SESSION_DIR}/debate_logs/stage1.json.done
    ```
 
 **审查判定规则**：
-- confidence ≥ 0.7 且无重复且语法正确且约束存在 → **直接通过**
+- confidence ≥ 0.7 且无重复且语法正确且约束存在且 API 格式通过 → **直接通过**
 - confidence < 0.7 或有重复 → 详细审查后决定 approve / reject
-- 语法错误或约束不存在 → **直接丢弃**
+- 语法错误、约束不存在、裸 `.json()` 链式调用 → **直接丢弃**
 
 辩论日志写入 `debate_logs/stage1.json`。**Orchestrator 使用 Write 工具写入此文件**，将审查结果序列化为 JSON 后写入 `results/{target}/{version}/{timestamp}/debate_logs/stage1.json`。
 
@@ -476,6 +487,12 @@ echo "severity: $(test -f results/{target}/{version}/{timestamp}/debate_logs/sta
 ```
 如果任一 Judge 计数为 0，**禁止 Orchestrator 自己做 Judge 判断**，必须在 error_log 中记录缺失的 Judge 名称。**⛔ 绝对禁止 Orchestrator 自己执行 WebSearch 或代码审查来替代 Judge。如果 Judge 失败，缺失的 Judge 投 not_defect（保守策略）。**
 
+**平局处理规则（v2.2 新增）**：
+- evidence 2:2 平局 → 投 `not_defect`（保守策略：证据不足不确认）
+- severity 分歧（同一缺陷两个不同 severity）→ 取**中位数**（如 High+Medium+High → High）
+- judge-doc 超时 → 视为 DOC_UNVERIFIED，不调节权重（等同 DOC_VERIFIED，不降级）
+- novelty 超时 → 全部标记 `unknown`，投 `is_defect`（不因网络问题丢弃缺陷）
+
 **交叉审查规则（防止自评偏见）：**
 - 每个 Judge Agent 独立审查全部执行结果，不得参考其他 Judge 的投票
 - Judge Quartet 四票独立投票，无作者-审查者角色冲突
@@ -504,6 +521,17 @@ evidence 和 severity 按 is_defect/not_defect 投票，novelty 永远投 is_def
 
 辩论日志写入 `debate_logs/stage2.json`（含 stage2_doc.json 的文档验证结果）。
 
+#### 8e.5 缺陷去重（v2.2 新增 — 防止同一根因的多个缺陷重复报告）
+
+**主进程在派发 Reporter 之前，必须对 confirmed_defects 执行跨轮次去重。**
+
+去重维度：
+1. **同 endpoint + 同 defect_type** → 合并为单个缺陷，保留所有 reproduction scenario
+2. **跨轮次去重** → 与 `dedup_state.json` 中历史确认的缺陷比较，相同 root cause 丢弃
+3. **合并规则**：合并后保留最高 severity，证据取 AND
+
+产出 `debate_logs/stage2_deduped.json`。去重后数量为 0 → 本轮无新缺陷，跳过 Reporter。
+
 #### 8f. 派 Reporter
 **必须使用 Agent 工具派生 reporter 子 agent**：
 
@@ -522,6 +550,17 @@ ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -
 - **Ring 4（源代码引用）**：如果缺陷涉及特定代码路径，必须包含 github_url
 
 **Pre-Submit Gate 复现验证**：Reporter 必须对每个确认的缺陷执行复现验证（详见 agents/reporter.md 的 Pre-Submit Gate 章节），只有 100% 复现的缺陷才产出最终报告。
+
+#### 8f.5 逐缺陷全面审查（v2.2 新增 — 每轮末尾逐条审核 Reporter 产出）
+
+**⛔ 铁律：主进程只做编排。** 主进程执行 `python scripts/verify_defects.py` 对每个 defect-N.md 审查：
+1. 证据链完整性（Ring 1/2/3 是否齐全）
+2. 严重性校准（基于执行日志重新确认）
+3. 脚本错误排除（检查 SCRIPT_ERROR 标记）
+4. 假阳性识别（VERDICT 行 vs 报告声称）
+
+产出 `defect-review.md`，标记每个缺陷 CONFIRMED / FALSE_POSITIVE / NEEDS_IMPROVEMENT。
+FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Reporter 重写（最多 1 次）。
 
 #### 8g. 保存状态
 每轮结束保存 mine_state.json + coverage.json + experience_handoff.json + pipeline_state.json。
@@ -640,15 +679,24 @@ python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {t
 - **继续下一轮**：重启 DB 容器以重置状态（`docker restart testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}`），保留数据卷
 - **终止循环**：执行完整清理（`docker compose -f docker/{target}.yml down -v`），释放所有资源
 
-### Step 9: 汇总报告 + 强制容器清理
-1. 生成 `summary.md` 汇总报告
-2. **强制容器清理**：执行以下命令清理所有本次会话创建的 Docker 容器和网络：
+### Step 9: Issue 草稿 + 汇总报告 + 强制容器清理
+
+**⛔ 绝对禁止：主进程或任何 Agent 直接提交 Issue 到 GitHub 仓库。所有产出仅限本地文件系统。**
+
+1. **生成 Issue 格式草稿**（v2.2 新增）：
+   ```bash
+   mkdir -p results/{target}/{version}/{timestamp}/issues
+   ```
+   对每个通过 8f.5 审查的 CONFIRMED 缺陷，生成 `issues/issue-{N}-{slug}.md`，包含完整的 Bug Report 格式（Title, Description, Version, Steps to Reproduce, Expected/Actual Behavior, Impact, Environment, MRE path）。底部标注"本地草稿，需人工审核后手动提交"。
+
+2. 生成 `summary.md` + `defect-review.md` 汇总报告
+3. **强制容器清理**：执行以下命令清理所有本次会话创建的 Docker 容器和网络：
    ```bash
    docker compose -f docker/{target}.yml down -v --remove-orphans
    docker network rm testvdb-net-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
    ```
-3. 验证清理完成：`docker ps --filter "name=testvdb-{target}" --format "{{.Names}}"` 应无输出
-4. 更新 `.session.lock` 的 status 为 `completed`
+4. 验证清理完成：`docker ps --filter "name=testvdb-{target}" --format "{{.Names}}"` 应无输出
+5. 更新 `.session.lock` 的 status 为 `completed`
 
 ### 僵局处理（连续5轮无新缺陷时触发）
 1. 派生 Knowledge Extractor 重新搜索文档变更 + 新 issue + 社区讨论
@@ -664,68 +712,9 @@ python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {t
 
 ---
 
-## 错误处理
+## 生命周期管理
 
-### 分级策略
-| 错误类型 | 重试次数 | 退避策略 | 失败后行为 |
-|---------|---------|---------|-----------|
-| Docker 启动 | 5 | 10s 递增 | **终止会话** |
-| 脚本执行 | 5 | 3s 递增 | 跳过该脚本 |
-| 文档抓取 | 5 | 5s 递增 | 跳过该端点 |
-| LLM 格式不合法 | 5 | 即时 | 降级为低置信度标记 |
-
-所有错误记录到 error_log.json → session 结束汇总到 session_metadata.json。
-
----
-
-## PreCompact / PostCompact 上下文保护
-
-### PreCompact
-当 Claude Code 发出 PreCompact 信号时（上下文即将压缩）：
-1. 保存 mine_state.json + coverage.json + 当前轮次辩论日志到磁盘
-2. 标记 pipeline_state 为当前阶段
-3. 记录 next_action 指向下一步
-
-### PostCompact
-上下文压缩后恢复时：
-1. 从磁盘重新读取 mine_state.json + coverage.json + 辩论日志
-2. 通过 reflection_context 恢复关键发现和下一轮策略
-3. 从 pipeline_state.next_action 继续执行
-
----
-
-## 进度可见性
-
-### stdout 实时日志
-每轮开始/结束、缺陷发现时即时输出到 stdout：
-```
-[Round 1/5] Starting Test Generation...
-[Round 1/5] Attack Trio: 3 agents dispatched
-[Round 1/5] Debate Stage 1: 12/15 scripts passed (3 rejected)
-[Round 1/5] Executor: 12 scripts running in sandboxes...
-[Round 1/5] Execution complete: 6 passed, 4 failed, 2 error
-[Round 1/5] Debate Stage 2: 2 defects confirmed (DataCorruption×1, StateLogicViolation×1)
-[Round 1/5] DEFECT FOUND: DataCorruption in /collections/{name} (confidence=0.92)
-```
-
-### mine_state.json
-持久化状态文件，随时查看进度。
-
-### Monitors（独立守护进程）
-- Docker 崩溃监控：检测容器异常退出，自动触发恢复
-- 结果目录监控：检测新缺陷文件生成，触发通知
-
----
-
-## 多DB并行建议
-
-本 Orchestrator 每次只处理一个 DB。如需同时挖掘多个 DB，用户应开多个终端窗口并行执行：
-```bash
-# Terminal 1
-/testvdb:mine milvus v2.4.0
-# Terminal 2
-/testvdb:mine qdrant v1.13.0
-```
+> 错误处理、上下文压缩保护、进度可见性、多 DB 并行 — 详见 `agents/orchestrator-lifecycle.md`。
 
 ---
 

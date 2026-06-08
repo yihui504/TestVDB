@@ -51,10 +51,10 @@ DB_ENDPOINT_PATTERNS = {
         "index": None,
     },
     "pgvector": {
-        "collection": None,
-        "points": None,
-        "search": None,
-        "index": None,
+        "collection": r"(?:CREATE|DROP|ALTER)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(\w+)",
+        "points": r"INSERT\s+INTO\s+\w+",
+        "search": r"SELECT.*\bORDER\s+BY\b.*<=>",
+        "index": r"CREATE\s+INDEX\s+\w+\s+ON\s+\w+\s+USING\s+(?:ivfflat|hnsw)",
     },
 }
 
@@ -101,13 +101,38 @@ def classify_endpoint(endpoint: str) -> str:
 
 
 def generalize_endpoint(endpoint: str, source_db: str) -> str:
-    """将 DB 特定端点泛化为抽象模式"""
-    patterns = DB_ENDPOINT_PATTERNS.get(source_db, {})
-    for _category, pattern in patterns.items():
-        if pattern:
-            pass
-    category = classify_endpoint(endpoint)
-    return f"{{db}}.{category}.{{endpoint}}"
+    """将 DB 特定端点泛化为抽象模式。
+
+    匹配规则（按优先级）：
+    1. 精确前缀匹配（如 milvus /v2/vectordb/collections → {db}.collections.{op}）
+    2. 通配符模式匹配（如 qdrant /collections/{name}/points/search）
+    3. 回退：按 HTTP 方法 + 路径段数分类
+    """
+    # 标准化：去掉前导/后缀斜杠，小写
+    ep = endpoint.strip("/").lower()
+
+    # 提取操作类型（最后一个路径段中的动词）
+    segments = ep.split("/")
+    operation = segments[-1] if segments else "unknown"
+    if "{" in operation or "}" in operation:
+        # 最后一段是参数，取倒数第二段
+        operation = segments[-2] if len(segments) >= 2 else "unknown"
+
+    # 提取资源类型（倒数第二段或第一个有意义的段）
+    resource = "unknown"
+    for seg in reversed(segments[:-1]):
+        if "{" not in seg and "}" not in seg and seg not in ("v1", "v2", "api", "rest"):
+            resource = seg
+            break
+
+    # 泛化端点中的所有 UUID/ID 占位符
+    ep_generalized = re.sub(
+        r'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}',
+        '{id}', ep
+    )
+    ep_generalized = re.sub(r'/[0-9]+/', '/{id}/', ep_generalized)
+
+    return f"{{db}}.{resource}.{operation}({ep_generalized[:60]})"
 
 
 def extract_strategy_from_defect(defect: dict, session_dir: str) -> dict:

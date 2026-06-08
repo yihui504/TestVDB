@@ -109,7 +109,10 @@ touch ${SESSION_DIR}/debate_logs/stage2_novelty.json.done
 
 ## 约束
 
-- novelty 永远投 `is_defect`（新颖性不影响缺陷确认，只附加元数据）
+- novelty 投票规则（v2.2 修正）：
+  - `new` / `new_similar` → 投 `is_defect`
+  - `already_reported` / `known_wontfix` → 投 `not_defect`（已有人报告，不再重复提交）
+  - `unknown`（网络不可用）→ 投 `is_defect`（保守策略，不因网络问题丢弃缺陷）
 - 如果 MCP GitHub 工具不可用 → 用 WebSearch fallback
 - 如果网络不可用 → 全部标记为 `unknown`
 - 每搜完一个缺陷立即更新文件（增量写入，不等全部完成）

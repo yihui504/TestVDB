@@ -81,6 +81,8 @@
   },
   "intelligence": {
     "enabled": true,
+    "base_dir": "intelligence",
+    "_base_dir_comment": "历史情报数据根目录（相对于 PROJECT_ROOT）。默认 intelligence/，可改为绝对路径。",
     "cache_ttl_hours": 720,
     "_cache_ttl_hours_comment": "历史缺陷情报缓存 TTL（30 天 = 720 小时）。issue-miner + bug-shape-extractor + threat-modeler 的产出缓存。设置为 0 禁用缓存。注意：此为 DB 级别缓存（intelligence/{target}/），与版本无关的 knowledge cache（168h，results/{target}/{version}/）互补使用。",
     "time_window_months": 24,

@@ -65,25 +65,51 @@ tools:
 
 针对每条 behavioral_contract，验证其预期行为：
 
-**示例：contract 规定 "创建后30秒内应可搜索"**
-```python
-import time
+**所有示例使用 `safe_request()` 包装器——禁止裸 `.json()["result"]` 链式调用：**
 
-# Create collection + insert points
-response = requests.put(f"{BASE_URL}/collections/test", json={...})
-assert response.status_code == 200
+```python
+import time, json, requests
+
+def safe_request(method, path, **kwargs):
+    """安全的 HTTP 请求包装器——处理非 JSON 响应、连接失败、超时"""
+    try:
+        resp = requests.request(method, f"{BASE_URL}{path}", timeout=10, **kwargs)
+        try:
+            body = resp.json()
+        except (json.JSONDecodeError, ValueError):
+            body = resp.text
+        return resp.status_code, body
+    except requests.exceptions.ConnectionError:
+        return 0, "CONNECTION_REFUSED"
+    except requests.exceptions.Timeout:
+        return 0, "TIMEOUT"
+
+# --- Behavioral Contract 示例 ---
+# contract 规定 "创建后30秒内应可搜索"
+status, body = safe_request("PUT", "/collections/test", json={...})
+if status != 200:
+    print(f"VERDICT: SCRIPT_ERROR — setup failed: {status}")
+    sys.exit(2)
 
 # Insert immediately
-response = requests.put(f"{BASE_URL}/collections/test/points", 
-                        json={"points": [{"id": 1, "vector": [0.1]*128}]})
+status, body = safe_request("PUT", "/collections/test/points",
+                            json={"points": [{"id": 1, "vector": [0.1]*128}]})
 
 # Search within 1 second (should be visible per contract)
 time.sleep(1)
-response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                        json={"vector": [0.1]*128, "limit": 1})
-results = response.json()["result"]
-assert len(results) > 0, \
-    f"BehavioralViolation: Point should be searchable immediately after insert"
+status, body = safe_request("POST", "/collections/test/points/search",
+                            json={"vector": [0.1]*128, "limit": 1})
+if isinstance(body, dict):
+    results = body.get("result", [])
+    if len(results) == 0:
+        print("VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
+        print("Point should be searchable immediately after insert")
+        sys.exit(1)
+    else:
+        print("VERDICT: NO_DEFECT")
+else:
+    print(f"VERDICT: SCRIPT_ERROR — Non-JSON response: {str(body)[:200]}")
+    sys.exit(2)
 ```
 
 ### 策略 2: 错误诊断质量 (Type-2) 专项测试
@@ -94,15 +120,16 @@ assert len(results) > 0, \
 - 可操作的修复建议
 
 ```python
-def check_error_quality(response, expected_param, expected_hint=None):
+def check_error_quality(status, body, expected_param):
     """
     Type-2 diagnosis quality rubric:
     - Must mention the parameter name
     - Should indicate correct format
     - Bonus: actionable suggestion
+    
+    注意：body 可能为 dict（JSON）或 str（非 JSON），需先判断类型
     """
-    body = response.json()
-    error_msg = json.dumps(body).lower()
+    error_msg = json.dumps(body).lower() if isinstance(body, dict) else str(body).lower()
     
     score = 0
     max_score = 3
@@ -130,13 +157,16 @@ def check_error_quality(response, expected_param, expected_hint=None):
 
 ```python
 # Contract says: "limit must be a positive integer"
-# Test legitimate values:
+# Test legitimate values using safe_request:
 legit_values = [1, 5, 10, 100, 1000]
 for limit in legit_values:
-    response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                            json={"vector": [0.1]*128, "limit": limit})
-    assert response.status_code == 200, \
-        f"Type1_IllegalRejection: limit={limit} should be accepted but got {response.status_code}"
+    status, body = safe_request("POST", "/collections/test/points/search",
+                                json={"vector": [0.1]*128, "limit": limit})
+    if status != 200:
+        print(f"VERDICT: DEFECT_FOUND (Type1_IllegalRejection)")
+        print(f"limit={limit} should be accepted but got status={status}, body={str(body)[:200]}")
+        sys.exit(1)
+print("VERDICT: NO_DEFECT")
 ```
 
 ### 策略 4: 隐式类型转换
@@ -145,27 +175,38 @@ for limit in legit_values:
 
 ```python
 # Test: string "100" instead of integer 100
-response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                        json={"vector": [0.1]*128, "limit": "100"})
+status, body = safe_request("POST", "/collections/test/points/search",
+                            json={"vector": [0.1]*128, "limit": "100"})
 # Should either reject (strict typing) or correctly parse (documented behavior)
 # Should NOT silently misinterpret
+if status == 200:
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
+    print(f"String '100' accepted as integer limit without validation")
+    sys.exit(1)
 
 # Test: float 5.0 instead of integer 5
-response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                        json={"vector": [0.1]*128, "limit": 5.0})
+status, body = safe_request("POST", "/collections/test/points/search",
+                            json={"vector": [0.1]*128, "limit": 5.0})
+if status == 200:
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
+    print(f"Float 5.0 accepted as integer limit without validation")
+    sys.exit(1)
 
 # Test: boolean true instead of 1
-response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                        json={"vector": [0.1]*128, "limit": True})
+status, body = safe_request("POST", "/collections/test/points/search",
+                            json={"vector": [0.1]*128, "limit": True})
+if status == 200:
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
+    print(f"Boolean true accepted as integer limit without validation")
+    sys.exit(1)
+print("VERDICT: NO_DEFECT")
 ```
 
 ### 策略 5: 搜索语义正确性
 
-测试搜索结果的语义正确性：
+测试搜索结果的语义正确性（使用 safe_request 包装所有 API 调用）：
 
 ```python
-import numpy as np
-
 def test_search_correctness():
     """Verify search returns correct nearest neighbors"""
     # Insert known vectors
@@ -177,18 +218,27 @@ def test_search_correctness():
     ]
     
     for id, vec in vectors:
-        requests.put(f"{BASE_URL}/collections/test/points",
-                    json={"points": [{"id": id, "vector": vec}]})
+        status, body = safe_request("PUT", "/collections/test/points",
+                                    json={"points": [{"id": id, "vector": vec}]})
+        if status not in (200, 201, 204):
+            print(f"VERDICT: SCRIPT_ERROR — insert failed for {id}: {status}")
+            sys.exit(2)
     
     # Search with origin vector
     query = [0.0]*128
-    response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                            json={"vector": query, "limit": 3})
-    results = response.json()["result"]
+    status, body = safe_request("POST", "/collections/test/points/search",
+                                json={"vector": query, "limit": 3})
+    if not isinstance(body, dict) or "result" not in body:
+        print(f"VERDICT: SCRIPT_ERROR — unexpected response: {str(body)[:200]}")
+        sys.exit(2)
+    results = body["result"]
     
     # The closest should be id_origin, then id_close
-    assert results[0]["id"] == "id_origin", \
-        f"SearchSemanticError: Expected 'id_origin' first, got '{results[0]['id']}'"
+    if results[0]["id"] != "id_origin":
+        print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
+        print(f"Expected 'id_origin' first, got '{results[0]['id']}'")
+        sys.exit(1)
+    print("VERDICT: NO_DEFECT")
 ```
 
 ### 策略 6: Metamorphic 关系测试
@@ -202,14 +252,21 @@ def test_search_consistency():
     query1 = [0.1] * 128       # List
     query2 = {"values": [0.1]*128}  # Dict (if supported)
     
-    resp1 = requests.post(f"{BASE_URL}/collections/test/points/search",
-                         json={"vector": query1, "limit": 5})
-    resp2 = requests.post(f"{BASE_URL}/collections/test/points/search",
-                         json={"vector": query2, "limit": 5})
+    status1, body1 = safe_request("POST", "/collections/test/points/search",
+                                  json={"vector": query1, "limit": 5})
+    status2, body2 = safe_request("POST", "/collections/test/points/search",
+                                  json={"vector": query2, "limit": 5})
     
-    ids1 = [r["id"] for r in resp1.json()["result"]]
-    ids2 = [r["id"] for r in resp2.json()["result"]]
-    assert ids1 == ids2, f"MetamorphicViolation: Different query formats gave different results"
+    if not isinstance(body1, dict) or not isinstance(body2, dict):
+        print(f"VERDICT: SCRIPT_ERROR — Non-JSON response")
+        sys.exit(2)
+    ids1 = [r["id"] for r in body1.get("result", [])]
+    ids2 = [r["id"] for r in body2.get("result", [])]
+    if ids1 != ids2:
+        print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
+        print(f"Different query formats gave different results: {ids1} vs {ids2}")
+        sys.exit(1)
+    print("VERDICT: NO_DEFECT")
 ```
 
 ### 策略 7: 过滤参数语义正确性
@@ -223,26 +280,33 @@ def test_filter_semantics():
         {"id": 2, "vector": [0.1]*128, "payload": {"category": "B", "score": 20}},
         {"id": 3, "vector": [0.1]*128, "payload": {"category": "A", "score": 30}},
     ]
+    for item in data:
+        status, body = safe_request("PUT", "/collections/test/points",
+                                    json={"points": [item]})
     
     # Filter by category "A"
-    response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                            json={
-                                "vector": [0.1]*128,
-                                "limit": 10,
-                                "filter": {"must": [{"key": "category", "match": {"value": "A"}}]}
-                            })
-    results = response.json()["result"]
-    assert len(results) == 2, f"FilterSemanticError: Expected 2 results for category A"
+    status, body = safe_request("POST", "/collections/test/points/search", json={
+        "vector": [0.1]*128, "limit": 10,
+        "filter": {"must": [{"key": "category", "match": {"value": "A"}}]}
+    })
+    if not isinstance(body, dict) or "result" not in body:
+        print(f"VERDICT: SCRIPT_ERROR — unexpected response")
+        sys.exit(2)
+    if len(body["result"]) != 2:
+        print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
+        print(f"Expected 2 results for category A, got {len(body['result'])}")
+        sys.exit(1)
     
     # Filter by score > 15
-    response = requests.post(f"{BASE_URL}/collections/test/points/search",
-                            json={
-                                "vector": [0.1]*128,
-                                "limit": 10,
-                                "filter": {"must": [{"key": "score", "range": {"gt": 15}}]}
-                            })
-    results = response.json()["result"]
-    assert len(results) == 2, f"FilterSemanticError: Expected 2 results for score > 15"
+    status, body = safe_request("POST", "/collections/test/points/search", json={
+        "vector": [0.1]*128, "limit": 10,
+        "filter": {"must": [{"key": "score", "range": {"gt": 15}}]}
+    })
+    if isinstance(body, dict) and len(body.get("result", [])) != 2:
+        print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
+        print(f"Expected 2 results for score > 15, got {len(body.get('result', []))}")
+        sys.exit(1)
+    print("VERDICT: NO_DEFECT")
 ```
 
 ---

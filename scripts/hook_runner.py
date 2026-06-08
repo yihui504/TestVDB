@@ -47,18 +47,24 @@ def main():
         print("[TestVDB hook_runner] ERROR: No target script specified", file=sys.stderr)
         sys.exit(1)
 
-    target_script = sys.argv[1]
-    python_cmd = find_python()
+    target_script = os.path.abspath(sys.argv[1])
+    if not os.path.exists(target_script):
+        print(f"[TestVDB hook_runner] ERROR: Script not found: {target_script}", file=sys.stderr)
+        sys.exit(1)
 
+    python_cmd = find_python()
+    # Set cwd to script's directory so relative imports work
+    script_dir = os.path.dirname(target_script)
     cmd = python_cmd + [target_script] + sys.argv[2:]
+
     try:
-        result = subprocess.run(cmd, timeout=30)
+        result = subprocess.run(cmd, timeout=30, cwd=script_dir)
         sys.exit(result.returncode)
     except subprocess.TimeoutExpired:
         print(f"[TestVDB hook_runner] TIMEOUT: {target_script}", file=sys.stderr)
         sys.exit(2)
-    except FileNotFoundError:
-        print(f"[TestVDB hook_runner] ERROR: Script not found: {target_script}", file=sys.stderr)
+    except (FileNotFoundError, PermissionError, OSError) as e:
+        print(f"[TestVDB hook_runner] ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
 
