@@ -75,7 +75,7 @@ tools:
 | 0 | 0 | 按约束定 | Type1_IllegalSuccess |
 | 负数 | -1, -100 | 按约束定 | Type1_IllegalSuccess |
 
-**生成示例**（qdrant limit 参数，contract 要求 "limit > 0"）：
+**生成示例**（limit 类参数，contract 要求 "limit > 0"）：
 ```python
 # Test: limit = 0 (should be rejected)
 response = requests.post(

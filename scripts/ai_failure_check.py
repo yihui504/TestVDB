@@ -8,7 +8,7 @@
   python scripts/ai_failure_check.py <session_dir> <defect_id>
 
 输入:
-  SESSION_DIR: 会话目录（e.g., results/qdrant/v1.13.0/2026-06-07T14-00-00Z）
+  SESSION_DIR: 会话目录（e.g., results/{target}/{version}/{timestamp}）
   defect_id: 缺陷标识（e.g., defect-001）
 
 输出 (stdout):

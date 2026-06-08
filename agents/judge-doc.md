@@ -80,7 +80,7 @@ docker compose -f docker/crawl4ai.yml up -d
 3. HTTP 200/301/302 → 可达
 4. HTTP 404/5xx → 不可达
 5. 无 source_url → 标记为 `no_source_url`
-6. **WebFetch 降级策略**：如果 Crawl4AI 和 curl 均因网络限制失败（如 milvus.io 域名被阻止），尝试以下降级方案：
+6. **WebFetch 降级策略**：如果 Crawl4AI 和 curl 均因网络限制失败（如目标文档域名被阻止），尝试以下降级方案：
    - 用 WebSearch 搜索 `{source_url} site:{domain}` 确认页面存在
    - 用 WebFetch 尝试访问（仅作为最后手段）
    - 如果以上均失败，标记为 `domain_blocked`，不视为 FAIL，降级为 PARTIAL

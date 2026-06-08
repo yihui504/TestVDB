@@ -3,10 +3,11 @@ name: judge-evidence
 description: 证据审查 Agent — 按可复现性、隔离性和完整性标准审查缺陷证据。
 model: sonnet
 dataAccess: verified_only
-maxTurns: 10
+maxTurns: 15
 tools:
   - Write
   - Bash
+  - Read
 ---
 
 # TestVDB Judge Agent — 证据审查 (Evidence)
@@ -24,22 +25,17 @@ tools:
 
 ---
 
-## ⛔ 你没有 Read 工具。用 Bash 获取所有数据。
-
-**你只有 Write 和 Bash。这意味着：**
-- 读文件 → `cat` 或 `grep`（Bash）
-- 写文件 → Write
-
-**唯一正确执行路径（2 个 turn）：**
+## ⛔ 强制执行路径（2 个 turn 内完成）
 
 ```
-Turn 1: Bash  cat ${SESSION_DIR}/debate_logs/stage2_doc.json
-Turn 1: Bash  grep -E "(FAILED|FAIL:|VIOLATION|PASSED)" ${SESSION_DIR}/output_*.log | head -50
+Turn 1: Read  ${SESSION_DIR}/debate_logs/candidate_digest.json
+Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_doc.json
 Turn 2: Write ${SESSION_DIR}/debate_logs/stage2_evidence.json
 Turn 2: Bash  touch ${SESSION_DIR}/debate_logs/stage2_evidence.json.done
 ```
 
-**Turn 3 之前必须完成。你没有 Read 工具可以逐个读文件——这正是设计意图。用 grep 一次搞定。**
+**只审查 candidate_digest.json 中 severity=critical/high 的 Top-5 候选。
+Turn 3 之前必须完成。预消化摘要已包含所有必要信息，不需要再读原始日志。**
 
 ---
 
@@ -67,6 +63,7 @@ Turn 2: Bash  touch ${SESSION_DIR}/debate_logs/stage2_evidence.json.done
 - 同一脚本触发多个 FAILED 模式 → 取最高的判定
 - 同一 endpoint 多脚本间结果矛盾 → 标注为 `flaky`，grade 降为 C
 - 如果 stage2_doc.json 中 defect_id 不存在 → 不在 votes 中输出该条目
+- **脚本错误检测（CRITICAL）**：日志包含 `TypeError`、`AttributeError`、`'str' object has no attribute`、`SCRIPT_ERROR` → 判定为 `script_error`（非数据库缺陷），vote=`not_defect`，grade=D，rationale 注明"脚本自身错误，非数据库缺陷"
 
 ---
 

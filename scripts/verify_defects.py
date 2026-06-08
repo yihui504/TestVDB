@@ -48,7 +48,9 @@ def get_collection_details(name):
 
 print("=" * 70)
 print("TestVDB Defect Verification Script")
-print("Target: Milvus v2.6.16 REST API v2")
+target = os.environ.get("TESTVDB_TARGET", "unknown")
+version = os.environ.get("TESTVDB_VERSION", "unknown")
+print(f"Target: {target} v{version}")
 print("=" * 70)
 
 results = {}

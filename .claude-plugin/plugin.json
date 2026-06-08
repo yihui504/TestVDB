@@ -1,15 +1,26 @@
 {
   "name": "testvdb",
   "displayName": "TestVDB - Vector Database Defect Miner",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "基于 LLM 的向量数据库自动化缺陷挖掘工具。支持 Milvus/Qdrant/Weaviate/PGVector 四种向量数据库，通过自然语言契约逆向工程从官方文档提取结构化约束，结合多 Agent 辩论机制在 Docker 沙箱中自动发现合规性缺陷。",
   "author": {
     "name": "TestVDB",
     "url": "https://github.com/yihui504/TestVDB"
   },
   "license": "MIT",
-  "keywords": ["vector-database", "defect-mining", "milvus", "qdrant", "weaviate", "pgvector", "testing", "quality-assurance"],
-  "commands": ["./commands/mine.md"],
+  "keywords": [
+    "vector-database",
+    "defect-mining",
+    "milvus",
+    "qdrant",
+    "weaviate",
+    "pgvector",
+    "testing",
+    "quality-assurance"
+  ],
+  "commands": [
+    "./commands/mine.md"
+  ],
   "agents": [
     "./agents/orchestrator.md",
     "./agents/knowledge-extractor.md",
@@ -26,6 +37,7 @@
     "./agents/judge-severity.md",
     "./agents/judge-doc.md",
     "./agents/reporter.md",
+    "./agents/reporter-mre.md",
     "./agents/model-test.md"
   ],
   "mcpServers": "./.mcp.json",
