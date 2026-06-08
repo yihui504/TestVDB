@@ -229,15 +229,15 @@ def main():
     extracted = 0
     merged = 0
 
+    global_path = os.path.join(REGISTRY_DIR, "global_strategies.json")
+    global_reg = load_json(global_path)
+
     for defect in key_findings:
         strategy = extract_strategy_from_defect(defect, session_dir)
         strategy["origin"]["db"] = target_db
         strategy["origin"]["session_id"] = exp.get("session_id", "unknown")
         strategy["origin"]["version"] = exp.get("version", "unknown")
         strategy["origin"]["defect_id"] = defect.get("defect_id", "unknown")
-
-        global_path = os.path.join(REGISTRY_DIR, "global_strategies.json")
-        global_reg = load_json(global_path)
 
         existing = None
         for gs in global_reg.get("strategies", []):

@@ -174,7 +174,7 @@ site:github.com/{owner}/{repo}/issues bug label:bug
         }
       ],
       "linked_prs": [12345, 12346],
-      "milestone": "v2.6.18",
+      "milestone": "{milestone}",
       "url": "https://github.com/{owner}/{repo}/issues/{number}"
     }
   ]

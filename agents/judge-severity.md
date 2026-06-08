@@ -3,10 +3,11 @@ name: judge-severity
 description: 严重性评估 Agent — 按照四类标准评估缺陷的严重程度和用户影响。
 model: sonnet
 dataAccess: verified_only
-maxTurns: 6
+maxTurns: 12
 tools:
   - Read
   - Write
+  - Bash
 ---
 
 # TestVDB Judge Agent — 严重性评估 (Severity)
@@ -27,15 +28,18 @@ tools:
 
 ## ⛔ 唯一正确执行路径（违反即失败）
 
-**你只需要做 2 件事：**
+**你只需要做 3 件事：**
 
 ```
+Turn 1: Read  ${SESSION_DIR}/debate_logs/candidate_digest.json
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_doc.json
 Turn 2: Write ${SESSION_DIR}/debate_logs/stage2_severity.json
-Turn 2: touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done
+Turn 2: Bash  touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done
 ```
 
-**Turn 3 之前必须完成。不需要读日志，不需要WebSearch，不需要Bash。**
+**只评估 candidate_digest.json 中的 Top-5 候选（按 severity 排序）。
+Turn 3 之前必须完成。不要读日志，不要 WebSearch。
+写完 JSON 后必须立即 touch .done 文件。**
 
 ---
 

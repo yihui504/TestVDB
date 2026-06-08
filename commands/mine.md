@@ -402,8 +402,28 @@ find results/{target}/{version}/{timestamp} -name "*.py" -type f ! -path "*/mre/
 2. 自动去重（endpoint + constraint_id + strategy）
 3. 语法验证（`python -m py_compile`）
 4. 约束存在性验证（constraint_id 在 contract 中存在）
-5. 审查结果写入 `debate_logs/stage1.json`
-6. 将通过审查的脚本复制到标准路径
+5. **v2.1.1 脚本错误启发式检测（⛔ 关键——防止脚本错误被误判为数据库缺陷）**
+   对每个脚本执行静态检测：
+   ```bash
+   python -c "
+   import os, glob
+   session_dir = 'results/{target}/{version}/{timestamp}'
+   error_patterns = [\"'str' object has no attribute 'get'\", 'TypeError', 'AttributeError',
+       \"json.decoder.JSONDecodeError\", 'KeyError:', 'IndexError:']
+   for f in glob.glob(f'{session_dir}/**/*.py', recursive=True):
+       with open(f, encoding='utf-8', errors='replace') as fh:
+           content = fh.read()
+       for pat in error_patterns:
+           if pat.lower() in content.lower():
+               # 检查是否有对应的健壮处理
+               if 'safe_request' not in content and 'try:' not in content:
+                   print(f'RISKY_SCRIPT: {f} contains {pat} without error handling')
+                   break
+   "
+   ```
+   标记输出中的 `RISKY_SCRIPT`，在后续执行日志中优先检查这些脚本的 SCRIPT_ERROR。
+6. 审查结果写入 `debate_logs/stage1.json`
+7. 将通过审查的脚本复制到标准路径
 
 #### 8d. 派 Docker Executor（⛔ 禁止自己运行脚本）
 ```
@@ -414,6 +434,80 @@ Agent(
 )
 ```
 **等待完成后验证：** `ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l`，为 0 则报错终止。
+
+#### 8d.5 打回修改机制（v2.1.1 新增 — 替代静态分析）
+
+**目标：不再丢弃脚本错误，而是打回给 Attack Agent 修复后重新执行。**
+
+1. **扫描脚本错误**（主进程执行）：
+```bash
+python -c "
+import os, glob, json
+session_dir = 'results/{target}/{version}/{timestamp}'
+errored = []
+for log_path in sorted(glob.glob(f'{session_dir}/output_*.log')):
+    with open(log_path, encoding='utf-8', errors='replace') as f:
+        content = f.read()
+    is_se = any(x.lower() in content.lower() for x in [
+        \"'str' object has no attribute 'get'\", 'TypeError', 'AttributeError',
+        'SCRIPT_ERROR', 'KeyError:', 'json.decoder.JSONDecodeError'
+    ])
+    if is_se:
+        base = os.path.basename(log_path).replace('output_', '').replace('.log', '')
+        # Extract the last 10 lines as error context
+        lines = [l.strip() for l in content.split(chr(10)) if l.strip()]
+        error_context = chr(10).join(lines[-10:])
+        errored.append({'script_base': base, 'log': os.path.basename(log_path), 'error': error_context[:500]})
+
+print(json.dumps({'errored_count': len(errored), 'scripts': errored}, indent=2, ensure_ascii=False))
+"
+```
+
+2. **如果 errored_count = 0** → 跳过打回修改，直接进入 Step 8e。
+
+3. **如果 errored_count > 0** → 对每个出错脚本执行打回修改（最多 2 轮）：
+
+   3a. **识别脚本来源**：从脚本文件名判断 attack 类型
+   - `boundary_*` → `testvdb:attack-boundary`
+   - `state_*` → `testvdb:attack-state`
+   - `semantic_*` → `testvdb:attack-semantic`
+
+   3b. **派发打回修改 Agent**（⛔ 禁止自己修改脚本）：
+   ```
+   Agent(
+     subagent_type="testvdb:attack-{type}",
+     description="打回修改 {script_base}",
+     prompt="## 打回修改任务
+
+你的脚本 {script_base}.py 在执行时发生了 Python 错误（非数据库缺陷）。
+
+错误日志:
+```
+{error_context}
+```
+
+请根据错误日志修复脚本。常见修复：
+- 用 safe_request() 包装所有 HTTP 调用
+- 检查 .json() 返回值类型再调用 .get()
+- 添加 try/except 捕获 json.JSONDecodeError
+- 修复后脚本末尾打印 VERDICT: DEFECT_FOUND / NO_DEFECT / SCRIPT_ERROR
+
+直接 Write 修复后的脚本到原路径: {session_dir}/{type}_scripts/{script_base}.py")
+   ```
+
+   3c. **重新执行修复后的脚本**：
+   ```bash
+   py -3 {session_dir}/{type}_scripts/{script_base}.py > {session_dir}/output_{script_base}.log 2>&1
+   echo $? > {session_dir}/output_{script_base}.log.exit
+   touch {session_dir}/output_{script_base}.log.done
+   ```
+
+   3d. **检查修复结果**：再次扫描修复后的日志。如果仍有 SCRIPT_ERROR → 第 2 轮打回。最多 2 轮，2 轮后仍失败 → 标记 `UNFIXABLE`，跳过该脚本。
+
+4. **记录打回修改统计**：
+```
+[Step 8d.5] Reject-and-Revise: N scripts errored, M fixed, K unfixable after 2 rounds
+```
 
 #### 8e. 辩论 Stage 2 — 派 Judge Quartet + Fallback
 

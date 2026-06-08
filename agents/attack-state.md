@@ -245,3 +245,38 @@ For pgvector: VACUUM → Verify count unchanged
 - 优先攻击 confidence ≥ 0.7 的状态约束和 state_invariants
 - 如果 reflection_context.exhausted_endpoints 包含某端点，跳过
 - 并发测试使用 threading 模块，线程数通过 `TESTVDB_CONCURRENT_THREADS` 环境变量控制（默认 10，Milvus 建议 50，Qdrant/Weaviate 建议 20）
+
+## 脚本健壮性要求（CRITICAL — 防止脚本错误被误判为数据库缺陷）
+
+**每个脚本必须包含健壮的 HTTP 响应处理：**
+
+```python
+def safe_request(method, url, **kwargs):
+    """包装 requests 调用，安全处理非 JSON 响应"""
+    try:
+        resp = requests.request(method, url, **kwargs)
+        try:
+            body = resp.json()
+        except (json.JSONDecodeError, ValueError):
+            body = resp.text
+        return resp.status_code, body
+    except requests.exceptions.ConnectionError:
+        return 0, "CONNECTION_REFUSED"
+    except requests.exceptions.Timeout:
+        return 0, "TIMEOUT"
+
+# 使用示例
+status, body = safe_request("GET", f"{BASE_URL}/collections/{name}")
+if isinstance(body, dict):
+    count = body.get("result", {}).get("count", -1)
+else:
+    print(f"Non-JSON response: {body}")
+    # 判定为非标准响应 — 可能是 Type1_IllegalSuccess 或 Type2_PoorDiagnostics
+```
+
+**强制规则：**
+1. 永远不要对 `requests.Response` 直接链式调用 `.json().get(...).get(...)` — 必须先检查 Content-Type
+2. 永远不要假设响应一定是 JSON — Qdrant/Milvus/Weaviate 都可能返回纯文本错误
+3. 捕获 `json.JSONDecodeError`、`TypeError`、`AttributeError`，将其转化为有意义的输出而非脚本崩溃
+4. 脚本 exit code: 0 = 未发现缺陷（预期行为）, 1 = 发现缺陷, 2 = 脚本自身错误
+5. 在脚本末尾打印明确的判定行: `VERDICT: DEFECT_FOUND`, `VERDICT: NO_DEFECT`, 或 `VERDICT: SCRIPT_ERROR`

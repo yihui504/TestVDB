@@ -421,8 +421,8 @@ tools:
 
 ```json
 {
-  "target": "qdrant",
-  "version": "v1.13.0",
+  "target": "{target}",
+  "version": "{version}",
   "api_endpoints": [
     {
       "path": "search+points",
@@ -439,8 +439,8 @@ tools:
     {
       "path": "search+points",
       "method": "POST",
-      "source_url": "https://qdrant.tech/documentation/api-reference/search/",
-      "doc_version": "v1.13.x",
+      "source_url": "https://{target_domain}/documentation/api-reference/search/",
+      "doc_version": "{doc_version}",
       "doc_quote": "Search for the closest points to the given query vector",
       "verified_at": "2026-06-05T01:02:00Z"
     }

@@ -353,8 +353,8 @@ Threat Model 也用于增强 Judge Agent 的判定逻辑：
 ```json
 {
   "_meta": {
-    "target": "milvus",
-    "version": "v2.6.17",
+    "target": "{target}",
+    "version": "{version}",
     "generated_at": "{ISO 8601}",
     "source_data": {
       "total_issues_analyzed": 150,
