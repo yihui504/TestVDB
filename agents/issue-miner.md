@@ -131,11 +131,50 @@ site:github.com/{owner}/{repo}/issues bug label:bug
 
 **时间过滤**：只保留 `createdAt` 在 `time_window_months` 范围内的 issue。
 
-#### 2c. 获取高价值 Issue 详情
+#### 2c. 获取高价值 Issue 详情（⛔ 评论采集是强制的）
 
-对筛选后的 TOP 150 条 issue（按 comments 数降序 + 按 reactions 数降序），使用 `mcp__github__get_issue` 获取完整 issue body 和评论。
+对筛选后的 TOP 150 条 issue（按 comments 数降序 + 按 reactions 数降序），获取完整 issue body 和评论。
 
-**获取评论策略**：只获取前 15 条评论（足够判断开发者态度），不获取全部评论。
+**⛔ 评论采集铁律（v2.1.2 — H2 根因修复）：**
+
+1. **每条 issue 的评论必须通过实际 API 调用获取**。
+   - 首选: `gh issue view {number} --repo {owner}/{repo} --comments` （CLI 最可靠）
+   - 降级: `mcp__github__get_issue` 的返回结果
+   - 最后降级: `gh api "repos/{owner}/{repo}/issues/{number}/comments"`（REST API）
+   - **如果以上全部失败 → 该 issue 的 comments 字段必须为 `[]`，并在 `_meta.data_quality.failed_fetches` 中记录 `{issue_number: failure_reason}`**
+
+2. **伪造评论是绝对禁止的**。
+   - 不得生成占位评论（如 "Thank you for the report"）
+   - 不得从其他 issue 复制评论
+   - 不得从 issue body 摘要推断评论内容
+   - **每获取一批评论后，必须执行真实性自检**（见下方）
+
+3. **评论真实性自检（写入每批评论后强制执行）**：
+   获取 ≥10 条 issue 的评论后，执行以下检查：
+   - **唯一性检查**：跨 issue 比较评论文本。如果 ≥3 条不同 issue 的评论正文完全或基本一致（编辑距离 < 20% 文本长度），说明评论被伪造——停止并重试 API 调用。
+   - **长度检查**：真实评论通常 ≥30 字符。如果获取到的评论普遍 < 30 字符，可能 API 返回了截断数据。
+   - **内容检查**：评论应包含 issue 特定的细节（参数名、错误消息、版本号）。如果所有评论都是泛泛的回应，说明未获取到真实数据。
+   - 如果上述检查失败 → 将受影响的 issue 标记为 `data_quality: compromised`，comments 置为 `[]`，记录到 `_meta.data_quality`
+
+4. **每条评论记录采集方法**：
+   ```json
+   {
+     "body": "...",
+     "author": "...",
+     "role": "maintainer|contributor|reporter|unknown",
+     "created_at": "...",
+     "_fetch_method": "gh_cli|mcp|gh_api"
+   }
+   ```
+
+5. **评论角色标注**：根据 author association（OWNER/MEMBER/CONTRIBUTOR/NONE）推断 `role`。
+
+6. **developer_stance 判定**（从评论自然阅读得出，非关键词匹配）：
+   - 阅读所有 maintainer/contributor 评论后，综合判断开发者对此 issue 的态度
+   - `acknowledged`: 开发者承认这是需要修复的问题
+   - `denied`: 开发者明确表示这不是 bug / 不会修复 / 是预期行为
+   - `unclear`: 无法从评论中得出明确结论
+   - 在 `stance_rationale` 字段中用一句话引用支持该判断的评论内容
 
 #### 2d. 写入原始语料
 
@@ -150,7 +189,14 @@ site:github.com/{owner}/{repo}/issues bug label:bug
     "total_issues_fetched": 500,
     "issues_with_details": 150,
     "search_queries_used": ["label:bug is:closed", ...],
-    "ttl_hours": 720
+    "ttl_hours": 720,
+    "data_quality": {
+      "total_comments_fetched": 0,
+      "fetch_methods_used": ["gh_cli"],
+      "authenticity_check_passed": true,
+      "failed_fetches": {},
+      "compromised_issues": []
+    }
   },
   "issues": [
     {
@@ -164,13 +210,15 @@ site:github.com/{owner}/{repo}/issues bug label:bug
       "reactions_total": 5,
       "has_associated_pr": true,
       "body": "完整的 issue body markdown...",
+      "developer_stance": "acknowledged|denied|unclear",
+      "stance_rationale": "一句话引用评论内容说明判定依据",
       "comments": [
         {
           "author": "developer_name",
           "role": "maintainer|contributor|reporter|unknown",
           "body": "comment text...",
-          "is_acknowledgment": false,
-          "created_at": "..."
+          "created_at": "...",
+          "_fetch_method": "gh_cli|mcp|gh_api"
         }
       ],
       "linked_prs": [12345, 12346],

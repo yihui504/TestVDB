@@ -80,7 +80,9 @@ Threat Model 是一份结构化的 JSON 文档，定义了针对当前 DB 的攻
 
 #### 2a: 攻击面定义（Attack Surface）
 
-基于 bug_shapes 中的 affected_layer 和 root_cause_category，定义攻击面优先级：
+基于 bug_shapes 中的 affected_layer 和 root_cause_category，定义攻击面优先级。
+
+**⚠️ 关键：每个 area 必须包含 `blindspots` 字段，将攻击面映射到 Step 3 中构建的 Cognitive Blindspot。**
 
 ```json
 {
@@ -91,7 +93,13 @@ Threat Model 是一份结构化的 JSON 文档，定义了针对当前 DB 的攻
         "rationale": "5 个历史 bug shape 与此相关，是最常见的缺陷类别",
         "historical_defect_count": 45,
         "bug_shapes": ["missing-param-validation-rest-api", "type-coercion-api-params"],
-        "mapped_contract_endpoints": ["search", "insert", "create_collection"]
+        "defect_types": ["Type1_IllegalSuccess"],
+        "mapped_contract_endpoints": ["search", "insert", "create_collection"],
+        "blindspots": ["BS-01", "BS-04"],
+        "attack_order": [
+          {"strategy": "type_confusion", "blindspot": "BS-01", "constraints": ["vector_type", "filter_type"]},
+          {"strategy": "boundary", "blindspot": "BS-04", "constraints": ["limit_range", "dimension_range"]}
+        ]
       }
     ],
     "medium_priority_areas": [...],
@@ -100,9 +108,38 @@ Threat Model 是一份结构化的 JSON 文档，定义了针对当前 DB 的攻
 }
 ```
 
+**`blindspots` 字段映射规则**：
+- 每个 area 必须有 `blindspots` 字段，列出 Step 3 中与此攻击面相关的 blindspot_id
+- `attack_order` 列出推荐的攻击顺序，每条包含 `strategy`（boundary/type_confusion/semantic/concurrent_state/distributed/interface_parity/resource_exhaustion）、`blindspot` 和 `constraints`
+- 这些映射将直接注入 Attack Agent 的 prompt，指导攻击方向
+
 #### 2b: 缺陷判断标准（What Counts as a Defect）
 
-基于开发者认知数据（developer_cognition.json），定义缺陷判断规则：
+基于开发者认知数据（developer_cognition.json），定义缺陷判断规则。
+
+**⛔ v2.1.2 — H4 根因修复：by_design_behaviors 必须具体可操作**
+
+每条 `by_design_behaviors` 规则必须包含以下字段：
+- `pattern`: 具体的 API 行为描述（不是抽象类别描述）
+- `specific_example`: 具体的端点+参数+预期行为示例
+- `source_issue_numbers`: 开发者明确说明 "by design" / "not a bug" / "not guaranteed" 的 issue 编号列表
+- `affected_endpoints`: 受此规则影响的端点列表
+- `verdict`: 攻击脚本应如何处理（DO_NOT_REPORT / REPORT_AS_P3 / VERIFY_FIRST）
+
+**反面例子（太抽象——不接受）：**
+```
+"pattern": "Behavior that matches documented API specifications exactly"
+```
+→ 这个规则不可操作。Judge 无法据此刻定具体的行为模式。
+
+**正面例子（可操作）：**
+```
+"pattern": "Endpoint /X returns 200 on invalid input Y because the framework layer performs deferred validation — the API layer intentionally accepts broad input ranges"
+"specific_example": "POST /X with param Y=invalid_value returns 200 but Y is silently coerced to default — this is NOT a defect per maintainer comments in issue #NNNN"
+"source_issue_numbers": [NNNN]
+"affected_endpoints": ["/X"]
+"verdict": "DO_NOT_REPORT"
+```
 
 ```json
 {
@@ -117,9 +154,12 @@ Threat Model 是一份结构化的 JSON 文档，定义了针对当前 DB 的攻
     ],
     "by_design_behaviors": [
       {
-        "pattern": "隐式类型转换（'123' → 123）",
-        "rationale": "Framework-level behavior, not a defect per developer team",
-        "action": "DO NOT REPORT — mark as expected_behavior"
+        "pattern": "<具体API行为描述>",
+        "specific_example": "<端点+参数+预期行为>",
+        "source_issue_numbers": [<issue编号列表>],
+        "affected_endpoints": ["<端点1>", "<端点2>"],
+        "verdict": "DO_NOT_REPORT|REPORT_AS_P3|VERIFY_FIRST",
+        "rationale": "<开发者立场的原文引用或摘要>"
       }
     ],
     "wontfix_patterns": [

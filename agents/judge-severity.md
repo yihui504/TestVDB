@@ -31,15 +31,16 @@ tools:
 **你只需要做 3 件事：**
 
 ```
-Turn 1: Read  ${SESSION_DIR}/debate_logs/candidate_digest.json
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_doc.json
-Turn 2: Write ${SESSION_DIR}/debate_logs/stage2_severity.json
-Turn 2: Bash  touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done
+Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_aggregation.json（如有，获取 evidence 投票结果）
+Turn 2-3: 逐个评估 severity（Top-5 候选，复杂缺陷可用至 5 turns）
+Turn 3-4: Write ${SESSION_DIR}/debate_logs/stage2_severity.json
+Turn 4: Bash  touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done
 ```
 
-**只评估 candidate_digest.json 中的 Top-5 候选（按 severity 排序）。
-Turn 3 之前必须完成。不要读日志，不要 WebSearch。
-写完 JSON 后必须立即 touch .done 文件。**
+**只评估 stage2_doc.json 中的 Top-5 候选（按 severity 排序）。
+Turn 4 之前必须完成。如果涉及 v2.1 校准规则或多端点交叉影响评估，可用至 5 turns。
+不要读日志，不要 WebSearch。写完 JSON 后必须立即 touch .done 文件。**
 
 ---
 
@@ -87,6 +88,34 @@ Turn 3 之前必须完成。不要读日志，不要 WebSearch。
 - Type1_IllegalSuccess + search endpoint (+1) + 3 scripts (+1) = Critical
 - Type2_PoorDiagnostics + users endpoint (-1) = Low
 - Type4_StateViolation + insert endpoint (+1) + DOC_PARTIAL (-1) = High
+
+---
+
+## 严重性校准规则消费（v2.1 新增）
+
+如果 prompt 中包含「严重性校准规则（v2.1 Strategic Intelligence）」部分，你应该在基线规则之上叠加以下校准：
+
+### 校准优先级
+
+v2.1 校准规则**优先于**基线规则 1-5。执行顺序：
+1. 先按基线规则 1-5 计算初始 severity
+2. 再按 v2.1 校准规则调整（AUTO_DOWNGRADE → CONFIRM_SEVERITY → DOWNGRADE）
+
+### 校准动作
+
+| 注入规则类型 | 动作 | 触发条件 |
+|------------|------|---------|
+| `AUTO_DOWNGRADE_TO_TRIVIAL` | severity → `trivial`，vote → `not_defect` | 缺陷模式匹配 by_design_behaviors 列表 |
+| `AUTO_DOWNGRADE_TO_P3` | severity 降为 `Low`，优先级标记 P3 | 匹配 out_of_scope_patterns |
+| `CONFIRM_SEVERITY` | 保持基线 severity，不执行规则 2/4 的降级 | 匹配 historical_high_severity_patterns |
+| `DOWNGRADE_TO_P3` | severity 降为 `Low`，优先级标记 P3 | 匹配 wontfix_patterns |
+
+### 示例
+
+- 缺陷类型 = Type3_RuntimeFailure，日志显示 "approximate vector search result variation"
+  → 基线 Critical → 校准规则匹配 AUTO_DOWNGRADE_TO_TRIVIAL → **trivial，not_defect**
+- 缺陷类型 = Type3_RuntimeFailure，日志显示 "server panic on valid input"
+  → 基线 Critical → 校准规则匹配 CONFIRM_SEVERITY → **Critical，不降级**
 
 ---
 

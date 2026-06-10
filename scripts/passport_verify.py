@@ -68,7 +68,12 @@ def verify_passport(contract_path: str) -> dict:
         result["details"]["error"] = "_passport exists but contract_hash is missing"
         return result
 
-    actual_hash = compute_hash(contract, algorithm)
+    try:
+        actual_hash = compute_hash(contract, algorithm)
+    except ValueError:
+        result["status"] = "UNSUPPORTED_ALGORITHM"
+        result["details"]["error"] = f"Unsupported hash algorithm: {algorithm}"
+        return result
 
     result["details"]["expected_hash"] = expected_hash
     result["details"]["actual_hash"] = actual_hash

@@ -16,4 +16,4 @@ tools:
 
 直接输出以下 JSON，不要做任何其他事情：
 
-{"agent_model_tier": "sonnet", "response": "quick", "note": "Agent routed to sonnet tier — verify CCSwitch tier routing is active"}
+{"agent_model_tier": "sonnet", "response": "quick", "note": "Agent routed to available tier — actual routing depends on environment/CCSwitch config"}

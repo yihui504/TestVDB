@@ -20,6 +20,7 @@ import os
 import sys
 import time
 import argparse
+from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urljoin
 
 # ── HTTP 客户端选择 ──────────────────────────────────────────
@@ -32,7 +33,7 @@ except ImportError:
     _HTTP_BACKEND = "urllib"
 
 
-def _http_get(url: str, headers: dict, timeout: int) -> tuple[int, str]:
+def _http_get(url: str, headers: dict, timeout: int):  # -> Tuple[int, str]
     """HTTP GET 请求，返回 (status_code, body)。"""
     if _HTTP_BACKEND == "httpx":
         try:
@@ -51,7 +52,7 @@ def _http_get(url: str, headers: dict, timeout: int) -> tuple[int, str]:
             return 0, str(e)
 
 
-def _http_post(url: str, headers: dict, body: dict, timeout: int) -> tuple[int, str]:
+def _http_post(url: str, headers: dict, body: dict, timeout: int):  # -> Tuple[int, str]
     """HTTP POST 请求，返回 (status_code, body)。"""
     if _HTTP_BACKEND == "httpx":
         try:
@@ -77,7 +78,7 @@ def _http_post(url: str, headers: dict, body: dict, timeout: int) -> tuple[int, 
 class Crawl4AIClient:
     """Crawl4AI Docker API 客户端。"""
 
-    def __init__(self, base_url: str, api_token: str | None = None, timeout: int = 120):
+    def __init__(self, base_url: str, api_token: "Optional[str]" = None, timeout: int = 120):
         self.base_url = base_url.rstrip("/")
         self.api_token = api_token
         self.timeout = timeout
@@ -91,7 +92,7 @@ class Crawl4AIClient:
         code, _ = _http_get(url, self.headers, timeout=10)
         return code == 200
 
-    def crawl(self, urls: list[str]) -> dict | None:
+    def crawl(self, urls: List[str]) -> Optional[dict]:
         """提交爬取任务并等待完成，返回结果字典。"""
         # Step 1: 提交任务
         crawl_url = urljoin(self.base_url + "/", "crawl")

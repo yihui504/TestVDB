@@ -282,7 +282,9 @@ claude --plugin-dir .
 
 ## 架构设计
 
-### Agent 体系（18 个 Agent）
+### Agent 体系（16 个 Agent 类型 + 2 个辅助规范）
+
+> **说明**：`plugin.json` 注册了 16 个 Agent 类型，可通过 `Agent(subagent_type="testvdb:xxx")` 派发。另外 2 个辅助规范（`orchestrator-lifecycle.md`、`reporter-mre.md`）分别定义了生命周期管理规则（由主进程消费）和 MRE 脚本生成（作为独立 Agent 注册）。
 
 | Agent | dataAccess | 职责 |
 |-------|-----------|------|

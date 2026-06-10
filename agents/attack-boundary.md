@@ -54,6 +54,38 @@ tools:
 4. 如果策略模板中的端点已在 `exhausted_endpoints` 中，跳过该策略
 5. 同一策略在你的 attack round 中最多使用 3 次，避免重复
 
+## 威胁模型与认知盲点消费（v2.1 新增）
+
+如果 prompt 中包含「威胁模型与认知盲点注入（v2.1 Strategic Intelligence）」部分，你应该：
+
+### 1. 攻击目标优先级调整
+
+根据「攻击面优先级」中的端点排序，调整攻击目标选择：
+- **critical 端点**（如 points/upsert、points/search）→ 每轮至少分配 60% 的脚本
+- **high 端点**（如 collections、snapshots、cluster）→ 分配 30%
+- **medium/low 端点** → 分配 10%
+- 每个端点按其 `recommended_attack_order` 中的 strategy 顺序生成脚本
+
+### 2. 认知盲点驱动策略选择
+
+根据「开发者认知盲点」中的盲点描述，调整攻击策略：
+- 每个盲点的 `attack_strategies` 字段告诉你该盲点对应的有效攻击方式
+- 在脚本中标注关联的盲点 ID（如 `# Blindspot: BS-01 Parameter Validation Optimism`）
+- `attack_strategy_mapping` 告诉你哪个盲点应该由哪个 Attack Agent 主攻——优先选择映射到 `testvdb:attack-boundary` 的盲点（BS-01 Parameter Coercion Trust、BS-04 Boundary Default Optimism）
+
+### 3. by-design 行为规避
+
+根据「已知 by-design 行为」列表：
+- 遇到匹配的场景时跳过，在脚本注释中标注 `SKIPPED: by-design per threat_model`
+- 不要浪费脚本配额在这些已声明的行为上
+
+### 4. 全局策略权重应用
+
+根据「全局策略权重」分配本轮脚本类型比例：
+- `boundary_attacks` 权重最高 → 边界值攻击（策略 1）占比最大
+- `type_confusion_attacks` → 类型混淆攻击（策略 2）占对应比例
+- 权重 < 0.1 的策略 → 本轮可跳过
+
 ## 攻击策略
 
 **重要：优先使用 REST API（requests 库）而非 SDK。** 仅在明确需要 SDK 特有功能时才使用 SDK。SDK 版本不兼容是常见失败原因，REST API 更稳定。
@@ -144,6 +176,11 @@ response = requests.put(
 
 ## 输出格式
 
+**⛔ 脚本格式强制要求：每个生成的脚本必须使用 `safe_request()` 包装所有 HTTP 调用。**
+- 裸 `requests.post(url, json=...).json()` 链式调用 → 流水线 REJECT
+- `safe_request()` 必须处理：连接失败、超时、非 JSON 响应、JSON 解析异常
+- 脚本末尾必须打印 `VERDICT: DEFECT_FOUND` / `NO_DEFECT` / `SCRIPT_ERROR`
+
 每个生成的测试脚本必须遵循以下模板：
 
 ```python
@@ -161,7 +198,7 @@ import json
 import sys
 import os
 
-# Windows 编码兼容：确保 stdout/stderr 使用 UTF-8
+# Windows encoding compatibility
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
@@ -169,43 +206,66 @@ if sys.platform == "win32":
 BASE_URL = os.environ.get("TESTVDB_DB_URL", "http://localhost:6333")
 AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")
 
-headers = {"Content-Type": "application/json"}
-if AUTH_HEADER:
-    headers["Authorization"] = AUTH_HEADER
+# ⛔ ALL HTTP calls MUST use this wrapper. Bare requests.post().json() chains are REJECTED.
+def safe_request(method, path, **kwargs):
+    """
+    Resilient HTTP wrapper — handles connection errors, timeouts, and JSON decode.
+    Returns (status_code, response_body_dict_or_none, raw_text).
+    On connection failure: prints REQUEST_ERROR and returns (0, None, "").
+    On JSON decode failure: prints JSON_DECODE_ERROR and returns (status, None, raw_text).
+    """
+    url = f"{BASE_URL}{path}"
+    headers = kwargs.pop("headers", {"Content-Type": "application/json"})
+    if AUTH_HEADER:
+        headers["Authorization"] = AUTH_HEADER
+    try:
+        resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+        status = resp.status_code
+        text = resp.text
+        try:
+            body = resp.json() if text else {}
+        except (json.JSONDecodeError, ValueError):
+            print(f"JSON_DECODE_ERROR: {text[:200]}")
+            return status, None, text
+        return status, body, text
+    except requests.exceptions.RequestException as e:
+        print(f"REQUEST_ERROR: {e}")
+        return 0, None, ""
 
 def test_boundary():
     """Test: {brief description}"""
     # Arrange
     # Setup: create collection, insert test data as needed
-    
+
     # Act
-    response = requests.post(
-        f"{BASE_URL}/collections/test/points/search",
-        json={"vector": [0.1]*128, "limit": 0},
-        headers=headers
-    )
-    
+    status, body, raw = safe_request("POST", "/collections/test/points/search",
+        json={"vector": [0.1]*128, "limit": 0})
+
     # Assert
-    print(f"Status: {response.status_code}")
-    print(f"Body: {response.text}")
-    
-    # Expected: 4xx client error (400 Bad Request or 422 Unprocessable Entity)
-    assert response.status_code in (400, 422), \
-        f"Type1_IllegalSuccess: Expected 4xx for limit=0, got {response.status_code}"
-    
+    if status == 0:
+        print("VERDICT: SCRIPT_ERROR — connection failed")
+        return
+    print(f"Status: {status}")
+    print(f"Body: {raw}")
+
+    # Expected: 4xx client error
+    if status not in (400, 422):
+        print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess) " +
+              f"Expected 4xx for limit=0, got {status}")
+        return
+
     # Type-2 check: error message quality
-    body = response.json()
-    error_msg = body.get("status", {}).get("error", "")
-    assert "limit" in error_msg.lower(), \
-        f"Type2_PoorDiagnostics: Error message should mention 'limit', got: {error_msg}"
+    if body and isinstance(body, dict):
+        error_msg = body.get("status", {}).get("error", "") if isinstance(body.get("status"), dict) else ""
+        if "limit" not in error_msg.lower():
+            print(f"VERDICT: DEFECT_FOUND (Type2_PoorDiagnostics) " +
+                  f"Error message should mention 'limit', got: {error_msg}")
+            return
+
+    print("VERDICT: NO_DEFECT")
 
 if __name__ == "__main__":
-    try:
-        test_boundary()
-        print("\n=== PASSED ===")
-    except AssertionError as e:
-        print(f"\n=== FAILED: {e} ===")
-        sys.exit(1)
+    test_boundary()
 ```
 
 ---

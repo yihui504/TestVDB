@@ -67,3 +67,18 @@ list_dir.sh
 repro_upsert_autoid.py
 tmp_ls.sh
 tmp_qdrant_openapi.json
+
+# v2.1.2 — 补充遗漏的日志和临时文件
+contract_gate.log
+false_positive_filter.log
+*.log
+!docker/*.yml
+run_log*.txt
+mine_*log*.txt
+mine_*.log
+
+# v2.1.1 — 临时/生成脚本
+/_*.py
+scripts/gen_boundary_*.py
+scripts/bug_shape_extractor.py
+scripts/build_contract_qdrant.py
