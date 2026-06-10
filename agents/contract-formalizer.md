@@ -166,6 +166,7 @@ tools:
               "assertion": { "type": "string" },
               "type": { "type": "string", "enum": ["type_constraint"] },
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
               "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" }
             }
@@ -183,6 +184,7 @@ tools:
               "assertion": { "type": "string" },
               "type": { "type": "string", "enum": ["range_constraint"] },
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
               "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" }
             }
@@ -200,6 +202,7 @@ tools:
               "assertion": { "type": "string" },
               "type": { "type": "string", "enum": ["state_constraint"] },
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
               "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" }
             }
@@ -219,6 +222,7 @@ tools:
           "category": { "type": "string", "enum": ["type_check", "range_check", "state_check", "behavioral"] },
           "expected_behavior": { "type": "string" },
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
           "defect_type_if_violated": { "type": "string", "enum": ["Type1_IllegalSuccess", "Type2_PoorDiagnostics", "Type3_RuntimeFailure", "Type4_StateLogicViolation"] },
           "source_url": { "type": "string", "description": "该断言来源的文档 URL" },
           "doc_version": { "type": "string", "description": "该断言来源的文档版本" }
@@ -335,14 +339,33 @@ tools:
 
 **注意**：此映射是强制性的，不是建议。如果发现未映射的非标准分类名，在输出验证中报错。
 
-### 规则 3: 置信度标记
+### 规则 3: 置信度标记与证据分级
 
-每条约束/断言都需标记 `confidence`（0.0-1.0）：
-- **1.0**: 文档明确声明（如 "must be positive"）
-- **0.8-0.9**: 文档示例强烈暗示（如示例中参数始终为正整数）
-- **0.6-0.7**: 从相关约束推断（如 "similar to X constraint"）
-- **0.4-0.5**: 行业惯例推断（如 "REST APIs typically return 404 for missing resources"）
-- **<0.4**: 不纳入契约（过于不确定）
+每条约束/断言都需标记 `confidence`（0.0-1.0）和 `evidence_tier` 字段。
+
+**核心原则：契约只能断言文档明确声明的事实。任何从示例、行为或惯例推断的声明都是低置信度的猜测，不能作为硬约束。**
+
+**evidence_tier（证据层级）**：
+- **`explicit`**: 文档原文明确声明了该行为或约束。需要能从 raw_knowledge.md 中找到对应的原文句子。confidence ≥ 0.9。
+- **`inferred_from_example`**: 从文档示例中间接推断。confidence 0.6-0.8。
+- **`inferred_from_behavior`**: 从相关端点或同类 API 行为推断，文档未直接说明。confidence 0.4-0.6。
+- **`convention`**: 行业惯例推断（如 "REST APIs typically..."），文档无任何相关内容。confidence 0.3-0.5。
+
+**evidence_tier 判定流程（逐条检查每条 constraint/assertion）**：
+1. 在 raw_knowledge.md 中搜索该端点对应的文档原文
+2. 如果文档原文直接描述了该行为 → `explicit`，confidence ≥ 0.9
+3. 如果文档示例暗示了该行为但未明确声明 → `inferred_from_example`
+4. 如果从其他端点的文档推断 → `inferred_from_behavior`
+5. 如果仅基于行业惯例而不依赖任何文档内容 → `convention`
+6. **`convention` 层级的 constraint 不得纳入契约**（confidence < 0.4）
+7. **`inferred_from_behavior` 层级的 state_constraint 不得声称行为具有保证性**（如 "must"、"guaranteed"、"ensures"）——只能标记为 "expected but unverified"
+
+**confidence 调整规则**：
+- **≥ 0.9**: evidence_tier = `explicit`
+- **0.6-0.8**: evidence_tier = `inferred_from_example`
+- **0.4-0.6**: evidence_tier = `inferred_from_behavior`
+- **0.3-0.5**: evidence_tier = `convention`
+- **< 0.4**: 不纳入契约
 
 ### 规则 4: 约束 ID 命名
 

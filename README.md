@@ -295,7 +295,9 @@ intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB
 
 ## Architecture
 
-### Agent Fleet (18 agents)
+### Agent Fleet (16 agent types + 2 auxiliary specs)
+
+> **Note**: 16 agent types are registered in `plugin.json` and dispatchable via `Agent(subagent_type="testvdb:xxx")`. 2 additional specifications (`orchestrator-lifecycle.md`, `reporter-mre.md`) serve as auxiliary references — the former defines lifecycle management rules consumed by the main process, the latter is an agent registered separately for MRE generation.
 
 | Agent | dataAccess | Role |
 |-------|-----------|------|

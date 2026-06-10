@@ -25,17 +25,18 @@ tools:
 
 ---
 
-## ⛔ 强制执行路径（2 个 turn 内完成）
+## ⛔ 强制执行路径（4 个 turn 内完成）
 
 ```
-Turn 1: Read  ${SESSION_DIR}/debate_logs/candidate_digest.json
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_doc.json
-Turn 2: Write ${SESSION_DIR}/debate_logs/stage2_evidence.json
-Turn 2: Bash  touch ${SESSION_DIR}/debate_logs/stage2_evidence.json.done
+Turn 1: Read  ${SESSION_DIR}/debate_logs/execution_results.json（如果 stage2_doc 不存在则作为后备）
+Turn 2: 评估缺陷复杂度（候选数量 > 10 或多脚本交叉验证 → 预算增至 6 turns）
+Turn 3-4: Write ${SESSION_DIR}/debate_logs/stage2_evidence.json
+Turn 4: Bash  touch ${SESSION_DIR}/debate_logs/stage2_evidence.json.done
 ```
 
-**只审查 candidate_digest.json 中 severity=critical/high 的 Top-5 候选。
-Turn 3 之前必须完成。预消化摘要已包含所有必要信息，不需要再读原始日志。**
+**只审查 stage2_doc.json 中 severity=critical/high 的 Top-5 候选。
+Turn 4 之前必须完成。如果候选缺陷 > 10 个或涉及多脚本交叉验证，可用至 6 turns。**
 
 ---
 
@@ -64,6 +65,47 @@ Turn 3 之前必须完成。预消化摘要已包含所有必要信息，不需�
 - 同一 endpoint 多脚本间结果矛盾 → 标注为 `flaky`，grade 降为 C
 - 如果 stage2_doc.json 中 defect_id 不存在 → 不在 votes 中输出该条目
 - **脚本错误检测（CRITICAL）**：日志包含 `TypeError`、`AttributeError`、`'str' object has no attribute`、`SCRIPT_ERROR` → 判定为 `script_error`（非数据库缺陷），vote=`not_defect`，grade=D，rationale 注明"脚本自身错误，非数据库缺陷"
+
+---
+
+## 提交成功率校准（v2.1 新增）
+
+如果 prompt 中包含「提交成功率校准（v2.1 Strategic Intelligence）」部分，你应该据此调整证据门槛：
+
+### 高提交成功率（>0.8）→ 降低证据要求
+
+匹配条件 → 只需 **1 次成功复现 + 明确的 contract 违反** 即可判定 is_defect：
+- 证据 Grade C（间歇性复现）在匹配高成功率条件时可提升为 B
+- 低证据门槛的 rationale 中注明 "高提交成功率 ({probability})：{reason}"
+
+### 中等提交成功率（0.4-0.8）→ 标准证据要求
+
+按默认规则判定，不调整门槛。
+
+### 低提交成功率（<0.4）→ 提高证据要求
+
+匹配条件 → 需要 **至少 3 次独立复现 + 明确的 contract 违反 + 无环境因素干扰**：
+- 证据 Grade B 降为 C（单次复现不够）
+- 如果只有 1 个脚本触发且无可复现性证据 → **强制 vote=not_defect**（不满足高门槛）
+- Type2_PoorDiagnostics + 仅 1 个脚本触发 → **强制 vote=not_defect**（满足低提交成功率条件 + 单脚本 = 不满足 3 次独立复现要求）
+- 高证据门槛的 rationale 中注明 "低提交成功率 ({probability})：{reason}，要求更强证据。不满足 {missing_condition}"
+
+### ⛔ 低提交成功率自动判定表
+
+以下组合触发 `vote=not_defect`（不经过主观判断）：
+
+| 提交成功率条件 | 证据条件 | 判定 |
+|---------------|---------|------|
+| Type2_PoorDiagnostics (0.4) | 仅 1 个脚本触发 | **not_defect** |
+| Type2_PoorDiagnostics + log quality only (0.25) | 任意证据等级 | **not_defect**（最高门槛） |
+| Type4 + snapshot recovery alias (0.3) | 仅 1 个脚本触发 | **not_defect** |
+| Type1 + configuration defaults (0.45) | 仅 1 个脚本触发 + Grade < A | **not_defect** |
+
+### 判定流程
+
+1. 先按默认证据规则计算 grade 和 vote
+2. 检查缺陷条件是否匹配高/低提交成功率列表
+3. 如果匹配 → 按对应门槛调整 grade（但不能改变 script_error 判定）
 
 ---
 

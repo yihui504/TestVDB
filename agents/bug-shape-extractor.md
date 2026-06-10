@@ -234,6 +234,17 @@ tools:
 
 对分类为 `negative` 的 issue，分析开发者认为"不算 bug"的模式。
 
+**⛔ v2.1.2 — H4 根因修复：必须提取可操作的 by_design_patterns**
+
+除了 rejection_patterns 和 developer_cognition_signals，还必须生成 `by_design_patterns` 列表——这是面向 threat-modeler 的结构化输入，每条包含：
+- `pattern`: 具体的 API 行为（不是抽象类别）
+- `endpoint`: 受影响的端点
+- `developer_quote`: 开发者原话（从评论中提取）或立场摘要
+- `source_issue_numbers`: 相关 issue 编号
+- `should_report`: 攻击 Agent 是否应将其作为缺陷报告
+
+这对于防止下游误报至关重要——当开发者在评论中明确表态某个行为是 "by design"、"wontfix" 或 "not guaranteed" 时，这个信号必须被提取并传递到威胁模型，防止 Attack Agent 将已明确拒绝的行为当作缺陷来攻击。
+
 #### 拒绝模式分类
 
 | 拒绝模式 | 含义 | 对攻击策略的指导 |
@@ -283,6 +294,32 @@ tools:
 ```
 
 此部分写入 `intelligence/{target}/developer_cognition.json`。
+
+**`by_design_patterns` 输出格式（v2.1.2 新增）：**
+
+```json
+{
+  "by_design_patterns": [
+    {
+      "pattern_id": "BDP-001",
+      "pattern": "<从 issue 评论中提取的具体 API 行为，不是抽象类别>",
+      "endpoint": "<受影响的端点>",
+      "developer_quote": "<开发者原话或立场摘要，从评论直接引用>",
+      "source_issue_numbers": [<issue编号>],
+      "source_comment_index": <评论序号>,
+      "developer_attitude": "not_a_bug|wontfix|out_of_scope",
+      "should_report": false,
+      "classification": "<缺陷类型> — FALSE POSITIVE if detected",
+      "attack_guidance": "DO NOT report <具体行为> as <错误分类>. The team explicitly stated <开发者理由>."
+    }
+  ]
+}
+```
+
+每条 BDP 的核心依据是 issue 评论中开发者的明确表态。如果评论数据质量不足以提取 BDP，则 `by_design_patterns: []` 是合法输出——不应编造。
+```
+
+此部分与 `rejection_patterns` 和 `developer_cognition_signals` 一起写入 `developer_cognition.json`。三个部分必须全部存在。
 
 ### Step 5: 聚合验证
 

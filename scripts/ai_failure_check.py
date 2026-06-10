@@ -16,16 +16,18 @@
 
 退出码:
   0 = PASS (全部通过)
-  1 = FAIL (存在 REJECT 级问题 — M2/M3/M6)
+  1 = FAIL (存在 REJECT 级问题 — M2/M3/M6) 或存在其它未通过
   2 = HALT (存在 HALT 级问题 — M4/M7)
+  3 = REWIND (存在 REWIND 级问题 — M1/M5，需回退重检查)
 """
 
 import os
 import sys
 import json
 import re
-import subprocess
 import time
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 
@@ -72,7 +74,7 @@ def check_m1_script_errors(session_dir: str) -> dict:
 def check_m2_fabricated_urls(session_dir: str, defect_id: str) -> dict:
     """
     M2: 编造文档引用（幻觉 URL）
-    curl 每个 source_url → 验证 HTTP 200
+    使用 urllib 验证 source_url 可达性（跨平台，无 curl 依赖）
     """
     defect_path = os.path.join(session_dir, "defects", f"{defect_id}.md")
     content = load_file(defect_path)
@@ -91,12 +93,10 @@ def check_m2_fabricated_urls(session_dir: str, defect_id: str) -> dict:
     for url in urls[:5]:  # 最多检查 5 个 URL
         for attempt in range(2):
             try:
-                r = subprocess.run(
-                    ["curl", "-sI", "-o", "/dev/null", "-w", "%{http_code}",
-                     "--max-time", "10", url],
-                    capture_output=True, text=True, timeout=15
-                )
-                status = r.stdout.strip()
+                req = urllib.request.Request(url, method="HEAD")
+                req.add_header("User-Agent", "TestVDB/2.1 (AI Failure Check)")
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    status = str(resp.status)
                 if status in ("200", "301", "302"):
                     results.append({"url": url, "reachable": True, "status": status})
                     break
@@ -105,7 +105,12 @@ def check_m2_fabricated_urls(session_dir: str, defect_id: str) -> dict:
                         time.sleep(3)
                     else:
                         results.append({"url": url, "reachable": False, "status": status})
-            except (subprocess.TimeoutExpired, Exception) as e:
+            except urllib.error.HTTPError as e:
+                if attempt == 0:
+                    time.sleep(3)
+                else:
+                    results.append({"url": url, "reachable": False, "status": str(e.code)})
+            except Exception as e:
                 if attempt == 0:
                     time.sleep(3)
                 else:
@@ -117,8 +122,9 @@ def check_m2_fabricated_urls(session_dir: str, defect_id: str) -> dict:
     if all_unreachable:
         return {
             "mode": "M2",
-            "passed": True,
-            "detail": f"All {len(results)} URLs unreachable. May be network issue. "
+            "passed": False,
+            "detail": f"All {len(results)} URLs unreachable — likely hallucinated URLs. "
+                      f"(Possible network issue — verify connectivity before confirming.) "
                       f"Urls checked: {[r['url'] for r in results]}"
         }
     elif unreachable:
@@ -225,6 +231,12 @@ def check_m5_script_bug_as_defect(session_dir: str, defect_id: str) -> dict:
     """
     M5: 脚本 bug 被说成新发现
     检查 FAILED: 输出是否匹配预期缺陷类型
+
+    针对四种缺陷类型的验证规则:
+      Type1 (Illegal Success): 必须有 2xx HTTP Response 证据
+      Type2 (Poor Diagnostics):  必须引用具体的不清晰错误消息原文
+      Type3 (Runtime Failure):   必须有 5xx 或 crash traceback 证据
+      Type4 (State/Logic):       必须有 2xx Response + 非预期的状态描述
     """
     defect_path = os.path.join(session_dir, "defects", f"{defect_id}.md")
     content = load_file(defect_path)
@@ -244,6 +256,54 @@ def check_m5_script_bug_as_defect(session_dir: str, defect_id: str) -> dict:
                 "passed": False,
                 "detail": f"Defect classified as {defect_type} but no 2xx response found. "
                           f"May be a script bug misclassified as a defect."
+            }
+    elif "Type2" in defect_type:
+        # Type2 should quote the unclear/ambiguous error message
+        has_error_msg = (
+            re.search(r'(?:error|Error|ERROR)[\s:]*["\'].+?["\']', content)
+            or re.search(r'(?:message|Message)[\s:]*["\'].+?["\']', content)
+        )
+        if not has_error_msg:
+            return {
+                "mode": "M5",
+                "passed": False,
+                "detail": f"Defect classified as {defect_type} but no error message text quoted. "
+                          f"Poor Diagnostics defects should cite the actual unclear message."
+            }
+    elif "Type3" in defect_type:
+        # Type3 should have 5xx response or crash traceback
+        has_crash_evidence = (
+            re.search(r'HTTP Response["\s:]*["\s]*5\d{2}', content)
+            or re.search(r'Traceback|Segmentation fault|panic|SIGSEGV', content)
+            or re.search(r'(?:crash|CRASH|timeout|TIMEOUT)', content)
+        )
+        if not has_crash_evidence:
+            return {
+                "mode": "M5",
+                "passed": False,
+                "detail": f"Defect classified as {defect_type} but no 5xx/crash/traceback evidence. "
+                          f"Runtime Failure defects should show actual crash symptoms."
+            }
+    elif "Type4" in defect_type:
+        # Type4 should show 2xx (operation succeeded) + unexpected state change
+        has_2xx = re.search(r'HTTP Response["\s:]*["\s]*2\d{2}', content)
+        has_state_desc = re.search(
+            r'(?:state|State|unexpected|unusual|incorrect|wrong|mismatch|inconsistent)',
+            content
+        )
+        if not has_2xx:
+            return {
+                "mode": "M5",
+                "passed": False,
+                "detail": f"Defect classified as {defect_type} but no 2xx response found. "
+                          f"State/Logic violations require a successful (2xx) operation."
+            }
+        if not has_state_desc:
+            return {
+                "mode": "M5",
+                "passed": False,
+                "detail": f"Defect classified as {defect_type} but no state mismatch description. "
+                          f"State/Logic violations should document the unexpected state."
             }
 
     return {
@@ -340,12 +400,20 @@ def main():
 
     reject_modes = {"M2", "M3", "M6"}
     halt_modes = {"M4", "M7"}
+    rewind_modes = {"M1", "M5"}
 
+    has_rewind = any(not c["passed"] and c["mode"] in rewind_modes for c in checks)
     has_reject = any(not c["passed"] and c["mode"] in reject_modes for c in checks)
     has_halt = any(not c["passed"] and c["mode"] in halt_modes for c in checks)
     has_fail = any(not c["passed"] for c in checks)
 
-    if has_reject:
+    # Priority: REWIND > REJECT > HALT > PASS
+    # M1/M5 indicate possible script confusion — rewind for re-check
+    # M2/M3/M6 indicate likely LLM hallucination — reject the defect
+    # M4/M7 indicate pipeline issues — halt for intervention
+    if has_rewind:
+        overall = "REWIND"
+    elif has_reject:
         overall = "FAIL"
     elif has_halt:
         overall = "HALT"
@@ -363,7 +431,9 @@ def main():
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
-    if overall == "HALT":
+    if overall == "REWIND":
+        sys.exit(3)
+    elif overall == "HALT":
         sys.exit(2)
     elif overall == "FAIL":
         sys.exit(1)

@@ -293,56 +293,42 @@ Agent(
 
 ### v2.1 威胁模型与认知盲点注入（intelligence.enabled=true 且 inject_to_attack_agents=true）
 
-在跨会话策略之后，追加从 Threat Model 提取的攻击优先级和认知盲点：
+**使用程序化注入脚本**（详见 `commands/mine.md` Step 8a）：
 
+```bash
+THREAT_MODEL_ATTACK=$(python scripts/threat_model_injector.py {target} --mode attack --text-only)
 ```
-## 威胁模型与认知盲点注入（v2.1 Strategic Intelligence）
 
-### 攻击面优先级
-以下区域在当前 DB 的历史中具有最高缺陷密度，应优先攻击：
-{从 threat_model.json 的 attack_priority_map 提取的 top-5 endpoints 及其推荐攻击策略}
-
-### 开发者认知盲点
-以下盲点是开发者在该代码库中系统性遗漏的模式：
-{从 threat_model.json 的 cognitive_blindspots 提取的 top-3 blindspots}
-
-### 已知 by-design 行为（避免误报）
-{从 threat_model.json 的 defect_criteria.by_design_behaviors 提取}
-
-### 全局策略权重
-基于历史缺陷分布，建议各攻击策略权重：
-- boundary_attacks: {weight}
-- type_confusion_attacks: {weight}
-- state_consistency_attacks: {weight}
-- semantic_contract_attacks: {weight}
-```
+在每个 Attack Agent prompt 末尾追加 `${THREAT_MODEL_ATTACK}`。注入内容包含：
+- 攻击面优先级（top-5 endpoints + recommended_attack_order）
+- 开发者认知盲点（top-3 blindspots + attack_strategies）
+- 已知 by-design 行为（避免误报）
+- 全局策略权重（建议各策略分配比例）
+- 盲点 → Attack Agent 映射
 
 **注入条件汇总**：
 - `reflection_context != null` → 注入本轮经验
 - `evolution.enabled=true` 且 `cross_session_strategies` 有实质内容 → 注入跨会话策略
-- `intelligence.enabled=true` 且 `inject_to_attack_agents=true` 且 `threat_model.json` 存在 → 注入威胁模型与认知盲点
+- `intelligence.enabled=true` 且 `inject_to_attack_agents=true` → 执行 `threat_model_injector.py --mode attack` 并注入结果
 
 ### v2.1 Judge Agent 增强注入（intelligence.enabled=true 且 inject_to_judge_agents=true）
 
-在派发 Judge Agent 之前（Step 8e），将威胁模型的 `judge_enhancements` 部分注入到对应 Judge 的 prompt：
+**使用程序化注入脚本**（详见 `commands/mine.md` Step 8a）：
 
-- **judge-severity**：注入 `severity_calibration` 规则
-- **judge-novelty**：注入 `novelty_context`（最近修复的模式、已知进行中的 issue）
-- **judge-evidence**：注入 `submission_success_probability`（基于开发者历史态度预测提交成功率）
-
-在 reflection_context 之后，追加从 Strategy Registry 读取的策略：
-```
-## 跨会话策略注入
-
-以下策略来自之前成功挖掘的经验（跨 DB 迁移）：
-
-{cross_session_strategies 的输出}
-
-使用这些策略作为初始 seed。对于标记了 applicable_dbs 包含当前 DB 的策略，
-应用 migration_rules 中的 DB 特定适配规则。
+```bash
+THREAT_MODEL_JUDGE_SEVERITY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type severity --text-only)
+THREAT_MODEL_JUDGE_NOVELTY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type novelty --text-only)
+THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type evidence --text-only)
 ```
 
-策略由 `scripts/strategy_injector.py {target} --text-only` 生成。
+在派发对应 Judge Agent 时（Step 8e），将 `${THREAT_MODEL_JUDGE_*}` 追加到 prompt 末尾：
+- **judge-severity** → `${THREAT_MODEL_JUDGE_SEVERITY}`（severity_calibration：AUTO_DOWNGRADE / CONFIRM_SEVERITY / DOWNGRADE）
+- **judge-novelty** → `${THREAT_MODEL_JUDGE_NOVELTY}`（novelty_context：已修复模式、已知进行中 issue、回归风险）
+- **judge-evidence** → `${THREAT_MODEL_JUDGE_EVIDENCE}`（submission_success_probability：高/中/低提交成功率 + 证据门槛调整）
+
+### v2.0 跨会话策略注入（evolution.enabled=true）
+
+策略由 `scripts/strategy_injector.py {target} --text-only` 生成，在 Attack Agent prompt 中注入。
 
 #### 8b. 并发出动 Attack Trio
 **并发（非顺序）** 派三个 Attack Agent，**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
@@ -500,20 +486,23 @@ echo "severity: $(test -f results/{target}/{version}/{timestamp}/debate_logs/sta
 
 **投票逻辑（加权 AND，非简单多数票）：**
 
-evidence 和 severity 按 is_defect/not_defect 投票，novelty 永远投 is_defect 但附加 novelty_rating 元数据，doc 作为权重调节器：
+evidence 和 severity 按 is_defect/not_defect 投票，novelty 根据新颖性评级投票，doc 作为权重调节器：
 1. **文档门控**（judge-doc）：产出 DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH，调节其他 Judge 审查严格度
 2. **证据门控**（judge-evidence）：证据等级 D → 自动 not_defect，无需继续
 3. **严重性门控**（judge-severity）：severity = trivial → not_defect
-4. **新颖性标记**（judge-novelty）：永远投 is_defect，仅标记 `new` / `new_similar` / `already_reported`，不影响缺陷确认
+4. **新颖性门控**（judge-novelty）：
+   - `new` / `new_similar` / `unknown`（网络不可用）→ 投 is_defect
+   - `already_reported` / `known_wontfix` → 投 not_defect（已有人报告，不再重复提交）(v2.2 修正)
 
 **缺陷确认规则（按优先级判定）：**
 1. evidence=not_defect → **丢弃**（证据不足，记录驳回原因，不检查 severity）
 2. severity=trivial → **丢弃**（影响过小不值得报告，记录驳回原因）
    - **重要**：severity 降级逻辑（如 DOC_PARTIAL → 自动降级）可能在 judge-severity 内部将 Low 降为 trivial，此降级不代表缺陷不存在，仅影响是否值得单独报告。降级被丢弃的缺陷记录到 `downgraded_defects` 数组，供 reflection_context 参考
 3. evidence=is_defect AND severity∈{Critical,High,Medium,Low} → **确认缺陷**
-4. novelty_rating 附加到缺陷元数据，不影响确认状态，但：
-   - `new` / `new_similar` → 正常优先级
-   - `already_reported` / `known_wontfix` → 降级为 P3 优先级，但仍生成报告（标注关联 issue）
+4. novelty_rating 影响确认状态 (v2.2 修正)：
+   - `new` / `new_similar` / `unknown` → 正常进入其他维度判定
+   - `already_reported` / `known_wontfix` → vote=not_defect，缺陷被丢弃（记录关联 issue 编号到 dedup_log.json）
+   - novelty 超时 → 全部标记 `unknown`，投 `is_defect`（不因网络问题丢弃缺陷）
 5. doc_verification_result 附加到缺陷元数据：
    - DOC_VERIFIED → 正常格式
    - DOC_PARTIAL → 标注文档引用为 PARTIAL，严重性自动降一级（但仅影响 severity 输出，不影响 evidence 判定）

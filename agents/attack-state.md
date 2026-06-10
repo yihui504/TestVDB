@@ -57,6 +57,35 @@ tools:
 4. 如果策略模板中的端点已在 `exhausted_endpoints` 中，跳过该策略
 5. 同一策略在你的 attack round 中最多使用 3 次，避免重复
 
+## 威胁模型与认知盲点消费（v2.1 新增）
+
+如果 prompt 中包含「威胁模型与认知盲点注入（v2.1 Strategic Intelligence）」部分，你应该：
+
+### 1. 攻击目标优先级调整
+
+根据「攻击面优先级」中的端点排序，调整攻击目标选择：
+- **critical 端点**（如 points/upsert、points/search）→ 每轮至少分配 60% 的脚本，优先选择标记了 `concurrent_state` 或 `resource_exhaustion` 策略的端点
+- 每个端点按其 `recommended_attack_order` 中与 state 攻击相关的 strategy 顺序生成脚本
+
+### 2. 认知盲点驱动策略选择
+
+根据「开发者认知盲点」中的盲点描述和 `attack_strategy_mapping`，优先选择映射到 `testvdb:attack-state` 的盲点：
+- **BS-03 (Concurrency Blindness)** → 主攻：并发竞争（策略 4）、分片传输竞争、部分提交检测
+- 在脚本中标注关联的盲点 ID（如 `# Blindspot: BS-03 Concurrency Blindness`）
+
+### 3. by-design 行为规避
+
+根据「已知 by-design 行为」列表：
+- 遇到匹配的场景时跳过，在脚本注释中标注 `SKIPPED: by-design per threat_model`
+- 不要浪费脚本配额在这些已声明的行为上
+
+### 4. 全局策略权重应用
+
+根据「全局策略权重」分配本轮脚本类型比例：
+- `state_consistency_attacks` → 状态一致性攻击（策略 1-3）占对应比例
+- `resource_exhaustion_attacks` → 资源耗尽（策略 4）占对应比例
+- 权重 < 0.1 的策略 → 本轮可跳过
+
 ## 攻击策略
 
 **重要：优先使用 REST API（requests 库）而非 SDK。** 仅在明确需要 SDK 特有功能（如 Milvus 的 bulk insert、Qdrant 的 batch update）时才使用 SDK。SDK 版本不兼容是常见失败原因，REST API 更稳定。
@@ -215,7 +244,26 @@ For pgvector: VACUUM → Verify count unchanged
 
 ## 输出格式
 
-每个生成脚本遵循与 boundary 相同的模板格式（参考 attack-boundary.md 的输出格式）。
+**⛔ 脚本格式强制要求：每个生成的脚本必须使用 `safe_request()` 包装所有 HTTP 调用。**
+
+```python
+def safe_request(method, url, **kwargs):
+    """包装 requests 调用，安全处理非 JSON 响应、连接失败、超时"""
+    try:
+        resp = requests.request(method, url, timeout=30, **kwargs)
+        try:
+            body = resp.json()
+        except (json.JSONDecodeError, ValueError):
+            body = resp.text
+        return resp.status_code, body
+    except requests.exceptions.ConnectionError:
+        return 0, "CONNECTION_REFUSED"
+    except requests.exceptions.Timeout:
+        return 0, "TIMEOUT"
+```
+
+- 裸 `requests.post(url, json=...).json()` 链式调用 → 流水线 REJECT
+- 脚本末尾必须打印 `VERDICT: DEFECT_FOUND` / `NO_DEFECT` / `SCRIPT_ERROR`
 
 ---
 

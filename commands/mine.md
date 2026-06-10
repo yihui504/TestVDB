@@ -59,7 +59,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 ## 执行流程（主进程 = 编排者）
 
-详细 SOP 文档见 `agents/orchestrator.md`。以下是主进程必须执行的步骤：
+> **📖 完整 SOP 参考**: `agents/orchestrator.md`（阶段详解、投票规则、错误处理）、`skills/pipeline/SKILL.md`（六阶段流水线规范）。本文件只保留编排调度命令，不重复 SOP 描述。
 
 ### Step 1: 解析参数
 - 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector}
@@ -156,9 +156,14 @@ with open('intelligence/{target}/threat_model.json', encoding='utf-8') as f:
 generated = data['_meta']['generated_at']
 # 鲁棒的 ISO 8601 解析（处理带/不带毫秒和时区的格式）
 try:
-    ts = datetime.fromisoformat(generated)
+    # Python >=3.11 supports Z; replace with +00:00 for 3.8/3.9/3.10
+    clean = generated.replace("Z", "+00:00") if "Z" in generated.upper() else generated
+    ts = datetime.fromisoformat(clean)
 except ValueError:
+    # Fallback: strip to YYYY-MM-DDTHH:MM:SS and assume UTC
     ts = datetime.strptime(generated[:19], '%Y-%m-%dT%H:%M:%S')
+    if generated.endswith('Z'):
+        ts = ts.replace(tzinfo=timezone.utc)
 age_hours = (time.time() - ts.timestamp()) / 3600
 print(f'Age: {age_hours:.1f}h')
 " 2>/dev/null
@@ -323,52 +328,35 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
 
 ### v2.1 威胁模型与认知盲点注入（intelligence.enabled=true 且 inject_to_attack_agents=true）
 
-在跨会话策略之后，追加从 Threat Model 提取的攻击优先级和认知盲点：
+**使用程序化注入脚本生成 Attack Agent 的威胁模型注入文本：**
 
+```bash
+THREAT_MODEL_ATTACK=$(python scripts/threat_model_injector.py {target} --mode attack --text-only 2>/dev/null || echo "")
 ```
-## 威胁模型与认知盲点注入（v2.1 Strategic Intelligence）
 
-### 攻击面优先级
-
-以下区域在当前 DB 的历史中具有最高缺陷密度，应优先攻击：
-
-{从 threat_model.json 的 attack_priority_map 提取的 top-5 endpoints 及其推荐攻击策略}
-
-### 开发者认知盲点
-
-以下盲点是开发者在该代码库中系统性遗漏的模式。你的攻击应重点针对这些盲点：
-
-{从 threat_model.json 的 cognitive_blindspots 提取的 top-3 blindspots}
-
-### 已知 by-design 行为（避免误报）
-
-以下行为开发者已声明为 by-design，不要攻击这些场景：
-
-{从 threat_model.json 的 defect_criteria.by_design_behaviors 提取}
-
-### 全局策略权重
-
-基于历史缺陷分布，建议各攻击策略分配如下权重：
-- boundary_attacks: {weight}（如参数校验问题高发则提高）
-- type_confusion_attacks: {weight}
-- state_consistency_attacks: {weight}
-- semantic_contract_attacks: {weight}
-```
+在派发 Attack Agent 时，将 `${THREAT_MODEL_ATTACK}` 追加到 prompt 末尾（跨会话策略之后）。如果 threat_model.json 不存在，脚本输出 `（威胁模型数据不可用）`——流水线不中断。
 
 **注入条件汇总**：
 - `reflection_context != null` → 注入本轮经验
 - `evolution.enabled=true` 且 `cross_session_strategies` 有实质内容 → 注入跨会话策略
-- `intelligence.enabled=true` 且 `inject_to_attack_agents=true` 且 `threat_model.json` 存在 → 注入威胁模型与认知盲点
+- `intelligence.enabled=true` 且 `inject_to_attack_agents=true` → 执行 `threat_model_injector.py --mode attack` 并注入结果
 
 ### v2.1 Judge Agent 增强注入（intelligence.enabled=true 且 inject_to_judge_agents=true）
 
-在派发 Judge Agent 之前（Step 8e），将威胁模型的 `judge_enhancements` 部分注入到对应 Judge 的 prompt：
+**使用程序化注入脚本生成各 Judge Agent 的增强注入文本：**
 
-**judge-severity 增强：** 注入 `severity_calibration` 规则（by_design 降级、历史高严重性模式确认、wontfix 降级）
+```bash
+THREAT_MODEL_JUDGE_SEVERITY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type severity --text-only 2>/dev/null || echo "")
+THREAT_MODEL_JUDGE_NOVELTY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type novelty --text-only 2>/dev/null || echo "")
+THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type evidence --text-only 2>/dev/null || echo "")
+```
 
-**judge-novelty 增强：** 注入 `novelty_context`（最近修复的模式、已知进行中的 issue）
+在派发对应 Judge Agent 时（Step 8e），将 `${THREAT_MODEL_JUDGE_*}` 追加到 prompt 末尾。
 
-**judge-evidence 增强：** 注入 `submission_success_probability`（基于开发者历史态度预测提交成功率）
+**注入映射**：
+- `judge-severity` → `${THREAT_MODEL_JUDGE_SEVERITY}`（severity_calibration：by-design 降级、历史高严重性确认、wontfix 降级）
+- `judge-novelty` → `${THREAT_MODEL_JUDGE_NOVELTY}`（novelty_context：最近修复模式、已知进行中 issue、回归风险区域）
+- `judge-evidence` → `${THREAT_MODEL_JUDGE_EVIDENCE}`（submission_success_probability：基于开发者历史态度预测提交成功率）
 
 **v2.0 新增 — Fan-Out 模式（fan_out.enabled=true 时）：**
 
@@ -403,6 +391,16 @@ Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target
   prompt="按照 agents/attack-semantic.md 规范，focus_profile=rejection_pattern。从上轮驳回模式反向推导新攻击，绕过已知驳回路径。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}")
 ```
 
+**v2.1 威胁模型注入（每个 Attack Agent prompt 末尾）：**
+
+以上所有 Attack Agent 的 prompt 末尾必须追加 `${THREAT_MODEL_ATTACK}`（由 Step 8a 中的 `threat_model_injector.py --mode attack` 生成）。即：
+
+```
+<原 prompt>\n\n${THREAT_MODEL_ATTACK}
+```
+
+如果 `${THREAT_MODEL_ATTACK}` 为空（threat_model.json 不存在或 intelligence 禁用），不影响流水线。
+
 **9 个 Agent 全部并行派发**。超时机制不变（3 分钟无产出 → 超时）。部分超时不影响其他 seed。
 
 **汇聚与去重（fan_out.enabled=true 时）：**
@@ -427,21 +425,7 @@ find results/{target}/{version}/{timestamp} -name "*.py" -type f ! -path "*/mre/
 5. **v2.1.1 脚本错误启发式检测（⛔ 关键——防止脚本错误被误判为数据库缺陷）**
    对每个脚本执行静态检测：
    ```bash
-   python -c "
-   import os, glob
-   session_dir = 'results/{target}/{version}/{timestamp}'
-   error_patterns = [\"'str' object has no attribute 'get'\", 'TypeError', 'AttributeError',
-       \"json.decoder.JSONDecodeError\", 'KeyError:', 'IndexError:']
-   for f in glob.glob(f'{session_dir}/**/*.py', recursive=True):
-       with open(f, encoding='utf-8', errors='replace') as fh:
-           content = fh.read()
-       for pat in error_patterns:
-           if pat.lower() in content.lower():
-               # 检查是否有对应的健壮处理
-               if 'safe_request' not in content and 'try:' not in content:
-                   print(f'RISKY_SCRIPT: {f} contains {pat} without error handling')
-                   break
-   "
+   python scripts/detect_risky_scripts.py "results/{target}/{version}/{timestamp}"
    ```
    标记输出中的 `RISKY_SCRIPT`，在后续执行日志中优先检查这些脚本的 SCRIPT_ERROR。
 
@@ -474,27 +458,9 @@ Agent(
 
 1. **扫描脚本错误**（主进程执行）：
 ```bash
-python -c "
-import os, glob, json
-session_dir = 'results/{target}/{version}/{timestamp}'
-errored = []
-for log_path in sorted(glob.glob(f'{session_dir}/output_*.log')):
-    with open(log_path, encoding='utf-8', errors='replace') as f:
-        content = f.read()
-    is_se = any(x.lower() in content.lower() for x in [
-        \"'str' object has no attribute 'get'\", 'TypeError', 'AttributeError',
-        'SCRIPT_ERROR', 'KeyError:', 'json.decoder.JSONDecodeError'
-    ])
-    if is_se:
-        base = os.path.basename(log_path).replace('output_', '').replace('.log', '')
-        # Extract the last 10 lines as error context
-        lines = [l.strip() for l in content.split(chr(10)) if l.strip()]
-        error_context = chr(10).join(lines[-10:])
-        errored.append({'script_base': base, 'log': os.path.basename(log_path), 'error': error_context[:500]})
-
-print(json.dumps({'errored_count': len(errored), 'scripts': errored}, indent=2, ensure_ascii=False))
-"
+python scripts/scan_script_errors.py "results/{target}/{version}/{timestamp}"
 ```
+输出 JSON 包含 `errored_count` 和 `scripts` 列表。
 
 2. **如果 errored_count = 0** → 跳过打回修改，直接进入 Step 8e。
 
@@ -563,14 +529,23 @@ Agent(subagent_type="testvdb:judge-doc", description="文档契约验证 {target
 先并发派发 3 个 Judge Agent：
 ```
 Agent(subagent_type="testvdb:judge-evidence", description="证据审查 {target}",
-  prompt="按照 agents/judge-evidence.md 规范，审查以下执行结果的证据可信度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}")
+  prompt="按照 agents/judge-evidence.md 规范，审查以下执行结果的证据可信度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}\n\n${THREAT_MODEL_JUDGE_EVIDENCE}")
 
 Agent(subagent_type="testvdb:judge-novelty", description="新颖性审查 {target}",
-  prompt="按照 agents/judge-novelty.md 规范，审查以下候选缺陷的新颖性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}")
+  prompt="按照 agents/judge-novelty.md 规范，审查以下候选缺陷的新颖性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}\n\n${THREAT_MODEL_JUDGE_NOVELTY}")
 
 Agent(subagent_type="testvdb:judge-severity", description="严重性评估 {target}",
-  prompt="按照 agents/judge-severity.md 规范，评估以下候选缺陷的严重程度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}")
+  prompt="按照 agents/judge-severity.md 规范，评估以下候选缺陷的严重程度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}\n\n${THREAT_MODEL_JUDGE_SEVERITY}")
 ```
+
+**v2.1 Judge 增强注入（每个 Judge Agent prompt 末尾）：**
+
+以上 Judge Agent 的 prompt 末尾已追加对应的 `${THREAT_MODEL_JUDGE_*}` 变量（由 Step 8a 中的 `threat_model_injector.py --mode judge` 生成）：
+- `judge-evidence` → `${THREAT_MODEL_JUDGE_EVIDENCE}`
+- `judge-novelty` → `${THREAT_MODEL_JUDGE_NOVELTY}`
+- `judge-severity` → `${THREAT_MODEL_JUDGE_SEVERITY}`
+
+如果对应变量为空（threat_model.json 不存在或 intelligence 禁用），不影响流水线。
 
 **等待全部完成后验证产出：**
 ```bash
@@ -598,42 +573,7 @@ echo "severity: $(test -f results/{target}/{version}/{timestamp}/debate_logs/sta
 
 去重脚本（主进程执行）：
 ```bash
-python -c "
-import json, os
-session_dir = 'results/{target}/{version}/{timestamp}'
-# 加载本轮 confirmed
-with open(f'{session_dir}/debate_logs/stage2_aggregation.json') as f:
-    current = json.load(f)
-# 加载历史 confirmed（如果存在）
-history_file = f'{session_dir}/../dedup_state.json'
-history = []
-if os.path.exists(history_file):
-    with open(history_file) as f:
-        history = json.load(f).get('confirmed', [])
-
-# 去重逻辑
-seen = set()
-deduped = []
-for d in current.get('defects', []):
-    key = (d.get('endpoint',''), d.get('type',''))
-    if key in seen:
-        continue
-    # 跨轮检查
-    is_dup = False
-    for h in history:
-        if (h.get('endpoint',''), h.get('type','')) == key:
-            is_dup = True
-            break
-    if not is_dup:
-        seen.add(key)
-        deduped.append(d)
-
-print(f'Before dedup: {len(current.get(\"defects\",[]))}, After: {len(deduped)}')
-# 写入去重后列表
-with open(f'{session_dir}/debate_logs/stage2_deduped.json', 'w') as f:
-    from datetime import datetime, timezone
-    json.dump({'defects': deduped, 'deduped_at': datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}, f, indent=2)
-"
+python scripts/dedup_defects.py "results/{target}/{version}/{timestamp}"
 ```
 **如果去重后数量为 0** → 本轮无新缺陷，跳过 Reporter，直接进入 8g。
 
@@ -693,6 +633,18 @@ mkdir -p results/{target}/{version}/{timestamp}/issues
 - Description, Version, Steps to Reproduce, Expected Behavior, Actual Behavior, Impact, Environment
 - 关联的 MRE 脚本路径
 - 底部标注 `🤖 Generated with [Claude Code](https://claude.com/claude-code)`（本地草稿，需人工审核后手动提交）
+
+#### 9a.5 Issue 审核提醒（v2.1.2 新增）
+
+> ⚠️ **人工审核必需**：上述 Issue 草稿由 AI 生成，仅作为本地参考。
+> 在提交到 GitHub 之前，必须由人类工程师完成以下审核：
+> 1. [ ] 确认缺陷在当前最新版本中仍然存在
+> 2. [ ] 验证复现步骤的准确性和完整性
+> 3. [ ] 检查是否已有其他用户报告的重复 Issue
+> 4. [ ] 调整语气和格式以符合目标项目的 Issue 模板
+> 5. [ ] 移除 AI 生成标记，以个人身份提交
+>
+> **Issue 草稿路径**: `results/{target}/{version}/{timestamp}/issues/issue-{N}-{slug}.md`
 
 #### 9b. 生成 `summary.md` + `defect-review.md`
 

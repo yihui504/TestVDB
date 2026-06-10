@@ -104,7 +104,7 @@ def verify_session(session_dir, target="unknown"):
 
         # 2. Script error check (look for associated log)
         log_basename = None
-        log_match = re.search(r"output_([a-z_0-9]+)\.log", content)
+        log_match = re.search(r"output_([\w-]+)\.log", content)
         if log_match:
             log_basename = f"output_{log_match.group(1)}.log"
         # Also check with _diag suffix
@@ -122,8 +122,8 @@ def verify_session(session_dir, target="unknown"):
 
         # 3. Classification
         if script_error:
-            status = "FALSE_POSITIVE"
-            reason = "Execution log contains Python script error (not a DB defect)"
+            status = "NEEDS_IMPROVEMENT"
+            reason = "Execution log contains Python errors — may co-occur with real DB defect, manual verification needed"
         elif missing_rings:
             status = "NEEDS_IMPROVEMENT"
             reason = f"Missing evidence rings: {', '.join(missing_rings)}"
@@ -223,7 +223,7 @@ if __name__ == "__main__":
 
     if "error" in result:
         print(f"Verification failed: {result['error']}")
-        sys.exit(0)  # Not fatal — session may be incomplete
+        sys.exit(3)  # No data to verify — caller should distinguish from PASS
 
     write_review_md(session_dir, result, target)
 

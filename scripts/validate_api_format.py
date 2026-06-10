@@ -2,13 +2,15 @@
 """Stage 1 API call format validator — AST-level check for safe_request() compliance.
 
 Detects:
-  - Bare .json() chains (e.g. requests.post(...).json()["key"]) → REJECT
-  - safe_request() defined but never called → REJECT
+  - ANY bare .json() method call (variable.json(), library.func().json(), etc.) → REJECT
+  - .json() calls inside safe_request() function bodies are excluded (safe harbor)
+  - safe_request() defined but never called → WARN
   - All calls use safe_request() → PASS
 
 Usage:
   python scripts/validate_api_format.py <session_dir>
 """
+from __future__ import annotations
 import ast, glob, json, os, sys
 
 if sys.platform == "win32":
@@ -16,7 +18,7 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-def validate_scripts(session_dir):
+def validate_scripts(session_dir: str) -> list[dict]:
     """Scan all .py files in session_dir for API call format violations."""
     findings = []
     for f in sorted(glob.glob(os.path.join(session_dir, "**/*.py"), recursive=True)):
@@ -31,22 +33,25 @@ def validate_scripts(session_dir):
         has_safe_def = False
         has_safe_use = False
         bare_json = []
+        safe_request_ranges = []
 
         for node in ast.walk(tree):
             if isinstance(node, ast.FunctionDef) and node.name == "safe_request":
                 has_safe_def = True
+                if hasattr(node, 'end_lineno'):
+                    safe_request_ranges.append((node.lineno, node.end_lineno))
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Name) and node.func.id == "safe_request":
                     has_safe_use = True
-                # Detect bare .json() chain on requests response
+                # Detect ANY bare .json() method call on any object
+                # (variable.json(), lib.func().json(), session.post().json(), etc.)
+                # Excluding json.dumps()/json.loads() — those have attr="dumps"/"loads"
                 if isinstance(node.func, ast.Attribute) and node.func.attr == "json":
-                    if isinstance(node.func.value, ast.Call):
-                        inner = node.func.value.func
-                        if isinstance(inner, ast.Attribute) and isinstance(
-                            inner.value, ast.Name
-                        ):
-                            if inner.value.id == "requests":
-                                bare_json.append(node.lineno)
+                    bare_json.append(node.lineno)
+
+        # Exclude .json() calls inside safe_request() function bodies (safe harbor)
+        bare_json = [line for line in bare_json
+                     if not any(start <= line <= end for start, end in safe_request_ranges)]
 
         issues = []
         if bare_json:
@@ -80,6 +85,9 @@ def main():
         rejects = [f for f in findings if any("bare .json()" in i for i in f["issues"])]
         if rejects:
             print(f"[Stage 1] API Format Check: {len(rejects)} scripts REJECTED (bare .json() chain)")
+            sys.exit(1)  # Non-zero exit signals REJECT to caller (mine.md Step 8c)
+        # Warn-only findings (safe_request defined but never called) — exit 0
+        print("[Stage 1] API Format Check: warnings only, no bare .json() chains rejected")
         sys.exit(0)
     else:
         print("[Stage 1] API Format Check: all scripts pass")
