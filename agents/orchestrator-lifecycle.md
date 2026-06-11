@@ -23,22 +23,57 @@ description: Orchestrator 生命周期管理 — 错误处理、上下文压缩�
 
 ---
 
-## PreCompact / PostCompact 上下文保护
+## 上下文保护 — ScheduleWakeup Loop + Hook 安全网
 
-### PreCompact
-当 Claude Code 发出 PreCompact 信号时（上下文即将压缩），hook 自动触发 `testvdb-pre-compact.js`：
-1. 扫描 `results/` 下所有 active 状态的 session（mine_state.json status=running）
-2. 保存 mine_state.json + coverage.json + pipeline_state 快照到 `~/.claude/state/testvdb-compact-recovery.json`
-3. 创建恢复标记 `~/.claude/state/testvdb-needs-recovery`
+### 主方案：ScheduleWakeup 跨 Turn Loop
 
-### PostCompact
-上下文压缩后，hook 自动触发 `testvdb-post-compact.js`：
-1. 检查恢复标记是否存在
-2. 读取 `testvdb-compact-recovery.json` 中的会话状态
-3. 输出恢复提示（session_id、当前轮次、流水线阶段、下一步操作）
-4. 主进程根据恢复提示继续执行
+流水线采用 **ScheduleWakeup 驱动的跨 Turn 迭代模型**。每轮挖掘是一个独立 Turn：
 
-**Hook 配置位置**：`~/.claude/settings.json` 的 `PreCompact` 和 `PostCompact` 节。
+1. **Turn 1 (FRESH_START)**：Step 1-7 (setup) + Round 1 (8a→8j) → ScheduleWakeup 触发 Turn 2
+2. **Turn N (RESUME)**：`reconstruct_context.py` 从磁盘重建上下文 → Round N (8a→8j) → ScheduleWakeup 或终止
+3. **Final Turn**：Step 9-10 (汇总 + 清理)
+
+**每轮开始时重建上下文**：
+```bash
+python scripts/reconstruct_context.py --session-dir "{session_dir}" --format text
+```
+输出包含：当前 phase、已完成的 phases、本轮关键信息、全局进度、下一步行动。
+
+**状态机驱动**：`pipeline_state.json`（v3 schema）是跨 Turn 的唯一状态源。每个 phase 完成后立即更新，确保断点恢复精确到步骤。
+
+**轮内断点恢复**：如果单 Turn 内（8a→8j 中间）触发压缩：
+- `phases_completed` 列表记录了已完成的阶段
+- `phase_data` 记录了每个阶段的产出摘要
+- Loop Turn 入口自动跳过已完成 phase，从断点继续
+
+### 安全网：PreCompact / PostCompact Hook
+
+Hook 作为**最后手段**保护轮内压缩场景。Loop Turn 入口的 `reconstruct_context.py` 是主恢复机制。
+
+#### PreCompact
+`precompact_save.py` 保存 `pipeline_state.json`（含精确断点信息）到 `.checkpoints/`。行为不变。
+
+#### PostCompact
+`postcompact_verify.py` 读取 `pipeline_state.json`（v3 schema），输出：
+- 当前 phase + 已完成 phases
+- 精确的恢复指令（从哪个 phase 继续，跳过哪些）
+- 如果 turn_type=loop，提示运行 `reconstruct_context.py` 获取完整上下文
+
+PostCompact 输出被注入为 `<system-reminder>`，压缩后的 agent 可据此继续当前 Turn 执行。
+
+### Phase 状态机
+
+```
+ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → DEBATE_S2 → 
+REPORTING → DEFECT_REVIEW → STATE_SAVE → 
+  ├─ ScheduleWakeup → ROUND_START (下一轮)
+  └─ CLEANUP → DONE
+```
+
+每个 phase 完成后更新 `pipeline_state.json` 的三个关键字段：
+- `phase`: 下一阶段名
+- `phases_completed`: 追加当前阶段
+- `phase_data.{当前阶段}`: 记录产出摘要
 
 ---
 

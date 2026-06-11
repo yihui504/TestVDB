@@ -4,11 +4,24 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Version](https://img.shields.io/badge/version-2.1.1-orange.svg)](https://github.com/yihui504/TestVDB/releases)
+[![Version](https://img.shields.io/badge/version-2.1.2-orange.svg)](https://github.com/yihui504/TestVDB/releases)
 
 **基于 LLM 的向量数据库自动化缺陷挖掘工具**
 
 TestVDB 以 Claude Code 插件形式运行，通过自然语言契约逆向工程从官方文档自动提取结构化约束，结合多 Agent 辩论机制在 Docker 沙箱中自动发现 Milvus、Qdrant、Weaviate、pgvector 的合规性缺陷，产出可复现、可追溯的完整证据链报告。
+
+---
+
+## v2.1.2 新特性
+
+- **跨 Turn 状态机**： v3——支持 phase 级断点恢复。每个 phase 完成后立即持久化，上下文压缩后可从精确断点继续，不依赖模型记忆。
+- **ScheduleWakeup Loop**：多轮挖掘采用  驱动的跨 Turn 迭代。每轮是独立 Turn， 在每轮开始时从磁盘状态文件重建完整流水线上下文。
+- **上下文重建**：新增 ，读取 6 个状态文件（pipeline_state、mine_state、coverage、experience_handoff、structured_contract、threat_model），输出自包含的 Agent 上下文——当前 phase、已完成 phases、每 phase 产出摘要、全局进度、终止条件、下一步行动。
+- **Executor 可靠性修复**： 的模板变量替换从嵌入 bash 命令改为 Step 0 显式 shell 赋值（、、）。bash 变量展开是确定性的——零字节日志 bug 根除。Agent 保持完整执行控制权（无脚本绕过）。
+- **PostCompact 增强**： 同时支持 v3 和 legacy schema，输出精确 phase 级恢复指令并自动降级兼容。
+- **Agent 更新**： 重写——4 步 SOP，每步显式声明变量，Windows 路径通过  标准化，每脚本实时 exit code 可见。
+
+[完整更新日志 →](#v211-新特性)
 
 ---
 
@@ -22,7 +35,7 @@ TestVDB 以 Claude Code 插件形式运行，通过自然语言契约逆向工�
 - **Orchestrator 生命周期管理**：提取为 `orchestrator-lifecycle.md`（错误处理策略、PreCompact/PostCompact 上下文保护、进度可见性、多 DB 并行）
 - **pgvector SQL 端点模式**：完成 `strategy_extractor.py` 中 SQL 数据库的 DDL/DML/Search/Index 正则模式
 - **异常处理加固**：裸 `except:` → 具体异常类型、`--target` 缺值验证、`.env` 引号剥离
-- **Agent 舰队**：18 个 Agent（+ `orchestrator-lifecycle`、+ `reporter-mre`），24 个脚本（+ `_session_utils.py`、+ `validate_api_format.py`）
+- **Agent 舰队**：18 个 Agent（+ `orchestrator-lifecycle`、+ `reporter-mre`），25 个脚本（+ `_session_utils.py`、+ `validate_api_format.py`、+ `reconstruct_context.py`）
 
 [完整更新日志 →](#v21-新特性详解)
 
@@ -42,6 +55,7 @@ TestVDB 以 Claude Code 插件形式运行，通过自然语言契约逆向工�
 
 ## 目录
 
+- [v2.1.2 新特性](#v212-新特性)
 - [v2.1.1 新特性](#v211-新特性)
 - [v2.1 新特性](#v21-新特性)
 - [v2.0 新特性详解](#v20-新特性详解)
@@ -400,7 +414,7 @@ TestVDB/
     settings_schema.json          配置验证 Schema
     pgvector_contract.json        PGVector 参考契约
     weaviate_contract.json        Weaviate 参考契约
-  scripts/                        基础设施脚本（24 个）
+  scripts/                        基础设施脚本（25 个）
     passport_verify.py            Material Passport 哈希验证
     strategy_extractor.py         跨会话策略提取
     strategy_injector.py          跨 DB 策略注入

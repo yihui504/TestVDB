@@ -4,13 +4,26 @@ English | [中文](./README_zh.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Version](https://img.shields.io/badge/version-2.1.1-orange.svg)](https://github.com/yihui504/TestVDB/releases)
+[![Version](https://img.shields.io/badge/version-2.1.2-orange.svg)](https://github.com/yihui504/TestVDB/releases)
 
 **Automated Defect Mining for Vector Databases**
 
 TestVDB is an LLM-powered Claude Code plugin that automatically discovers compliance defects in vector databases. It reverse-engineers structured contracts from official documentation, generates targeted attack scripts through multi-agent debate, executes them in Docker sandboxes, and produces verified defect reports with full evidence chains.
 
 Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
+
+---
+
+## What's New in v2.1.2
+
+- **Cross-Turn State Machine**: `pipeline_state.json` v3 — phase-level checkpoint recovery across context compaction. Every phase completion is immediately persisted, enabling exact breakpoint resumption without relying on model memory.
+- **ScheduleWakeup Loop**: Multi-round mining now uses `ScheduleWakeup`-driven cross-turn iteration. Each round is an independent Turn, with `reconstruct_context.py` rebuilding full pipeline context from disk state files at the start of each loop turn.
+- **Context Reconstruction**: New `reconstruct_context.py` reads 6 state files (pipeline_state, mine_state, coverage, experience_handoff, structured_contract, threat_model) and produces a self-contained agent context — phase, completed phases, per-phase outputs, global progress, termination conditions, and next action.
+- **Executor Reliability Fix**: Template variable substitution in `docker-executor` moved from embedded bash commands to explicit Step 0 shell assignments (`$TARGET`, `$SESSION_DIR`, `$DB_PORT`). Bash variable expansion is deterministic — zero-byte log bug eliminated. Agent retains full execution control (no script-based bypass).
+- **PostCompact Enhancement**: `postcompact_verify.py` now supports both v3 and legacy schemas, with precise phase-level recovery instructions and automatic fallback.
+- **Agent Update**: `docker-executor.md` rewritten — 4-step SOP with explicit variable declaration per step, Windows path normalization via `sed`, real-time per-script exit code visibility.
+
+[Full Changelog →](#whats-new-in-v211)
 
 ---
 
@@ -24,7 +37,7 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 - **Orchestrator Lifecycle Management**: Extracted to `orchestrator-lifecycle.md` (error handling strategy, PreCompact/PostCompact context protection, progress visibility, multi-DB parallelism)
 - **pgvector SQL Endpoint Patterns**: Completed `strategy_extractor.py` with DDL/DML/Search/Index regex patterns for SQL-based vector databases
 - **Exception Hardening**: Bare `except:` → specific exception types, `--target` missing-value validation, `.env` quote stripping
-- **Agent Fleet**: 18 agents (+ `orchestrator-lifecycle`, + `reporter-mre`), 24 scripts (+ `_session_utils.py`, + `validate_api_format.py`)
+- **Agent Fleet**: 18 agents (+ `orchestrator-lifecycle`, + `reporter-mre`), 25 scripts (+ `_session_utils.py`, + `validate_api_format.py`, + `reconstruct_context.py`)
 
 [Full Changelog →](#whats-new-in-v21)
 
@@ -44,6 +57,7 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## Table of Contents
 
+- [What's New in v2.1.2](#whats-new-in-v212)
 - [What's New in v2.1.1](#whats-new-in-v211)
 - [What's New in v2.1](#whats-new-in-v21)
 - [What's New in v2.0](#whats-new-in-v20)
@@ -64,19 +78,19 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ## How It Works
 
-TestVDB operates as a **Claude Code plugin** with a 7-phase pipeline orchestrated by 18 specialized agents:
+TestVDB operates as a **Claude Code plugin** with a 7-phase pipeline orchestrated by 18 specialized agents. Multi-round mining uses **ScheduleWakeup-driven cross-turn iteration** — each round is an independent Turn, with `pipeline_state.json` (v3 state machine) persisting phase-level progress to disk for exact breakpoint recovery after context compaction.
 
 ```
 Phase 0: Strategic Intelligence      -- Historical issue mining + bug shape extraction + threat modeling
 Phase 1: Knowledge Extraction        -- WebSearch + WebFetch official docs
 Phase 2: Contract Formalization      -- Structured JSON contract from raw docs
 Phase 3: Attack Script Generation    -- 9 concurrent agents (Fan-Out) + Stage 1 debate (inc. AST validation)
-Phase 4: Sandbox Execution           -- Dual-tier execution (host Python / Docker stdin pipe)
+Phase 4: Sandbox Execution           -- Single-command batch execution via executor_runner
 Phase 5: Defect Judgment             -- 4 judge agents + Stage 2 voting debate
 Phase 6: Report Generation           -- Defect reports + MRE scripts + strategy extraction
 ```
 
-The pipeline runs iteratively: each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Phase 0 intelligence (threat model + cognitive blindspots) is also injected to prioritize attack surfaces with historically high defect density. Stage 1 debate now includes AST-level API format validation. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
+The pipeline runs iteratively: each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Phase 0 intelligence (threat model + cognitive blindspots) is also injected to prioritize attack surfaces with historically high defect density. Stage 1 debate now includes AST-level API format validation. After each round, `pipeline_state.json` is updated and `ScheduleWakeup` triggers the next turn. `reconstruct_context.py` rebuilds full agent context from disk at the start of each loop turn. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
 
 ---
 
@@ -278,6 +292,8 @@ results/qdrant/v1.12.0/2026-06-07T15-30-00Z/
   debate_logs/stage1.json          # Attack script peer review logs
   debate_logs/stage2.json          # Judge quartet voting logs
   structured_contract.json         # Generated contract (with _passport)
+  pipeline_state.json              # v3 cross-turn state machine
+  mine_state.json                  # Session state snapshot
   session_metadata.json            # Session metadata
   coverage.json                    # Endpoint coverage tracking
   experience_handoff.json          # Cross-round reflection context
@@ -311,7 +327,7 @@ intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB
 | **attack-boundary** | redacted | Generates boundary-value attack scripts |
 | **attack-state** | redacted | Generates state-transition attack scripts |
 | **attack-semantic** | redacted | Generates semantic/logic attack scripts |
-| **docker-executor** | redacted | Dual-tier script execution (host Python / Docker stdin pipe) |
+| **docker-executor** | redacted | Batch script execution with explicit variable declaration, real-time exit code visibility |
 | **judge-doc** | raw | Validates document reference accessibility and content consistency (with network verification) |
 | **judge-evidence** | verified_only | Validates evidence chain completeness |
 | **judge-novelty** | raw | Checks defect novelty via GitHub search |
@@ -385,7 +401,7 @@ TestVDB/
     settings_schema.json          Settings validation schema
     pgvector_contract.json        PGVector reference contract
     weaviate_contract.json        Weaviate reference contract
-  scripts/                        Infrastructure scripts (24 scripts)
+  scripts/                        Infrastructure scripts (25 scripts)
     passport_verify.py            Material Passport hash verification
     strategy_extractor.py         Cross-session strategy extraction
     strategy_injector.py          Cross-DB strategy injection
