@@ -248,23 +248,41 @@ Agent(
 所有 agent（包括 Stop/SessionEnd hooks）在清理前必须检查 `.session.lock` 是否存在且 `status` 为 `active`。如果锁存在，不得删除该 session 目录下的任何文件。
 ```json
 {
+  "version": 3,
   "session_id": "{target}-{version_short}-{counter}",
-  "pipeline_state": "mining",
-  "phase": "round_1",
   "target": "{target}",
-  "version": "{version}",
+  "version_target": "{version}",
   "current_round": 1,
   "max_rounds": 5,
   "min_defects": 1,
-  "progress": { "scripts_generated": 0, "scripts_executed": 0, "defects_confirmed": 0 },
-  "defects": [],
-  "contract": {},
-  "reflection_context": null,
-  "docker_state": "not_started",
+  "phase": "ROUND_START",
+  "phase_step_index": 0,
+  "turn_type": "setup",
+  "project_root": "{PROJECT_ROOT}",
+  "session_dir": "results/{target}/{version}",
+  "timestamp_dir": "",
+  "phases_completed": [],
+  "phase_data": {},
+  "global_state": {
+    "total_defects_confirmed": 0,
+    "consecutive_no_defect_rounds": 0,
+    "overall_coverage_pct": 0.0,
+    "docker_container_running": false
+  },
   "error_log": [],
-  "timestamps": { "started_at": "..." }
+  "timestamps": {
+    "session_started": "{ISO_8601}",
+    "last_phase_change": "{ISO_8601}"
+  }
 }
 ```
+
+**v3 schema 说明**（跨 Turn 状态机）：
+- `phase`：当前所处阶段枚举（ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → DEBATE_S2 → REPORTING → DEFECT_REVIEW → STATE_SAVE → CLEANUP → DONE）
+- `phases_completed`：当前轮次已完成的阶段列表（轮内断点恢复用，每轮重置）
+- `phase_data`：每个阶段的产出摘要（供断点恢复时跳过已完成的工作）
+- `turn_type`：`setup`（Turn 1）→ `loop`（Loop Turn）→ `done`（完成）
+- `global_state`：跨轮次全局状态（缺陷总数、覆盖率、容器状态）
 
 ### Step 8: 挖掘循环（每轮）
 
@@ -331,6 +349,8 @@ THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} -
 策略由 `scripts/strategy_injector.py {target} --text-only` 生成，在 Attack Agent prompt 中注入。
 
 #### 8b. 并发出动 Attack Trio
+
+**完成后更新 pipeline_state**: `phase` → `"DEBATE_S1"`, `phases_completed` 追加 `"ATTACK_GEN"`, `phase_data.ATTACK_GEN` = `{scripts_generated: N, agents_completed: [...]}`
 **并发（非顺序）** 派三个 Attack Agent，**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
 **⛔ 绝对禁止：** Orchestrator 自己生成攻击脚本、自己执行测试、自己审查结果。Orchestrator 只负责编排和协调，所有实质性工作必须通过 Agent 工具派发给对应的子 agent。如果你发现自己正在直接编写 Python 攻击脚本或直接执行 curl 测试，立即停止，改用 Agent 派发。
@@ -375,6 +395,8 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 **首轮建议：** 先用 `seeds_per_agent=2` 测试，确认去重逻辑正确后再增加到 3。
 
 #### 8c. 辩论 Stage 1（自动化审查 + 去重 + 交叉审查）
+
+**完成后更新 pipeline_state**: `phase` → `"EXECUTION"`, `phases_completed` 追加 `"DEBATE_S1"`, `phase_data.DEBATE_S1` = `{approved_count: N, rejected_count: M}`
 
 收集三个 Agent 产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
 
@@ -427,6 +449,8 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 辩论日志写入 `debate_logs/stage1.json`。**Orchestrator 使用 Write 工具写入此文件**，将审查结果序列化为 JSON 后写入 `results/{target}/{version}/{timestamp}/debate_logs/stage1.json`。
 
 #### 8d. 派 Executor 执行通过辩论的脚本
+
+**完成后更新 pipeline_state**: `phase` → `"DEBATE_S2"`, `phases_completed` 追加 `"EXECUTION"`, `phase_data.EXECUTION` = `{scripts_executed: N, scripts_passed: M, scripts_error: K}`
 **必须使用 Agent 工具派生 docker-executor 子 agent**，禁止自己直接执行：
 
 ```
@@ -444,6 +468,8 @@ ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l
 **容器生命周期管理**：Executor 在 Step 5 执行完脚本后，**不得清理容器**。容器必须保持运行直到 Reporter 完成 Pre-Submit Gate 复现验证（Step 8f）后，由 Orchestrator 在 Step 8j 统一清理。Executor 只负责启动和执行，不负责停止。轮次间如需重置 DB 状态，由 Orchestrator 在 Step 8j 执行 `docker restart`。
 
 #### 8e. 收集结果 → 辩论 Stage 2
+
+**完成后更新 pipeline_state**: `phase` → `"REPORTING"`, `phases_completed` 追加 `"DEBATE_S2"`, `phase_data.DEBATE_S2` = `{confirmed_defects: N, rejected_defects: M}`
 将执行结果分发给 Judge Quartet（**4 个 Judge，分两阶段派发**）：
 
 **阶段 1：先派 judge-doc（文档契约验证）**
@@ -522,6 +548,8 @@ evidence 和 severity 按 is_defect/not_defect 投票，novelty 根据新颖性�
 产出 `debate_logs/stage2_deduped.json`。去重后数量为 0 → 本轮无新缺陷，跳过 Reporter。
 
 #### 8f. 派 Reporter
+
+**完成后更新 pipeline_state**: `phase` → `"DEFECT_REVIEW"`, `phases_completed` 追加 `"REPORTING"`
 **必须使用 Agent 工具派生 reporter 子 agent**：
 
 ```
@@ -552,27 +580,42 @@ ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -
 FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Reporter 重写（最多 1 次）。
 
 #### 8g. 保存状态
+
+**完成后更新 pipeline_state**: `phases_completed` 追加 `"STATE_SAVE"`
 每轮结束保存 mine_state.json + coverage.json + experience_handoff.json + pipeline_state.json。
 
-**pipeline_state.json（Agent 间协调状态文件）：**
+**pipeline_state.json（v3 跨 Turn 状态机）：**
 ```json
 {
+  "version": 3,
+  "session_id": "{session_id}",
+  "target": "{target}",
+  "version_target": "{version}",
   "current_round": 1,
-  "phase": "attack_generation|debate_s1|execution|debate_s2|reporting",
-  "attack_trio_done": false,
-  "debate_s1_done": false,
-  "execution_done": false,
-  "debate_s2_done": false,
-  "judge_doc_done": false,
-  "reporting_done": false,
-  "confirmed_defects_count": 0,
-  "scripts_generated": 0,
-  "scripts_executed": 0,
-  "next_agent": "attack_trio",
-  "agent_markers": {}
+  "max_rounds": 5,
+  "min_defects": 1,
+  "phase": "ROUND_START",
+  "phase_step_index": 0,
+  "turn_type": "setup",
+  "project_root": "{PROJECT_ROOT}",
+  "session_dir": "results/{target}/{version}",
+  "timestamp_dir": "",
+  "phases_completed": [],
+  "phase_data": {},
+  "global_state": {
+    "total_defects_confirmed": 0,
+    "consecutive_no_defect_rounds": 0,
+    "overall_coverage_pct": 0.0,
+    "docker_container_running": false
+  },
+  "error_log": [],
+  "timestamps": {
+    "session_started": "{ISO_8601}",
+    "last_phase_change": "{ISO_8601}"
+  }
 }
 ```
-每个子 agent 完成后，Orchestrator 更新 pipeline_state.json 中的对应字段。后续 agent 可读取此文件了解当前进度。
+每个子步骤完成后，主进程必须更新 `pipeline_state.json`：将当前 phase 追加到 `phases_completed`，设置 `phase` 为下一阶段，记录产出到 `phase_data`。后续 agent 可读取此文件了解当前进度。跨 Turn 恢复时，`reconstruct_context.py` 读取此文件确定断点。
 
 ### Agent 间通信可靠性机制（.done 标记文件）
 
