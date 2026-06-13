@@ -56,13 +56,24 @@ SIGNATURES: dict[str, dict[str, list[str]]] = {
 
 
 def _load_target(session_dir: str) -> str | None:
-    path = os.path.join(session_dir, "structured_contract.json")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
-        return str(data.get("target", "")).lower() or None
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return None
+    # 契约可能在 session_dir（timestamp 目录）或父级 version 目录。
+    # pipeline v3 布局: results/<target>/<version>/<timestamp>/  ← session_dir（脚本所在）
+    #          契约在: results/<target>/<version>/              ← 父级 version 目录
+    session_dir_norm = session_dir.rstrip(os.sep)
+    candidates = [
+        os.path.join(session_dir_norm, "structured_contract.json"),
+        os.path.join(os.path.dirname(session_dir_norm), "structured_contract.json"),
+    ]
+    for path in candidates:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+            target = str(data.get("target", "")).lower()
+            if target:
+                return target
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            continue
+    return None
 
 
 def _scan_file(content: str) -> dict[str, list[str]]:

@@ -109,6 +109,20 @@ def main() -> int:
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
+    # 6. 契约在父级 version 目录（pipeline v3 布局），_load_target 路径回退仍读得到
+    root = Path(tempfile.mkdtemp(prefix="neut_path_"))
+    version_dir = root / "results" / "weaviate" / "1.38.0"
+    sd = version_dir / "20260613-162742"   # timestamp 目录 = session_dir（脚本所在）
+    sd.mkdir(parents=True)
+    (version_dir / "structured_contract.json").write_text(
+        json.dumps({"target": "weaviate"}), encoding="utf-8")   # 契约在 version 目录，非 session_dir
+    (sd / "bad.py").write_text(QDRANT_SIG, encoding="utf-8")
+    try:
+        rc, out = _run(sd)
+        _check("6 契约在父级 version 目录 → 仍 REJECT(1)", rc, 1, out)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
     print(f"\n{len(PASSED)}/{len(PASSED) + len(FAILED)} passed")
     return 1 if FAILED else 0
 
