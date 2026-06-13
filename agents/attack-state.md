@@ -343,10 +343,11 @@ print(raw)  # 先看实际响应结构，按 contract.target 选键，不假设 
 
 ```markdown
 ## Analyzed Documents — state
-- https://docs.weaviate.io/weaviate
-- https://raw.githubusercontent.com/api-evangelist/weaviate/refs/heads/main/openapi/weaviate-openapi.yml
-- https://github.com/weaviate/weaviate/releases/tag/v1.38.0
-- https://pypi.org/pypi/weaviate-client/json
+- <逐字复制 raw_knowledge.md ## Document Sources 表第 1 行 URL>
+- <逐字复制第 2 行 URL>
+- <逐字复制第 3 行 URL>
+- <逐字复制第 4 行 URL>
+- <... 继续逐字复制，直到覆盖 ≥ 60% 的 Document Sources>
 ```
 
 规则：
