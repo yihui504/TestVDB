@@ -406,8 +406,10 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 3. 约束存在性验证
 4. 脚本错误启发式检测：`python scripts/detect_risky_scripts.py "results/{target}/{version}/{timestamp}"`
 5. **API 调用格式 AST 验证**：`python scripts/validate_api_format.py "results/{target}/{version}/{timestamp}"`
-6. 审查结果写入 `debate_logs/stage1.json`
-7. 脚本路径标准化
+6. **Target 中立验证**：`python scripts/validate_target_neutrality.py "results/{target}/{version}/{timestamp}"`
+   含与当前 target 不符的 DB 签名（如 target=weaviate 但脚本命中 :6333）的脚本 → 打回 Attack Agent 修改（同 8d.5 打回机制）。
+7. 审查结果写入 `debate_logs/stage1.json`
+8. 脚本路径标准化
 
 **更新 pipeline_state**: `phase` = `"EXECUTION"`, `phases_completed` 追加 `"DEBATE_S1"`, `phase_data.DEBATE_S1` = `{approved_count: N, rejected_count: M}`
 
