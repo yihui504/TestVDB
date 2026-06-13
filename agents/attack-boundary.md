@@ -120,16 +120,18 @@ tools:
 
 **生成示例**（limit 类参数，contract 要求 "limit > 0"）：
 ```python
-# Test: limit = 0 (should be rejected)
-response = requests.post(
-    "http://localhost:6333/collections/{name}/points/search",
-    json={"vector": [0.1]*128, "limit": 0}
-)
-if response.status_code not in (400, 422):
-    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
-    print(f"Expected 4xx, got {response.status_code}")
+# 契约驱动：端点/字段从注入速查表 + contract 取，禁止硬编码端口/路径/字段
+SEARCH_PATH = "<速查表 category=search 的 path>"   # 当前 target 的实际 search 端点
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"  # qdrant=vector, weaviate 按 schema
+DIM         = 128   # 从 contract 取实际维度
+
+status, body, raw = safe_request("POST", SEARCH_PATH,
+    json={VECTOR_KEY: [0.1]*DIM, "limit": 0})
+print(raw)  # 先打印原始响应，HTTP status 为主判定
+if status not in (400, 422):
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess) — limit=0 应被拒绝，got {status}")
     sys.exit(1)
-# Use explicit if-check, not assert (assert is stripped by python -O)
+# 用显式 if-check，不用 assert（assert 被 python -O 剥离）
 ```
 
 ### 策略 2: 类型边界攻击（针对 type_constraints）
@@ -153,16 +155,19 @@ if response.status_code not in (400, 422):
 针对向量维度参数：
 
 ```python
-# Test: wrong dimension
-response = requests.put(
-    "http://localhost:6333/collections/test",
-    json={"vectors": {"size": 128, "distance": "Cosine"}}
-)
-# Insert with wrong dimension
-response = requests.put(
-    "http://localhost:6333/collections/test/points",
-    json={"points": [{"id": 1, "vector": [0.1]*64}]}  # 64 != 128
-)
+# 契约驱动：建集合/插入的路径、字段、维度从速查表 + contract 取（不同 target 字段名不同）
+CREATE_PATH = "<速查表 category=collections 的 path>"
+UPSERT_PATH = "<速查表 category=points 的 path>"
+# 建集合体 + 点包装结构按 contract.data_types 推导（如 points:[...] / objects:[...]）
+
+# 建集合（维度 = 契约维度 DIM）
+status, _, raw = safe_request("PUT", CREATE_PATH,
+    json={"<建集合体 from contract.data_types>": {"<dim field>": 128}})
+print(raw)
+# 插入错误维度（64 != 契约维度 128）
+status, _, raw = safe_request("PUT", UPSERT_PATH,
+    json={"<点包装 from contract.data_types>": [{"id": 1, "vector": [0.1]*64}]})
+print(raw)
 ```
 
 ### 策略 4: 特殊值攻击
@@ -230,8 +235,9 @@ def test_boundary():
     # Setup: create collection, insert test data as needed
 
     # Act
-    status, body, raw = safe_request("POST", "/collections/test/points/search",
-        json={"vector": [0.1]*128, "limit": 0})
+    # 路径/字段从注入速查表取（target 中立）；下方为占位示例
+    status, body, raw = safe_request("POST", "<cheatsheet search path>",
+        json={"<vector field>": [0.1]*128, "limit": 0})
 
     # Assert
     if status == 0:
@@ -246,13 +252,11 @@ def test_boundary():
               f"Expected 4xx for limit=0, got {status}")
         return
 
-    # Type-2 check: error message quality
-    if body and isinstance(body, dict):
-        error_msg = body.get("status", {}).get("error", "") if isinstance(body.get("status"), dict) else ""
-        if "limit" not in error_msg.lower():
-            print(f"VERDICT: DEFECT_FOUND (Type2_PoorDiagnostics) " +
-                  f"Error message should mention 'limit', got: {error_msg}")
-            return
+    # Type-2 check: error message quality（不假设 Qdrant 的 status.error 结构，扫 raw 文本）
+    if "limit" not in raw.lower():
+        print(f"VERDICT: DEFECT_FOUND (Type2_PoorDiagnostics) " +
+              f"Error message should mention 'limit', got: {raw[:200]}")
+        return
 
     print("VERDICT: NO_DEFECT")
 
