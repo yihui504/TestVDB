@@ -108,30 +108,38 @@ tools:
 验证 state_invariants 中的计数一致性：
 
 ```python
-# Sequence: create → insert N → count = N
-response = requests.get(f"{BASE_URL}/collections/test/points/count")
-count_before = response.json()["result"]["count"]
+# Sequence: create → insert N → count = N（target 中立：路径/字段/响应键从速查表+contract 取）
+COUNT_PATH  = "<速查表 count 端点 path>"
+UPSERT_PATH = "<速查表 points 端点 path>"
+POINT_WRAP  = "<contract.data_types 的点包装结构>"
+
+_, body_before, raw_b = safe_request("GET", COUNT_PATH)
+print(f"count_before raw: {raw_b}")
+# count 按 contract.target 动态取键（不假设 ["result"]["count"]）；实现时依据实际响应结构
+count_before = "<从 body_before 按 target 取 count>"
 
 # Insert M points
 for i in range(M):
-    requests.put(f"{BASE_URL}/collections/test/points",
-                 json={"points": [{"id": i, "vector": [0.1]*128}]})
+    safe_request("PUT", UPSERT_PATH, json={POINT_WRAP: [{"id": i, "vector": [0.1]*128}]})
 
 # Count should be count_before + M
-response = requests.get(f"{BASE_URL}/collections/test/points/count")
-count_after = response.json()["result"]["count"]
-assert count_after == count_before + M, \
-    f"StateLogicViolation: Expected {count_before + M}, got {count_after}"
+_, body_after, raw_a = safe_request("GET", COUNT_PATH)
+count_after = "<从 body_after 按 target 取 count>"
+if count_after != count_before + M:
+    print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation) — Expected {count_before+M}, got {count_after}")
+    sys.exit(1)
 ```
 
 ### 策略 2: DELETE 后一致性
 
 ```python
-# Create collection + insert points
-# Delete collection
-# Verify: subsequent operations on deleted collection fail with 404
-response = requests.get(f"{BASE_URL}/collections/deleted_collection/points/count")
-assert response.status_code == 404
+# Delete collection → 后续操作应 404（target 中立：count 路径从速查表取）
+COUNT_PATH_DELETED = "<速查表 count 端点 path，指向已删除集合>"
+status, _, raw = safe_request("GET", COUNT_PATH_DELETED)
+print(raw)
+if status != 404:
+    print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation) — 已删集合应 404，got {status}")
+    sys.exit(1)
 ```
 
 ```python
@@ -156,6 +164,11 @@ assert response.status_code == 404
 import threading
 import time
 
+# 契约驱动：路径/字段从速查表 + contract 取（不同 target 字段名不同）
+UPSERT_PATH = "<速查表 points 端点 path>"
+COUNT_PATH  = "<速查表 count 端点 path>"
+POINT_WRAP  = "<contract.data_types 的点包装结构>"
+
 def concurrent_insert(collection, vectors):
     """Multiple threads inserting concurrently"""
     threads = []
@@ -163,11 +176,11 @@ def concurrent_insert(collection, vectors):
     
     def insert_batch(batch_id, vectors):
         try:
-            resp = requests.put(f"{BASE_URL}/collections/{collection}/points",
-                              json={"points": [{"id": f"batch_{batch_id}_{i}", 
-                                                "vector": v} for i, v in enumerate(vectors)]})
-            if resp.status_code not in [200, 201, 204]:
-                errors.append(f"batch_{batch_id}: {resp.status_code}")
+            status, _, _ = safe_request("PUT", UPSERT_PATH,
+                json={POINT_WRAP: [{"id": f"batch_{batch_id}_{i}", "vector": v}
+                                    for i, v in enumerate(vectors)]})
+            if status not in [200, 201, 204]:
+                errors.append(f"batch_{batch_id}: {status}")
         except Exception as e:
             errors.append(f"batch_{batch_id}: {str(e)}")
     
@@ -180,14 +193,19 @@ def concurrent_insert(collection, vectors):
         t.join()
     
     # Verify no corruption
-    assert len(errors) == 0, f"Concurrent errors: {errors}"
+    if errors:
+        print(f"VERDICT: DEFECT_FOUND (Type3_RuntimeFailure) — Concurrent errors: {errors}")
+        sys.exit(1)
     
-    # Count should match total inserted
+    # Count should match total inserted（count 按 contract.target 动态取键）
     time.sleep(2)  # Allow eventual consistency
-    resp = requests.get(f"{BASE_URL}/collections/{collection}/points/count")
+    _, body, raw = safe_request("GET", COUNT_PATH)
+    print(raw)
     expected = 10 * len(vectors)
-    assert resp.json()["result"]["count"] == expected, \
-        f"ConcurrentStateViolation: Expected {expected}, got {resp.json()['result']['count']}"
+    count = "<从 body 按 target 取 count>"
+    if count != expected:
+        print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation) — Expected {expected}, got {count}")
+        sys.exit(1)
 ```
 
 ### 策略 5: 事务边界攻击
