@@ -4,7 +4,7 @@ English | [中文](./README_zh.md)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Code Plugin](https://img.shields.io/badge/Claude%20Code-Plugin-purple.svg)](https://docs.anthropic.com/en/docs/claude-code)
-[![Version](https://img.shields.io/badge/version-2.1.2-orange.svg)](https://github.com/yihui504/TestVDB/releases)
+[![Version](https://img.shields.io/badge/version-2.1.3-orange.svg)](https://github.com/yihui504/TestVDB/releases)
 
 **Automated Defect Mining for Vector Databases**
 
@@ -14,148 +14,75 @@ Currently supports **Milvus**, **Qdrant**, **Weaviate**, and **pgvector**.
 
 ---
 
+## What's New in v2.1.3
+
+- **Anti-Shortcut Enforcement**: Stop-hook pipeline gate (`scripts/hooks/pipeline_gate.py`) validates three LLM shortcut symptoms at session end — (1) document analysis coverage below 60% threshold, (2) unjustified fallback without documented reason, (3) pipeline phase not reaching DONE. Attack agents are contract-bound to produce `analyzed_documents_*.md` with exact URLs from `raw_knowledge.md` Document Sources, and must pair every `FALLBACK_TRIGGERED` marker with a `[FALLBACK_JUSTIFIED: reason]` marker. Gate performs exact string matching (not fuzzy) — generic or placeholder URLs result in exit 2 interception.
+- **Agent Contract Hardening**: All three attack agents (`attack-boundary.md`, `attack-state.md`, `attack-semantic.md`) now include mandatory step-by-step contracts: (a) Read `raw_knowledge.md` before writing analyzed documents, (b) locate `## Document Sources` table, (c) copy URLs character-by-character from the `URL` column. Self-check rule: every URL must match a row in the Document Sources table exactly.
+- **Gate Path Bug Fix**: `_resolve_round_dir()` now correctly resolves `timestamp_dir` against `project_root` (pipeline v3 convention) with fallback to `session_dir`-relative paths (legacy/test convention). Previously, path double-nesting caused all quality checks to silently skip. `_parse_analyzed_docs()` now uses recursive glob (`rglob`) to find analyzed documents in subdirectories like `debate_logs/`.
+- **Configurable Gate Thresholds**: `TESTVDB_GATE_ACTIVE_THRESHOLD` (default 600s) and `TESTVDB_DOC_COVERAGE_THRESHOLD` (default 0.6) now configurable via environment variables.
+- **Project Cleanup**: Removed 40+ one-time development scripts, empty JS stubs, temp HTML/JSON artifacts, and stale Docker attack scripts from source tree. Reorganized reference data into `data/`, logs into `logs/development/`, analysis pipelines into `scripts/analysis/`.
+
+[Full Changelog →](#whats-new-in-v212)
+
+---
+
 ## What's New in v2.1.2
 
 - **Cross-Turn State Machine**: `pipeline_state.json` v3 — phase-level checkpoint recovery across context compaction. Every phase completion is immediately persisted, enabling exact breakpoint resumption without relying on model memory.
 - **ScheduleWakeup Loop**: Multi-round mining now uses `ScheduleWakeup`-driven cross-turn iteration. Each round is an independent Turn, with `reconstruct_context.py` rebuilding full pipeline context from disk state files at the start of each loop turn.
-- **Context Reconstruction**: New `reconstruct_context.py` reads 6 state files (pipeline_state, mine_state, coverage, experience_handoff, structured_contract, threat_model) and produces a self-contained agent context — phase, completed phases, per-phase outputs, global progress, termination conditions, and next action.
-- **Executor Reliability Fix**: Template variable substitution in `docker-executor` moved from embedded bash commands to explicit Step 0 shell assignments (`$TARGET`, `$SESSION_DIR`, `$DB_PORT`). Bash variable expansion is deterministic — zero-byte log bug eliminated. Agent retains full execution control (no script-based bypass).
-- **PostCompact Enhancement**: `postcompact_verify.py` now supports both v3 and legacy schemas, with precise phase-level recovery instructions and automatic fallback.
+- **Context Reconstruction**: New `reconstruct_context.py` reads 6 state files and produces a self-contained agent context — phase, completed phases, per-phase outputs, global progress, termination conditions, and next action.
+- **Executor Reliability Fix**: Template variable substitution in `docker-executor` moved from embedded bash commands to explicit Step 0 shell assignments. Bash variable expansion is deterministic — zero-byte log bug eliminated.
 - **Agent Update**: `docker-executor.md` rewritten — 4-step SOP with explicit variable declaration per step, Windows path normalization via `sed`, real-time per-script exit code visibility.
-
-[Full Changelog →](#whats-new-in-v211)
 
 ---
 
 ## What's New in v2.1.1
 
 - **Quality Hardening**: All attack scripts now use `safe_request()` pattern — zero bare API calls, zero script crashes on connection/timeout errors
-- **AST-based API Format Validation**: New `validate_api_format.py` in Stage 1 debate performs AST-level checking of attack scripts, rejecting bare `.json()` chains before execution
-- **Reporter Split**: `reporter.md` (defect reports) split from `reporter-mre.md` (MRE scripts) — separation of concerns, smaller file sizes
-- **Code Deduplication**: `_session_utils.py` shared across 7 hook/maintenance scripts, eliminating ~100 lines of duplicate `_plugin_root()` / `is_session_locked()` implementations
-- **Nested Dispatch Prohibition**: Explicit prohibition of nested agent dispatch across all agent prompts — a platform limitation discovered and codified
-- **Orchestrator Lifecycle Management**: Extracted to `orchestrator-lifecycle.md` (error handling strategy, PreCompact/PostCompact context protection, progress visibility, multi-DB parallelism)
-- **pgvector SQL Endpoint Patterns**: Completed `strategy_extractor.py` with DDL/DML/Search/Index regex patterns for SQL-based vector databases
-- **Exception Hardening**: Bare `except:` → specific exception types, `--target` missing-value validation, `.env` quote stripping
-- **Agent Fleet**: 18 agents (+ `orchestrator-lifecycle`, + `reporter-mre`), 25 scripts (+ `_session_utils.py`, + `validate_api_format.py`, + `reconstruct_context.py`)
-
-[Full Changelog →](#whats-new-in-v21)
-
----
-
-## What's New in v2.1
-
-- **Phase 0: Strategic Intelligence Layer**: Pre-mining historical defect analysis — crawls target DB GitHub repos for past issues and merged PRs, builds threat models and cognitive blindspot profiles
-- **Issue Tri-Classification**: Classifies historical issues into positive (acknowledged bugs), negative (by-design / wontfix), and invalid (no response) — extracts root cause patterns from positive samples
-- **Developer Cognitive Blindspot Model**: 5-category taxonomy (BS-01 through BS-05) mapping systemic developer oversights to attack strategies
-- **Cross-DB Bug Shape Migration**: Marks extracted bug patterns as `cross_db_applicable` for Milvus→Qdrant→Weaviate→PGVector strategy reuse
-- **3 New Agents**: `issue-miner` (raw), `bug-shape-extractor` (redacted), `threat-modeler` (redacted) — total agent fleet: 18
-
-[Full Changelog →](#whats-new-in-v20)
+- **AST-based API Format Validation**: New `validate_api_format.py` in Stage 1 debate performs AST-level checking of attack scripts
+- **Reporter Split**: `reporter.md` (defect reports) split from `reporter-mre.md` (MRE scripts)
+- **Code Deduplication**: `_session_utils.py` shared across 7 hook/maintenance scripts
+- **Nested Dispatch Prohibition**: Explicit prohibition of nested agent dispatch across all agent prompts
+- **Orchestrator Lifecycle Management**: Extracted to `orchestrator-lifecycle.md`
+- **Agent Fleet**: 18 agents, 25+ scripts
 
 ---
 
 ## Table of Contents
 
-- [What's New in v2.1.2](#whats-new-in-v212)
-- [What's New in v2.1.1](#whats-new-in-v211)
-- [What's New in v2.1](#whats-new-in-v21)
-- [What's New in v2.0](#whats-new-in-v20)
+- [What's New in v2.1.3](#whats-new-in-v213)
 - [How It Works](#how-it-works)
 - [Defect Taxonomy](#defect-taxonomy)
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Usage](#usage)
 - [Architecture](#architecture)
+- [Anti-Shortcut Pipeline Gate](#anti-shortcut-pipeline-gate)
 - [Directory Structure](#directory-structure)
 - [Configuration](#configuration)
 - [Requirements](#requirements)
 - [Evidence Chain Standard](#evidence-chain-standard)
-- [Testing on Claude Code](#testing-on-claude-code)
 - [License](#license)
 
 ---
 
 ## How It Works
 
-TestVDB operates as a **Claude Code plugin** with a 7-phase pipeline orchestrated by 18 specialized agents. Multi-round mining uses **ScheduleWakeup-driven cross-turn iteration** — each round is an independent Turn, with `pipeline_state.json` (v3 state machine) persisting phase-level progress to disk for exact breakpoint recovery after context compaction.
+TestVDB operates as a **Claude Code plugin** with a 7-phase pipeline orchestrated by 18 specialized agents. Multi-round mining uses **ScheduleWakeup-driven cross-turn iteration** — each round is an independent Turn, with `pipeline_state.json` (v3 state machine) persisting phase-level progress to disk for exact breakpoint recovery after context compaction. A **Stop-hook pipeline gate** enforces three anti-shortcut quality checks at session end.
 
 ```
 Phase 0: Strategic Intelligence      -- Historical issue mining + bug shape extraction + threat modeling
 Phase 1: Knowledge Extraction        -- WebSearch + WebFetch official docs
 Phase 2: Contract Formalization      -- Structured JSON contract from raw docs
 Phase 3: Attack Script Generation    -- 9 concurrent agents (Fan-Out) + Stage 1 debate (inc. AST validation)
-Phase 4: Sandbox Execution           -- Single-command batch execution via executor_runner
+Phase 4: Sandbox Execution           -- Single-command batch execution via docker-executor
 Phase 5: Defect Judgment             -- 4 judge agents + Stage 2 voting debate
 Phase 6: Report Generation           -- Defect reports + MRE scripts + strategy extraction
+
+Stop Hook: Pipeline Gate             -- Quality enforcement (doc coverage, fallback justification, phase completeness)
 ```
 
-The pipeline runs iteratively: each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Phase 0 intelligence (threat model + cognitive blindspots) is also injected to prioritize attack surfaces with historically high defect density. Stage 1 debate now includes AST-level API format validation. After each round, `pipeline_state.json` is updated and `ScheduleWakeup` triggers the next turn. `reconstruct_context.py` rebuilds full agent context from disk at the start of each loop turn. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
-
----
-
-## What's New in v2.0
-
-### Fan-Out Attack Trio
-
-Instead of 3 attack agents, v2.0 deploys **9 concurrent agents** — each attack type (boundary, state, semantic) × 3 focus profiles:
-- `priority_first` — targets high-priority constraints first
-- `coverage_gap` — fills gaps from `coverage.json`
-- `rejection_pattern` — reverse-engineers bypass paths from prior round rejections
-
-All 9 agents run in parallel. Results go through **3-tier deduplication** (endpoint × constraint × strategy), with independent-verification confidence bonuses.
-
-### Cross-Session Strategy Evolution
-
-Mining strategies are now **persistent across sessions and DB targets**:
-1. `strategy_extractor.py` extracts successful attack patterns after each session
-2. `strategy_registry/` stores strategies per-DB (`{db}_strategies.json`) and globally (`global_strategies.json`)
-3. `strategy_injector.py` reads applicable strategies and injects them into Attack Agent prompts
-4. Cross-DB migration: strategies from Milvus automatically map to Qdrant equivalents
-
-Every evolution is audited in `evolution_log.jsonl`.
-
-### 7-Mode AI Failure Checklist
-
-`scripts/ai_failure_check.py` validates the pipeline output with 7 detection modes:
-
-| Mode | Check | Action on Failure |
-|------|-------|-------------------|
-| M1 | Script syntax errors | Rewind |
-| M2 | Source URL reachability | Reject |
-| M3 | Execution result data validation | Reject |
-| M4 | `.done` marker completeness (pipeline integrity) | Halt |
-| M5 | Defect classification consistency | Rewind |
-| M6 | Methodology fabrication detection | Reject |
-| M7 | Infinite loop detection | Halt |
-
-### Material Passport
-
-Every `structured_contract.json` includes a `_passport` field with SHA-256 hash:
-```json
-{
-  "_passport": {
-    "schema_version": "2.0",
-    "hash_algorithm": "sha256",
-    "hash": "88ed0dc...",
-    "endpoint_count": 68,
-    "constraint_count": 39,
-    "core_crud_coverage_pct": 95.0
-  }
-}
-```
-
-`scripts/passport_verify.py` validates contract integrity:
-- Exit 0: PASS — hash matches
-- Exit 1: NO_PASSPORT — legacy contract format
-- Exit 2: TAMPERED — hash mismatch, pipeline rejects and re-generates
-
-### Data Access Level
-
-Every agent file declares a `dataAccess` level in frontmatter:
-- `raw` — access to raw documentation and external network
-- `redacted` — only access to specific session artifacts
-- `verified_only` — only access to judge-verified data
+Each round injects `reflection_context` from the previous round into attack agents, enabling strategy adaptation. Phase 0 intelligence (threat model + cognitive blindspots) prioritizes attack surfaces with historically high defect density. After each round, `pipeline_state.json` is updated and `ScheduleWakeup` triggers the next turn. Stalemate detection (5 consecutive rounds with no new defects) triggers strategy re-evaluation.
 
 ---
 
@@ -211,7 +138,7 @@ Use the `/testvdb:mine` command inside a Claude Code session:
 ```
 /testvdb:mine milvus v2.6.17
 /testvdb:mine qdrant v1.12.0 --max-rounds 3
-/testvdb:mine weaviate 1.25.0 --min-defects 2
+/testvdb:mine weaviate 1.38.0 --min-defects 2
 /testvdb:mine pgvector pg17 --max-rounds 0
 ```
 
@@ -221,15 +148,10 @@ Use the `/testvdb:mine` command inside a Claude Code session:
 
 ### Marketplace Install (Recommended)
 
-TestVDB is distributed as a Claude Code plugin. Install via the marketplace:
-
 ```bash
-# In any Claude Code session:
 /plugin marketplace add yihui504/TestVDB
 /plugin install testvdb@yihui504-TestVDB
 ```
-
-The plugin installs globally and persists across sessions. Use `/help` to verify — you should see `/testvdb:mine` in the command list.
 
 ### Local Development Install
 
@@ -239,7 +161,7 @@ cd TestVDB
 claude --plugin-dir .
 ```
 
-> **Note:** `--plugin-dir .` loads the plugin for the current session only. File changes take effect in the next session.
+> **Note:** File changes take effect in the next session.
 
 ---
 
@@ -253,23 +175,21 @@ claude --plugin-dir .
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `<db>` | Yes | -- | Target database: `milvus`, `qdrant`, `weaviate`, or `pgvector` |
+| `<db>` | Yes | -- | `milvus`, `qdrant`, `weaviate`, or `pgvector` |
 | `<version>` | Yes | -- | Target version (e.g., `v2.6.17`, `v1.12.0`, `pg17`) |
 | `--max-rounds N` | No | 5 | Maximum mining rounds. `0` for unlimited |
 | `--min-defects N` | No | 1 | Minimum defects before early termination |
 
 ### Termination Conditions
 
-The pipeline stops when any of the following is met:
-
 1. **Stalemate**: 5 consecutive rounds with no new defects
-2. **Coverage**: Contract coverage reaches >= 95%
+2. **Coverage**: Contract coverage >= 95%
 3. **Max Rounds**: `--max-rounds` limit reached
 4. **Min Defects**: `--min-defects` threshold reached
 
 ### Error Recovery
 
-Re-run the same command to resume an interrupted session. The system auto-detects incomplete sessions via checkpoint files.
+Re-run the same command to resume an interrupted session. The system auto-detects incomplete sessions via `pipeline_state.json`.
 
 ### Multi-DB Parallel Mining
 
@@ -282,23 +202,21 @@ Re-run the same command to resume an interrupted session. The system auto-detect
 
 ### Output Structure
 
-Results are written to `results/{db}/{version}/{timestamp}/`:
-
 ```
-results/qdrant/v1.12.0/2026-06-07T15-30-00Z/
+results/{db}/{version}/{timestamp}/
   defects/defect-1.md              # Defect report
   mre/defect-1-script.py           # Minimal Reproducible Example
   summary.md                       # Session summary
   debate_logs/stage1.json          # Attack script peer review logs
   debate_logs/stage2.json          # Judge quartet voting logs
+  debate_logs/analyzed_documents_*.md  # Per-agent document analysis manifests
   structured_contract.json         # Generated contract (with _passport)
   pipeline_state.json              # v3 cross-turn state machine
   mine_state.json                  # Session state snapshot
-  session_metadata.json            # Session metadata
   coverage.json                    # Endpoint coverage tracking
   experience_handoff.json          # Cross-round reflection context
 
-intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB, TTL 30d)
+intelligence/{target}/             # Phase 0 strategic intelligence (per-DB, TTL 30d)
   issue_corpus.json                # Raw historical issue corpus
   commit_corpus.json               # Raw historical commit/PR corpus
   classified_issues.json           # Tri-classification results
@@ -311,30 +229,28 @@ intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB
 
 ## Architecture
 
-### Agent Fleet (16 agent types + 2 auxiliary specs)
-
-> **Note**: 16 agent types are registered in `plugin.json` and dispatchable via `Agent(subagent_type="testvdb:xxx")`. 2 additional specifications (`orchestrator-lifecycle.md`, `reporter-mre.md`) serve as auxiliary references — the former defines lifecycle management rules consumed by the main process, the latter is an agent registered separately for MRE generation.
+### Agent Fleet (18 agent types)
 
 | Agent | dataAccess | Role |
 |-------|-----------|------|
 | **orchestrator** | redacted | Pipeline coordinator; dispatches all sub-agents |
-| **orchestrator-lifecycle** | redacted | Lifecycle management: error handling, Pre/PostCompact, progress visibility (extracted from orchestrator) |
+| **orchestrator-lifecycle** | redacted | Lifecycle management: error handling, Pre/PostCompact, progress visibility |
 | **issue-miner** | raw | Crawls historical issues and merged PRs from target repos |
-| **bug-shape-extractor** | redacted | Tri-classifies issues (positive/negative/invalid), extracts root cause patterns |
-| **threat-modeler** | redacted | Builds threat model and cognitive blindspot model from historical data |
+| **bug-shape-extractor** | redacted | Tri-classifies issues, extracts root cause patterns |
+| **threat-modeler** | redacted | Builds threat model and cognitive blindspot model |
 | **knowledge-extractor** | raw | Crawls official docs, extracts endpoints/parameters/constraints |
-| **contract-formalizer** | redacted | Converts raw knowledge into structured JSON contract with `_passport` |
-| **attack-boundary** | redacted | Generates boundary-value attack scripts |
-| **attack-state** | redacted | Generates state-transition attack scripts |
-| **attack-semantic** | redacted | Generates semantic/logic attack scripts |
-| **docker-executor** | redacted | Batch script execution with explicit variable declaration, real-time exit code visibility |
-| **judge-doc** | raw | Validates document reference accessibility and content consistency (with network verification) |
+| **contract-formalizer** | redacted | Converts raw knowledge into structured JSON contract |
+| **attack-boundary** | redacted | Generates boundary-value attack scripts (with anti-shortcut contract) |
+| **attack-state** | redacted | Generates state-transition attack scripts (with anti-shortcut contract) |
+| **attack-semantic** | redacted | Generates semantic/logic attack scripts (with anti-shortcut contract) |
+| **docker-executor** | redacted | Batch script execution in Docker sandbox |
+| **judge-doc** | raw | Validates document reference accessibility and content consistency |
 | **judge-evidence** | verified_only | Validates evidence chain completeness |
 | **judge-novelty** | raw | Checks defect novelty via GitHub search |
 | **judge-severity** | verified_only | Assesses defect severity |
 | **reporter** | verified_only | Generates defect reports with evidence chains |
 | **reporter-mre** | verified_only | Generates self-contained MRE scripts for confirmed defects |
-| **model-test** | redacted | CCSwitch tier routing verification |
+| **model-test** | redacted | Model routing verification |
 
 ### Skills (4 skills)
 
@@ -349,11 +265,58 @@ intelligence/{target}/             # v2.1 Phase 0 strategic intelligence (per-DB
 
 **Stage 1 — Attack Script Peer Review**: Attack agents independently generate test scripts. Scripts undergo peer review voting before sandbox execution. Only scripts that pass the vote proceed.
 
-**Stage 2 — Judge Quartet Voting**: After sandbox execution, the four judge agents independently review results. `judge-doc` runs first as a weight regulator (DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH) adjusting the strictness of the other three judges. A defect is confirmed when evidence and severity both vote `is_defect`. Novelty always votes `is_defect` with `novelty_rating` metadata, not participating in defect confirmation but affecting report priority.
+**Stage 2 — Judge Quartet Voting**: After sandbox execution, the four judge agents independently review results. `judge-doc` runs first as a weight regulator (DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH) adjusting the strictness of the other three judges. A defect is confirmed when evidence and severity both vote `is_defect`.
 
-### Pre-Submit Reverify Gate
+---
 
-Every confirmed defect is re-verified in a fresh Docker container before report generation. This eliminates false positives caused by container state leakage or transient errors.
+## Anti-Shortcut Pipeline Gate
+
+TestVDB v2.1.3 introduces a **Stop-hook pipeline gate** that enforces three quality symptoms at session end, preventing LLM agents from silently cutting corners:
+
+### Three Symptoms
+
+| Symptom | Check | Gate Behavior |
+|---------|-------|---------------|
+| ① Document Coverage | Ratio of analyzed document URLs to `raw_knowledge.md` Document Sources | < 60% → exit 2 (block) |
+| ② Fallback Justification | Every `FALLBACK_TRIGGERED` must have a `[FALLBACK_JUSTIFIED: reason]` marker | Unjustified → exit 2 (block) |
+| ③ Phase Completeness | Pipeline must reach `phase=DONE` before session end | Not DONE → exit 2 (block) |
+
+### Agent Contract Requirements
+
+Each attack agent (`attack-boundary`, `attack-state`, `attack-semantic`) must:
+
+1. **Read** `raw_knowledge.md` before writing analyzed documents
+2. **Locate** the `## Document Sources` table
+3. **Copy** URLs character-by-character from the `URL` column — gate performs exact string matching, not fuzzy
+4. **Write** `analyzed_documents_{type}.md` with the exact document source URLs
+5. **Self-check**: every URL must match a row in the Document Sources table exactly
+
+### Configuration
+
+```bash
+# Gate active threshold (default 600s)
+export TESTVDB_GATE_ACTIVE_THRESHOLD=1200
+
+# Document coverage threshold (default 0.6 = 60%)
+export TESTVDB_DOC_COVERAGE_THRESHOLD=0.8
+```
+
+### Hook Registration
+
+The gate is registered as a Stop hook in `.claude/settings.local.json`:
+```json
+{
+  "hooks": {
+    "Stop": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "python scripts/hooks/pipeline_gate.py"
+      }]
+    }]
+  }
+}
+```
 
 ---
 
@@ -362,76 +325,91 @@ Every confirmed defect is re-verified in a fresh Docker container before report 
 ```
 TestVDB/
   .claude-plugin/plugin.json      Plugin manifest (name, version, commands, agents)
+  .claude/settings.local.json     Stop-hook pipeline gate registration
   .mcp.json                       MCP server config (GitHub API)
-  agents/                         18 agent definitions
-    orchestrator.md
-    orchestrator-lifecycle.md
-    issue-miner.md
-    bug-shape-extractor.md
-    threat-modeler.md
-    knowledge-extractor.md
-    contract-formalizer.md
-    attack-boundary.md
-    attack-state.md
-    attack-semantic.md
-    docker-executor.md
-    judge-doc.md
-    judge-evidence.md
-    judge-novelty.md
-    judge-severity.md
-    reporter.md
-    reporter-mre.md
-    model-test.md
-  commands/mine.md                Entry command (/testvdb:mine)
-  docker/                         Docker Compose templates
-    crawl4ai.yml                  Crawl4AI web scraper service
-    milvus.yml                    Milvus (etcd + MinIO + standalone)
-    qdrant.yml                    Qdrant standalone
-    weaviate.yml                  Weaviate standalone
-    pgvector.yml                  PGVector standalone
-  hooks/hooks.json                Lifecycle hooks (pre-compact, post-compact, etc.)
-  skills/                         4 skill definitions
+  agents/                         21 agent definitions
+    orchestrator.md                Main orchestrator SOP
+    orchestrator-lifecycle.md      Lifecycle management rules
+    issue-miner.md                 Historical issue crawler
+    bug-shape-extractor.md         Issue tri-classification
+    threat-modeler.md              Threat model builder
+    knowledge-extractor.md         Documentation crawler
+    contract-formalizer.md         Contract generation
+    attack-boundary.md             Boundary-value attacks (with anti-shortcut contract)
+    attack-state.md                State-transition attacks (with anti-shortcut contract)
+    attack-semantic.md             Semantic/logic attacks (with anti-shortcut contract)
+    docker-executor.md             Sandbox script executor
+    judge-doc.md                   Document reference validator
+    judge-evidence.md              Evidence chain validator
+    judge-novelty.md               Defect novelty checker
+    judge-severity.md              Severity assessor
+    reporter.md                    Defect report generator
+    reporter-mre.md                MRE script generator
+    model-test.md                  Model routing verification
+    _target_api_reference.md       Contract-driven API reference (shared)
+    api-template-formalizer.md     API template formalizer
+    dev-reviewer.md                Dev review agent
+  commands/mine.md                 Entry command (/testvdb:mine)
+  docker/                          Docker Compose templates
+    crawl4ai.yml                   Crawl4AI web scraper service
+    milvus.yml                     Milvus (etcd + MinIO + standalone)
+    qdrant.yml                     Qdrant standalone
+    weaviate.yml                   Weaviate standalone
+    pgvector.yml                   PGVector standalone
+  skills/                          4 skill definitions
     pipeline/SKILL.md
     contract-schema/SKILL.md
     defect-taxonomy/SKILL.md
     docker-templates/SKILL.md
-  intelligence/                   v2.1 Strategic intelligence cache (per-DB, TTL 30d)
-  contracts/                      Reference contracts & schema
-    AGENTS.md
-    settings_schema.json          Settings validation schema
-    pgvector_contract.json        PGVector reference contract
-    weaviate_contract.json        Weaviate reference contract
-  scripts/                        Infrastructure scripts (25 scripts)
-    passport_verify.py            Material Passport hash verification
-    strategy_extractor.py         Cross-session strategy extraction
-    strategy_injector.py          Cross-DB strategy injection
-    ai_failure_check.py           7-mode AI failure checklist
-    validate_api_format.py        AST-based API call format validation (v2.1.1)
-    _session_utils.py             Shared session utilities (v2.1.1)
-    preflight.py                  Session pre-flight checks
-    crawl_fetch.py                Crawl4AI web scraper (primary)
-    crawl_milvus.py               Milvus-specific doc crawler
-    hook_runner.py                Cross-platform hook executor
-    github_search.py              GitHub issue/code search
-    prioritizer.py                Attack script prioritization
-    verify_defects.py             Batch defect verification
-    find_python.py                Python interpreter resolution
-    developer_attitude.py         Developer sentiment analysis
-    cleanup_stop.py               Session cleanup
-    emergency_cleanup.py          Emergency container cleanup
-    log_execution.py              Execution logging
-    notify_check.py               Notification config validation
-    postcompact_verify.py         Post-compaction state recovery
-    precompact_save.py            Pre-compaction state preservation
-    retry_policy.py               Retry policy reporter
-    gen_weaviate_contract.py      Weaviate contract generation
-    validate_weaviate_contract.py Weaviate contract validation
-  docs/                           Documentation
-    reviews/                      Code review reports
-  settings.json                   Plugin configuration (26+ parameters)
-  AGENTS.md                       Agent orchestration rules
-  THEORETICAL_FRAMEWORK.md        Research paper
-  LICENSE                         MIT License
+  intelligence/                    Strategic intelligence cache (per-DB, TTL 30d)
+  contracts/                       Reference contracts & schema
+    settings_schema.json           Settings validation schema
+    pgvector_contract.json         PGVector reference contract
+    weaviate_contract.json         Weaviate reference contract
+  scripts/                         Infrastructure scripts
+    hooks/
+      pipeline_gate.py             Stop-hook anti-shortcut gate (v2.1.3)
+      _test_pipeline_gate.py       8-case gate unit tests
+      _test_stop_hook.py           Stop hook integration tests
+    preflight.py                   Session pre-flight checks
+    reconstruct_context.py         Cross-turn context reconstruction
+    strategy_extractor.py          Cross-session strategy extraction
+    strategy_injector.py           Cross-DB strategy injection
+    threat_model_injector.py       Threat model prompt injection
+    passport_verify.py             Material Passport hash verification
+    validate_api_format.py         AST-based API call format validation
+    validate_weaviate_contract.py  Weaviate contract validation
+    detect_risky_scripts.py        Risky script detection (Stage 1 debate)
+    scan_script_errors.py          Script error scanner (rework trigger)
+    dedup_defects.py               Cross-round defect deduplication
+    verify_defects.py              Batch defect verification
+    prioritize.py                  Attack script prioritization
+    developer_attitude.py          Developer sentiment analysis
+    crawl_fetch.py                 Crawl4AI web scraper (primary)
+    crawl_milvus.py                Milvus-specific doc crawler
+    github_search.py               GitHub issue/code search
+    find_python.py                 Python interpreter resolution
+    hook_runner.py                 Cross-platform hook executor
+    retry_policy.py                Retry policy reporter
+    _session_utils.py              Shared session utilities
+    analysis/                      Reference analysis pipelines
+      milvus_bug_shape_pipeline.py
+      milvus_full_pipeline.py
+    dev_review_repro.py            Dev review reproduction
+    validate_threat_model.py       Threat model validation
+  data/                            Reference data
+    weaviate_openapi_schema.json   Weaviate OpenAPI schema
+    experience_handoff.json        Experience handoff template
+  logs/development/                Development run logs (archived)
+  strategy_registry/               Cross-session attack strategies
+  docs/                            Documentation
+    reviews/                       Code review reports
+    acceptance-checklist-v2.1.1.md
+  tests/                           Test suite
+  settings.json                    Plugin configuration (26+ parameters)
+  AGENTS.md                        Agent orchestration rules
+  THEORETICAL_FRAMEWORK.md         Research paper
+  LICENSE                          MIT License
 ```
 
 ---
@@ -460,7 +438,7 @@ Configuration parameters organized into sections:
 
 ### .mcp.json
 
-Configures the GitHub MCP server used by the novelty judge to search for duplicate issues:
+Configures the GitHub MCP server used by the novelty judge:
 
 ```json
 {
@@ -490,36 +468,6 @@ Configures the GitHub MCP server used by the novelty judge to search for duplica
 | Docker Hub Token | -- | **Recommended**. Set `DOCKER_HUB_TOKEN` env var for higher rate limits |
 | Network Access | -- | WebFetch must reach target doc sites (milvus.io, qdrant.tech, etc.) |
 | GitHub Token | -- | Optional; enables full novelty judge via GitHub API |
-
----
-
-## Testing on Claude Code
-
-### Quick Test
-
-```bash
-# Start Claude Code with the plugin loaded
-cd TestVDB
-claude --plugin-dir .
-
-# Run a single-round test on Qdrant (simplest setup, single container)
-/testvdb:mine qdrant v1.12.0 --max-rounds 1
-```
-
-Results will be in `results/qdrant/v1.12.0/<timestamp>/`.
-
-### Debugging
-
-```bash
-# Enable debug mode to see plugin loading details
-claude --plugin-dir . --debug
-
-# Check loaded agents
-/agents
-
-# Check available commands
-/help
-```
 
 ---
 

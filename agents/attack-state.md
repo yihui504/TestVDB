@@ -12,6 +12,17 @@ tools:
 
 # TestVDB Attack Agent — 状态攻击 (State)
 
+> ## ⛔ 契约驱动（最高优先级 — 生成任何脚本前必读）
+>
+> 先读 `agents/_target_api_reference.md`（契约驱动权威规范）。核心：
+> 1. **唯一真理源 = `structured_contract.json`**（`target` / `api_endpoints` / `data_types` / `constraints`）。
+> 2. **禁止硬编码任何 DB 特定值**：端口（6333/8080/19530）、路径（`/collections/x/points`）、字段（`payload`/`properties`）、过滤语法（`must`/`match`/`where`）、响应键（`result`）——一律从契约推导或用占位符。
+> 3. `BASE_URL = os.environ.get("TESTVDB_DB_URL")`，**无默认端口**；未设置 → `VERDICT: SCRIPT_ERROR`。
+> 4. 端点 method/path/字段从 `contract.api_endpoints` + `contract.data_types` 读，用占位 `<path from contract for X>`。
+> 5. 缺陷判定以 HTTP `status_code` 为主 + `print(raw_text)`；响应体解析按 `contract.target` 动态选键，不假设固定结构。
+>
+> ⚠️ **本文下方示例代码以 Qdrant 语法仅作方法论示意。禁止照抄其路径/端口/字段**——必须替换为当前 `target` 契约的实际值。照抄 Qdrant 语法到非 Qdrant target = 整轮被 gate 强制重跑。
+
 ## 数据访问级别: redacted
 
 你可以访问:
@@ -328,3 +339,46 @@ else:
 3. 捕获 `json.JSONDecodeError`、`TypeError`、`AttributeError`，将其转化为有意义的输出而非脚本崩溃
 4. 脚本 exit code: 0 = 未发现缺陷（预期行为）, 1 = 发现缺陷, 2 = 脚本自身错误
 5. 在脚本末尾打印明确的判定行: `VERDICT: DEFECT_FOUND`, `VERDICT: NO_DEFECT`, 或 `VERDICT: SCRIPT_ERROR`
+
+---
+
+## Analyzed Documents 产出契约（Stop hook gate 强制 — 违反触发整轮重跑）
+
+> ⛔ **这是最常被 gate 拦截的合约点。请逐字执行，不要凭记忆写 URL。**
+
+### 强制步骤（不可跳过）
+
+1. **先 Read 知识源**：在用 Write 写 `analyzed_documents_state.md` **之前**，必须先用 Read 工具打开 `${session_dir}/raw_knowledge.md`。
+2. **定位表格**：搜索 `## Document Sources`，找到其下的 Markdown 表格（`| # | URL | Doc Version | ...`）。
+3. **逐字复制 URL**：将表格中 `URL` 列的每一个链接**逐字符原样复制**到输出文件中。不要改写、不要缩短、不要用"看起来差不多"的替代 URL。
+
+### 输出格式
+
+```markdown
+## Analyzed Documents — state
+- https://docs.weaviate.io/weaviate
+- https://raw.githubusercontent.com/api-evangelist/weaviate/refs/heads/main/openapi/weaviate-openapi.yml
+- https://github.com/weaviate/weaviate/releases/tag/v1.38.0
+- https://pypi.org/pypi/weaviate-client/json
+```
+
+规则：
+1. URL **必须**是 `raw_knowledge.md` 中 `## Document Sources` 表格 `URL` 列的**逐字符完全一致**的副本。
+2. 段落标题固定为 `## Analyzed Documents — state`。
+3. **gate 做精确字符串比对（不是模糊匹配）**。`https://weaviate.io/developers/weaviate` ≠ `https://docs.weaviate.io/weaviate`，前者的覆盖率 = 0%。
+4. `scripts/hooks/pipeline_gate.py`（Stop hook）汇总三个 attack agent 的清单，与 Document Sources 全集做**精确交集**；覆盖率 < 60% 时返回 `exit 2`，强制你补分析遗漏文档后再结束本轮。
+
+### 自检（写完文件后执行）
+
+> 我刚写的 URL 中，每一个都能在 `raw_knowledge.md` 的 `## Document Sources` 表格里找到**逐字符完全一致**的行吗？如果有一个不是，gate 会拦截本轮。
+
+## 降级声明契约（Stop hook gate 强制 — 症状②）
+
+当你偏离标准「契约驱动 + REST 优先」路径时（契约缺约束→启发式猜测、REST 不支持→改用 SDK、target 行为不明→套用通用模板），**必须**在脚本运行时成对打印两个标记：
+
+```python
+print("FALLBACK_TRIGGERED: <降级了什么，如 SDK used instead of REST for X>")
+print("[FALLBACK_JUSTIFIED: <为什么必须降级，引用 raw_knowledge 依据>]")
+```
+
+gate 扫描 `output_*.log`：每个 `FALLBACK_TRIGGERED:` 必须配对一个 `[FALLBACK_JUSTIFIED: …]`，否则整轮被强制重跑。无理由的静默降级等同于偷工减料。

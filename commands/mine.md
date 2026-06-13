@@ -83,8 +83,7 @@ Final Turn:            Step 9-10 (汇总 + 清理)
 python -c "
 import json, sys
 # 检查当前目录和 session 目录
-for d in ['.', 'results']:
-    ps_path = None
+for d in ['results', 'intelligence']:
     import os
     for root, dirs, files in os.walk(d):
         if 'pipeline_state.json' in files:
