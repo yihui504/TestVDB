@@ -58,7 +58,7 @@ def _run_gate(root: Path) -> tuple[int, str]:
     return proc.returncode, (proc.stdout + proc.stderr)
 
 
-def _scaffold(phase: str, current: int, maxr: int) -> tuple[Path, Path]:
+def _scaffold(phase: str, current: int, maxr: int, phases_completed: list[str] | None = None) -> tuple[Path, Path]:
     root = Path(tempfile.mkdtemp(prefix="gate_"))
     ver_dir = root / "results" / "testdb" / "1.0"
     round_dir = ver_dir / "20260612T100000"
@@ -72,6 +72,7 @@ def _scaffold(phase: str, current: int, maxr: int) -> tuple[Path, Path]:
         "current_round": current,
         "max_rounds": maxr,
         "phase": phase,
+        "phases_completed": phases_completed or [],
         "session_dir": "results/testdb/1.0",
         "timestamp_dir": "20260612T100000",
     }
@@ -129,6 +130,14 @@ def main() -> int:
     try:
         rc, out = _run_gate(root)
         _check("4 ① DONE no-analyzed → 0", rc, 0, out)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    # 4b. 空声明绕过: DONE + ATTACK_GEN completed + 无 analyzed → exit 2（组件 #2'）
+    root, _ = _scaffold("DONE", 1, 1, phases_completed=["ROUND_START", "ATTACK_GEN", "DEBATE_S1"])
+    try:
+        rc, out = _run_gate(root)
+        _check("4b ① DONE+ATTACK_GEN+空analyzed → 2", rc, 2, out)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 

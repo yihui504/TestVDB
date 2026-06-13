@@ -247,13 +247,23 @@ def check_doc_coverage(
 
     analyzed = _parse_analyzed_docs(round_dir)
     if not analyzed:
-        # No declarations yet: agents may not have run, or the round predates the
-        # contract. Blocking here would misfire on legacy/partial rounds — only
-        # block when we have *evidence* of incomplete coverage.
+        # 区分"agent 还没跑"(放行) vs "agent 跑了但没写"(拦截空声明绕过)。
+        # 判据: phase==DONE 且 ATTACK_GEN 已完成 → attack agent 跑过，analyzed 不应为空。
+        attack_ran = (
+            str(state.get("phase", "")).upper() == "DONE"
+            and "ATTACK_GEN" in state.get("phases_completed", [])
+        )
+        if attack_ran:
+            return False, (
+                "Symptom ① — ATTACK_GEN completed but NO analyzed_documents written "
+                "(空声明绕过). Attack agents must each emit analyzed_documents_*.md "
+                "listing raw_knowledge.md Document Source URLs (see agents/attack-*.md)."
+            )
+        # agents 尚未跑或 round 早于合约 → 放行，避免误伤 legacy
         log.warning(
             "doc-coverage: no analyzed_documents*.md in %s — cannot verify", round_dir
         )
-        return True, "skipped (no analyzed_documents yet)"
+        return True, "skipped (no analyzed_documents yet — ATTACK_GEN not completed)"
 
     covered = all_docs & analyzed
     coverage = len(covered) / len(all_docs)
