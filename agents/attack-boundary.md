@@ -220,31 +220,9 @@ if not BASE_URL:
     sys.exit(2)
 AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")
 
-# ⛔ ALL HTTP calls MUST use this wrapper. Bare requests.post().json() chains are REJECTED.
-def safe_request(method, path, **kwargs):
-    """
-    Resilient HTTP wrapper — handles connection errors, timeouts, and JSON decode.
-    Returns (status_code, response_body_dict_or_none, raw_text).
-    On connection failure: prints REQUEST_ERROR and returns (0, None, "").
-    On JSON decode failure: prints JSON_DECODE_ERROR and returns (status, None, raw_text).
-    """
-    url = f"{BASE_URL}{path}"
-    headers = kwargs.pop("headers", {"Content-Type": "application/json"})
-    if AUTH_HEADER:
-        headers["Authorization"] = AUTH_HEADER
-    try:
-        resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
-        status = resp.status_code
-        text = resp.text
-        try:
-            body = resp.json() if text else {}
-        except (json.JSONDecodeError, ValueError):
-            print(f"JSON_DECODE_ERROR: {text[:200]}")
-            return status, None, text
-        return status, body, text
-    except requests.exceptions.RequestException as e:
-        print(f"REQUEST_ERROR: {e}")
-        return 0, None, ""
+# ⛔ ALL HTTP calls MUST use this wrapper (returns status, body, raw_text 三元组).
+# safe_request + BASE_URL + AUTH_HEADER 权威定义见 agents/_target_api_reference.md。
+# 复制本模板后，从 _target_api_reference.md 补入 safe_request 定义（勿自行改写）。
 
 def test_boundary():
     """Test: {brief description}"""

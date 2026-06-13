@@ -257,21 +257,7 @@ For pgvector: VACUUM → Verify count unchanged
 
 **⛔ 脚本格式强制要求：每个生成的脚本必须使用 `safe_request()` 包装所有 HTTP 调用。**
 
-```python
-def safe_request(method, url, **kwargs):
-    """包装 requests 调用，安全处理非 JSON 响应、连接失败、超时"""
-    try:
-        resp = requests.request(method, url, timeout=30, **kwargs)
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError):
-            body = resp.text
-        return resp.status_code, body
-    except requests.exceptions.ConnectionError:
-        return 0, "CONNECTION_REFUSED"
-    except requests.exceptions.Timeout:
-        return 0, "TIMEOUT"
-```
+`safe_request()` 权威定义（三元组 `(status, body, raw_text)`，含 BASE_URL/AUTH_HEADER 来源）见 `agents/_target_api_reference.md`。本节不再重复定义——所有 HTTP 调用统一用三元组解包 `status, body, raw = safe_request(...)`，判定以 HTTP `status` 为主 + `print(raw)`。
 
 - 裸 `requests.post(url, json=...).json()` 链式调用 → 流水线 REJECT
 - 脚本末尾必须打印 `VERDICT: DEFECT_FOUND` / `NO_DEFECT` / `SCRIPT_ERROR`
@@ -310,27 +296,10 @@ def safe_request(method, url, **kwargs):
 **每个脚本必须包含健壮的 HTTP 响应处理：**
 
 ```python
-def safe_request(method, url, **kwargs):
-    """包装 requests 调用，安全处理非 JSON 响应"""
-    try:
-        resp = requests.request(method, url, **kwargs)
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError):
-            body = resp.text
-        return resp.status_code, body
-    except requests.exceptions.ConnectionError:
-        return 0, "CONNECTION_REFUSED"
-    except requests.exceptions.Timeout:
-        return 0, "TIMEOUT"
-
-# 使用示例
-status, body = safe_request("GET", f"{BASE_URL}/collections/{name}")
-if isinstance(body, dict):
-    count = body.get("result", {}).get("count", -1)
-else:
-    print(f"Non-JSON response: {body}")
-    # 判定为非标准响应 — 可能是 Type1_IllegalSuccess 或 Type2_PoorDiagnostics
+# safe_request 权威定义见 agents/_target_api_reference.md（三元组 status, body, raw_text）。
+# 使用示例（target 中立——路径从速查表取，响应键按 contract.target 动态选）：
+status, body, raw = safe_request("GET", "<速查表 get-collection path>")
+print(raw)  # 先看实际响应结构，按 contract.target 选键，不假设 ["result"]["count"]
 ```
 
 **强制规则：**

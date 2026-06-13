@@ -356,21 +356,7 @@ def test_filter_semantics():
 
 **⛔ 脚本格式强制要求：每个生成的脚本必须使用 `safe_request()` 包装所有 HTTP 调用。**
 
-```python
-def safe_request(method, path, **kwargs):
-    """安全的 HTTP 请求包装器——处理非 JSON 响应、连接失败、超时"""
-    try:
-        resp = requests.request(method, f"{BASE_URL}{path}", timeout=30, **kwargs)
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError):
-            body = resp.text
-        return resp.status_code, body
-    except requests.exceptions.ConnectionError:
-        return 0, "CONNECTION_REFUSED"
-    except requests.exceptions.Timeout:
-        return 0, "TIMEOUT"
-```
+`safe_request()` 权威定义（三元组 `(status, body, raw_text)`，含 BASE_URL/AUTH_HEADER 来源）见 `agents/_target_api_reference.md`。本节不再重复定义——所有 HTTP 调用统一用三元组解包 `status, body, raw = safe_request(...)`，判定以 HTTP `status` 为主 + `print(raw)`。
 
 - 裸 `requests.post(url, json=...).json()` 链式调用 → 流水线 REJECT
 - 脚本末尾必须打印 `VERDICT: DEFECT_FOUND` / `NO_DEFECT` / `SCRIPT_ERROR`
