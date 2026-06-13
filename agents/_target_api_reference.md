@@ -19,5 +19,48 @@
 ## 为何不写 per-DB 语法表
 不同 DB 版本的端点路径/请求体语法会变化；写死表会过时、会误导、新增 DB 时 `else: raise` 会让脚本崩溃。契约已包含 `target` + `api_endpoints` + `data_types`，足够 LLM 据此推导出当前 target 的正确语法。
 
+## safe_request 权威定义（三 attack agent 共用）
+
+所有攻击脚本的 HTTP 调用**必须**用此包装器。返回三元组 `(status_code, body_or_None, raw_text)`。
+三个 attack agent 的「输出格式」section 引用本定义，不再各自重写。
+
+模块级变量来源：
+- `BASE_URL = os.environ.get("TESTVDB_DB_URL")` —— 由 docker-executor 设置正确端口；**无默认端口**，缺失则打印 `VERDICT: SCRIPT_ERROR` 退出。
+- `AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")` —— 可选鉴权头。
+
+```python
+import requests, json, sys, os
+
+BASE_URL = os.environ.get("TESTVDB_DB_URL")
+if not BASE_URL:
+    print("VERDICT: SCRIPT_ERROR — TESTVDB_DB_URL not set (see agents/_target_api_reference.md)")
+    sys.exit(2)
+AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")
+
+def safe_request(method, path, **kwargs):
+    """Resilient HTTP wrapper. Returns (status_code, body_or_None, raw_text).
+    连接失败: 打印 REQUEST_ERROR, 返回 (0, None, "")。
+    JSON 解析失败: 打印 JSON_DECODE_ERROR, 返回 (status, None, text)。"""
+    url = f"{BASE_URL}{path}"
+    headers = kwargs.pop("headers", {"Content-Type": "application/json"})
+    if AUTH_HEADER:
+        headers["Authorization"] = AUTH_HEADER
+    try:
+        resp = requests.request(method, url, headers=headers, timeout=30, **kwargs)
+        status = resp.status_code
+        text = resp.text
+        try:
+            body = resp.json() if text else {}
+        except (json.JSONDecodeError, ValueError):
+            print(f"JSON_DECODE_ERROR: {text[:200]}")
+            return status, None, text
+        return status, body, text
+    except requests.exceptions.RequestException as e:
+        print(f"REQUEST_ERROR: {e}")
+        return 0, None, ""
+```
+
+判定以 HTTP `status` 为主 + `print(raw)`；响应体解析按 `contract.target` 动态选键，不假设固定结构。
+
 ## 参考样板
 `agents/attack-boundary.md` 已采用此契约驱动模式（占位符 + 从契约读取，0 个 if/else TARGET 分支）。`attack-state.md` 与 `attack-semantic.md` 应遵循同一模式。

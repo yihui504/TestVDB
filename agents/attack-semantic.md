@@ -109,48 +109,38 @@ tools:
 **所有示例使用 `safe_request()` 包装器——禁止裸 `.json()["result"]` 链式调用：**
 
 ```python
-import time, json, requests
+import time, sys
+# safe_request + BASE_URL + AUTH_HEADER 权威定义见 agents/_target_api_reference.md（三元组）
+# 契约驱动：路径/字段从速查表 + contract 取，禁止硬编码端口/路径/字段/响应键
 
-def safe_request(method, path, **kwargs):
-    """安全的 HTTP 请求包装器——处理非 JSON 响应、连接失败、超时"""
-    try:
-        resp = requests.request(method, f"{BASE_URL}{path}", timeout=10, **kwargs)
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError):
-            body = resp.text
-        return resp.status_code, body
-    except requests.exceptions.ConnectionError:
-        return 0, "CONNECTION_REFUSED"
-    except requests.exceptions.Timeout:
-        return 0, "TIMEOUT"
+CREATE_PATH = "<速查表 collections 端点 path>"
+UPSERT_PATH = "<速查表 points 端点 path>"
+SEARCH_PATH = "<速查表 search 端点 path>"
+POINT_WRAP  = "<contract.data_types 的点包装结构>"
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"
 
 # --- Behavioral Contract 示例 ---
 # contract 规定 "创建后30秒内应可搜索"
-status, body = safe_request("PUT", "/collections/test", json={...})
+status, _, raw = safe_request("PUT", CREATE_PATH, json={<建集合体 from contract>})
 if status != 200:
-    print(f"VERDICT: SCRIPT_ERROR — setup failed: {status}")
-    sys.exit(2)
+    print(f"VERDICT: SCRIPT_ERROR — setup failed: {status}"); sys.exit(2)
 
 # Insert immediately
-status, body = safe_request("PUT", "/collections/test/points",
-                            json={"points": [{"id": 1, "vector": [0.1]*128}]})
+status, _, raw = safe_request("PUT", UPSERT_PATH,
+    json={POINT_WRAP: [{"id": 1, VECTOR_KEY: [0.1]*128}]})
 
 # Search within 1 second (should be visible per contract)
 time.sleep(1)
-status, body = safe_request("POST", "/collections/test/points/search",
-                            json={"vector": [0.1]*128, "limit": 1})
-if isinstance(body, dict):
-    results = body.get("result", [])
-    if len(results) == 0:
-        print("VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
-        print("Point should be searchable immediately after insert")
-        sys.exit(1)
-    else:
-        print("VERDICT: NO_DEFECT")
-else:
-    print(f"VERDICT: SCRIPT_ERROR — Non-JSON response: {str(body)[:200]}")
-    sys.exit(2)
+status, body, raw = safe_request("POST", SEARCH_PATH,
+    json={VECTOR_KEY: [0.1]*128, "limit": 1})
+print(raw)
+# 结果按 contract.target 动态取键（不假设 body["result"]）
+results = "<从 body 按 target 取结果列表>"
+if results is None or (hasattr(results, '__len__') and len(results) == 0):
+    print("VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
+    print("Point should be searchable immediately after insert")
+    sys.exit(1)
+print("VERDICT: NO_DEFECT")
 ```
 
 ### 策略 2: 错误诊断质量 (Type-2) 专项测试
@@ -197,15 +187,16 @@ def check_error_quality(status, body, expected_param):
 不是测试非法输入被接受，而是测试合法输入是否被错误拒绝：
 
 ```python
-# Contract says: "limit must be a positive integer"
-# Test legitimate values using safe_request:
+# Contract says: "limit must be a positive integer"（target 中立）
+SEARCH_PATH = "<速查表 search 端点 path>"
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"
 legit_values = [1, 5, 10, 100, 1000]
 for limit in legit_values:
-    status, body = safe_request("POST", "/collections/test/points/search",
-                                json={"vector": [0.1]*128, "limit": limit})
+    status, body, raw = safe_request("POST", SEARCH_PATH,
+                                json={VECTOR_KEY: [0.1]*128, "limit": limit})
     if status != 200:
         print(f"VERDICT: DEFECT_FOUND (Type1_IllegalRejection)")
-        print(f"limit={limit} should be accepted but got status={status}, body={str(body)[:200]}")
+        print(f"limit={limit} should be accepted but got status={status}, raw={raw[:200]}")
         sys.exit(1)
 print("VERDICT: NO_DEFECT")
 ```
@@ -215,30 +206,26 @@ print("VERDICT: NO_DEFECT")
 测试 API 是否对类型做不正确的隐式转换：
 
 ```python
-# Test: string "100" instead of integer 100
-status, body = safe_request("POST", "/collections/test/points/search",
-                            json={"vector": [0.1]*128, "limit": "100"})
-# Should either reject (strict typing) or correctly parse (documented behavior)
-# Should NOT silently misinterpret
+# Test: 类型混淆（target 中立）——路径/字段从速查表+contract 取
+SEARCH_PATH = "<速查表 search 端点 path>"
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"
+
+# string "100" instead of integer 100
+status, _, raw = safe_request("POST", SEARCH_PATH, json={VECTOR_KEY: [0.1]*128, "limit": "100"})
 if status == 200:
-    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
-    print(f"String '100' accepted as integer limit without validation")
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess) — String '100' accepted as int limit")
     sys.exit(1)
 
-# Test: float 5.0 instead of integer 5
-status, body = safe_request("POST", "/collections/test/points/search",
-                            json={"vector": [0.1]*128, "limit": 5.0})
+# float 5.0 instead of integer 5
+status, _, raw = safe_request("POST", SEARCH_PATH, json={VECTOR_KEY: [0.1]*128, "limit": 5.0})
 if status == 200:
-    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
-    print(f"Float 5.0 accepted as integer limit without validation")
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess) — Float 5.0 accepted as int limit")
     sys.exit(1)
 
-# Test: boolean true instead of 1
-status, body = safe_request("POST", "/collections/test/points/search",
-                            json={"vector": [0.1]*128, "limit": True})
+# boolean true instead of 1
+status, _, raw = safe_request("POST", SEARCH_PATH, json={VECTOR_KEY: [0.1]*128, "limit": True})
 if status == 200:
-    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess)")
-    print(f"Boolean true accepted as integer limit without validation")
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess) — Boolean true accepted as int limit")
     sys.exit(1)
 print("VERDICT: NO_DEFECT")
 ```
@@ -248,36 +235,35 @@ print("VERDICT: NO_DEFECT")
 测试搜索结果的语义正确性（使用 safe_request 包装所有 API 调用）：
 
 ```python
+# 契约驱动：路径/字段从速查表+contract 取
+UPSERT_PATH = "<速查表 points 端点 path>"
+SEARCH_PATH = "<速查表 search 端点 path>"
+POINT_WRAP  = "<contract.data_types 的点包装结构>"
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"
+
 def test_search_correctness():
     """Verify search returns correct nearest neighbors"""
-    # Insert known vectors
     vectors = [
         ("id_origin", [0.0]*128),     # All zeros - target
         ("id_close", [0.01]*128),     # Very close
-        ("id_far", [100.0]*128),       # Very far
-        ("id_medium", [1.0]*128)      # Medium distance
+        ("id_far", [100.0]*128),      # Very far
+        ("id_medium", [1.0]*128),     # Medium distance
     ]
-    
-    for id, vec in vectors:
-        status, body = safe_request("PUT", "/collections/test/points",
-                                    json={"points": [{"id": id, "vector": vec}]})
+    for vid, vec in vectors:
+        status, _, raw = safe_request("PUT", UPSERT_PATH,
+                                    json={POINT_WRAP: [{"id": vid, VECTOR_KEY: vec}]})
         if status not in (200, 201, 204):
-            print(f"VERDICT: SCRIPT_ERROR — insert failed for {id}: {status}")
-            sys.exit(2)
-    
-    # Search with origin vector
+            print(f"VERDICT: SCRIPT_ERROR — insert failed for {vid}: {status}"); sys.exit(2)
+
     query = [0.0]*128
-    status, body = safe_request("POST", "/collections/test/points/search",
-                                json={"vector": query, "limit": 3})
-    if not isinstance(body, dict) or "result" not in body:
-        print(f"VERDICT: SCRIPT_ERROR — unexpected response: {str(body)[:200]}")
-        sys.exit(2)
-    results = body["result"]
-    
-    # The closest should be id_origin, then id_close
-    if results[0]["id"] != "id_origin":
+    status, body, raw = safe_request("POST", SEARCH_PATH, json={VECTOR_KEY: query, "limit": 3})
+    print(raw)
+    # 结果按 contract.target 动态取键（不假设 body["result"]）
+    results = "<从 body 按 target 取结果列表>"
+    first_id = "<从 results[0] 按 target 取 id>"
+    if first_id != "id_origin":
         print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
-        print(f"Expected 'id_origin' first, got '{results[0]['id']}'")
+        print(f"Expected 'id_origin' first, got '{first_id}'")
         sys.exit(1)
     print("VERDICT: NO_DEFECT")
 ```
@@ -287,22 +273,22 @@ def test_search_correctness():
 验证搜索结果在不同变换下的一致性：
 
 ```python
+# 契约驱动
+SEARCH_PATH = "<速查表 search 端点 path>"
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"
+
 def test_search_consistency():
     """Search with different query formats should give similar results"""
-    # Same query in different representations
-    query1 = [0.1] * 128       # List
+    query1 = [0.1] * 128            # List
     query2 = {"values": [0.1]*128}  # Dict (if supported)
-    
-    status1, body1 = safe_request("POST", "/collections/test/points/search",
-                                  json={"vector": query1, "limit": 5})
-    status2, body2 = safe_request("POST", "/collections/test/points/search",
-                                  json={"vector": query2, "limit": 5})
-    
-    if not isinstance(body1, dict) or not isinstance(body2, dict):
-        print(f"VERDICT: SCRIPT_ERROR — Non-JSON response")
-        sys.exit(2)
-    ids1 = [r["id"] for r in body1.get("result", [])]
-    ids2 = [r["id"] for r in body2.get("result", [])]
+    _, body1, raw1 = safe_request("POST", SEARCH_PATH, json={VECTOR_KEY: query1, "limit": 5})
+    _, body2, raw2 = safe_request("POST", SEARCH_PATH, json={VECTOR_KEY: query2, "limit": 5})
+    # 结果按 contract.target 动态取键（不假设 body.get("result")）
+    results1 = "<从 body1 按 target 取结果列表>"
+    results2 = "<从 body2 按 target 取结果列表>"
+    get_id = "<按 target 从结果项取 id 的方式>"
+    ids1 = [get_id(r) for r in results1]
+    ids2 = [get_id(r) for r in results2]
     if ids1 != ids2:
         print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
         print(f"Different query formats gave different results: {ids1} vs {ids2}")
@@ -313,39 +299,48 @@ def test_search_consistency():
 ### 策略 7: 过滤参数语义正确性
 
 ```python
+# 契约驱动：路径/字段/过滤语法从速查表+contract 取
+UPSERT_PATH = "<速查表 points 端点 path>"
+SEARCH_PATH = "<速查表 search 端点 path>"
+POINT_WRAP  = "<contract.data_types 的点包装结构>"
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"
+# 过滤语法按 contract.target（qdrant={must:[{key,match}]}, weaviate={where:{...}},
+# milvus={expr:"..."}, pgvector=SQL WHERE）——从 contract 取当前 target 写法
+FILTER_CAT_A     = "<contract 推导：当前 target 等值过滤 category=A>"
+FILTER_SCORE_GT15 = "<contract 推导：当前 target 范围过滤 score>15>"
+
 def test_filter_semantics():
     """Verify filters work correctly"""
-    # Insert points with payload
+    # 插入带属性的点（属性字段名按 contract.data_types，不写死 payload）
+    ATTR = "<contract.data_types 的属性字段名>"
     data = [
-        {"id": 1, "vector": [0.1]*128, "payload": {"category": "A", "score": 10}},
-        {"id": 2, "vector": [0.1]*128, "payload": {"category": "B", "score": 20}},
-        {"id": 3, "vector": [0.1]*128, "payload": {"category": "A", "score": 30}},
+        {"id": 1, VECTOR_KEY: [0.1]*128, ATTR: {"category": "A", "score": 10}},
+        {"id": 2, VECTOR_KEY: [0.1]*128, ATTR: {"category": "B", "score": 20}},
+        {"id": 3, VECTOR_KEY: [0.1]*128, ATTR: {"category": "A", "score": 30}},
     ]
     for item in data:
-        status, body = safe_request("PUT", "/collections/test/points",
-                                    json={"points": [item]})
-    
+        safe_request("PUT", UPSERT_PATH, json={POINT_WRAP: [item]})
+
     # Filter by category "A"
-    status, body = safe_request("POST", "/collections/test/points/search", json={
-        "vector": [0.1]*128, "limit": 10,
-        "filter": {"must": [{"key": "category", "match": {"value": "A"}}]}
+    status, body, raw = safe_request("POST", SEARCH_PATH, json={
+        VECTOR_KEY: [0.1]*128, "limit": 10, "filter": FILTER_CAT_A
     })
-    if not isinstance(body, dict) or "result" not in body:
-        print(f"VERDICT: SCRIPT_ERROR — unexpected response")
-        sys.exit(2)
-    if len(body["result"]) != 2:
+    print(raw)
+    results = "<从 body 按 target 取结果列表>"
+    if len(results) != 2:
         print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
-        print(f"Expected 2 results for category A, got {len(body['result'])}")
+        print(f"Expected 2 results for category A, got {len(results)}")
         sys.exit(1)
-    
+
     # Filter by score > 15
-    status, body = safe_request("POST", "/collections/test/points/search", json={
-        "vector": [0.1]*128, "limit": 10,
-        "filter": {"must": [{"key": "score", "range": {"gt": 15}}]}
+    status, body, raw = safe_request("POST", SEARCH_PATH, json={
+        VECTOR_KEY: [0.1]*128, "limit": 10, "filter": FILTER_SCORE_GT15
     })
-    if isinstance(body, dict) and len(body.get("result", [])) != 2:
+    print(raw)
+    results = "<从 body 按 target 取结果列表>"
+    if len(results) != 2:
         print(f"VERDICT: DEFECT_FOUND (Type4_StateLogicViolation)")
-        print(f"Expected 2 results for score > 15, got {len(body.get('result', []))}")
+        print(f"Expected 2 results for score > 15, got {len(results)}")
         sys.exit(1)
     print("VERDICT: NO_DEFECT")
 ```
@@ -356,21 +351,7 @@ def test_filter_semantics():
 
 **⛔ 脚本格式强制要求：每个生成的脚本必须使用 `safe_request()` 包装所有 HTTP 调用。**
 
-```python
-def safe_request(method, path, **kwargs):
-    """安全的 HTTP 请求包装器——处理非 JSON 响应、连接失败、超时"""
-    try:
-        resp = requests.request(method, f"{BASE_URL}{path}", timeout=30, **kwargs)
-        try:
-            body = resp.json()
-        except (json.JSONDecodeError, ValueError):
-            body = resp.text
-        return resp.status_code, body
-    except requests.exceptions.ConnectionError:
-        return 0, "CONNECTION_REFUSED"
-    except requests.exceptions.Timeout:
-        return 0, "TIMEOUT"
-```
+`safe_request()` 权威定义（三元组 `(status, body, raw_text)`，含 BASE_URL/AUTH_HEADER 来源）见 `agents/_target_api_reference.md`。本节不再重复定义——所有 HTTP 调用统一用三元组解包 `status, body, raw = safe_request(...)`，判定以 HTTP `status` 为主 + `print(raw)`。
 
 - 裸 `requests.post(url, json=...).json()` 链式调用 → 流水线 REJECT
 - 脚本末尾必须打印 `VERDICT: DEFECT_FOUND` / `NO_DEFECT` / `SCRIPT_ERROR`
@@ -420,10 +401,11 @@ def safe_request(method, path, **kwargs):
 
 ```markdown
 ## Analyzed Documents — semantic
-- https://docs.weaviate.io/weaviate
-- https://raw.githubusercontent.com/api-evangelist/weaviate/refs/heads/main/openapi/weaviate-openapi.yml
-- https://github.com/weaviate/weaviate/releases/tag/v1.38.0
-- https://pypi.org/pypi/weaviate-client/json
+- <逐字复制 raw_knowledge.md ## Document Sources 表第 1 行 URL>
+- <逐字复制第 2 行 URL>
+- <逐字复制第 3 行 URL>
+- <逐字复制第 4 行 URL>
+- <... 继续逐字复制，直到覆盖 ≥ 60% 的 Document Sources>
 ```
 
 规则：

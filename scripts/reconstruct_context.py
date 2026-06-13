@@ -158,16 +158,33 @@ def reconstruct(session_dir: str) -> dict[str, Any]:
     overall_coverage = _safe_get(cov, "overall_coverage_pct", default=0.0)
     core_crud_coverage = _safe_get(cov, "core_crud_coverage_pct", default=0.0)
 
-    # 5. structured_contract.json (summary only)
+    # 5. structured_contract.json — summary + target_reference 速查表（组件 C）
     contract_path = os.path.join(session_dir, "structured_contract.json")
     contract = _read_json(contract_path)
     endpoint_count = 0
     constraint_count = 0
+    endpoint_cheatsheet: list[dict[str, str]] = []
     if contract:
         endpoints = contract.get("api_endpoints", [])
         endpoint_count = len(endpoints)
         for ep in endpoints:
             constraint_count += len(ep.get("constraints", []))
+        endpoint_cheatsheet = [
+            {
+                "method": str(ep.get("method", "")),
+                "path": str(ep.get("path", "")),
+                "category": str(ep.get("category", "")),
+            }
+            for ep in endpoints
+            if isinstance(ep, dict)
+        ]
+
+    # target_reference：契约端点速查表，注入 attack agent prompt 供生成脚本引用
+    result["target_reference"] = {
+        "target": str(target),
+        "endpoint_cheatsheet": endpoint_cheatsheet,
+        "key_data_types": contract.get("data_types", []) if contract else [],
+    }
 
     # 6. threat_model.json (summary, if exists)
     project_root = _safe_get(ps, "project_root", default="")
@@ -327,6 +344,24 @@ def format_text(data: dict[str, Any]) -> str:
             f"{exec_data.get('scripts_passed', '?')} 通过, "
             f"{exec_data.get('scripts_error', '?')} 错误"
         )
+
+    # 组件 C：端点速查表 section（注入 attack agent，供生成脚本引用）
+    tr = data.get("target_reference", {})
+    cheatsheet = tr.get("endpoint_cheatsheet", [])
+    if cheatsheet:
+        lines.extend([
+            "",
+            "### 当前 Target 端点速查表（契约驱动——生成脚本时引用此表，禁止硬编码端口/路径）",
+            f"- Target: {tr.get('target', '?')}  |  端点数: {len(cheatsheet)}",
+            "| Method | Path | Category |",
+            "|--------|------|----------|",
+        ])
+        for ep in cheatsheet[:40]:
+            lines.append(f"| {ep.get('method','')} | {ep.get('path','')} | {ep.get('category','')} |")
+        if len(cheatsheet) > 40:
+            lines.append(f"| ... | (另 {len(cheatsheet)-40} 条见 structured_contract.json) | ... |")
+        lines.append("- 数据字段命名/向量格式: 见 contract.data_types（key_data_types 已注入）")
+        lines.append("- ⛔ 禁止写死端口(6333/8080/19530)、路径、payload/properties 字段名——一律从本表或 contract 推导")
 
     lines.extend(["",
         "### 本轮关键信息",
