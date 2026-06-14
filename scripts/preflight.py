@@ -154,6 +154,40 @@ def check_network():
         print("[TestVDB] Network: WARNING - pypi.org unreachable, WebSearch may fail")
 
 
+def check_settings_schema():
+    """Validate settings.json against contracts/settings_schema.json."""
+    plugin_root = _plugin_root()
+    settings_path = os.path.join(plugin_root, "settings.json")
+    schema_path = os.path.join(plugin_root, "contracts", "settings_schema.json")
+    if not os.path.exists(schema_path):
+        print("[TestVDB] Settings schema: SKIP (contracts/settings_schema.json not found)")
+        return
+    try:
+        import json
+        with open(settings_path, encoding="utf-8") as f:
+            settings = json.load(f)
+        with open(schema_path, encoding="utf-8") as f:
+            schema = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"[TestVDB] Settings schema: WARNING - {e}")
+        return
+    # 优先 jsonschema 完整验证
+    try:
+        import jsonschema
+        jsonschema.validate(settings, schema)
+        print("[TestVDB] Settings schema: OK (jsonschema)")
+    except ImportError:
+        # jsonschema 未装 → 轻量自检 required 顶层 keys
+        required = schema.get("required", [])
+        missing = [k for k in required if k not in settings]
+        if missing:
+            print(f"[TestVDB] Settings schema: WARNING - missing required keys: {missing}")
+        else:
+            print(f"[TestVDB] Settings schema: OK (lightweight, {len(required)} required keys)")
+    except Exception as e:
+        print(f"[TestVDB] Settings schema: WARNING - {e}")
+
+
 def main():
     print("[TestVDB] Pre-flight checks...")
     check_docker()
@@ -163,6 +197,7 @@ def main():
     check_github_token()
     check_docker_hub_token()
     check_network()
+    check_settings_schema()
     print("[TestVDB] Checks done. Python<3.9 is fatal per Orchestrator spec.")
 
 

@@ -102,6 +102,36 @@ def test_get_endpoints_v2_and_legacy():
     assert get_endpoints({}) == []
 
 
+def test_endpoint_completeness_warns_when_few(tmp_path):
+    """[5] 契约端点少 vs raw_knowledge 路径多 → 警告。"""
+    from validate_contract import check_endpoint_completeness
+    raw = tmp_path / "raw_knowledge.md"
+    raw.write_text(
+        "POST /v1/objects\nGET /v1/schema\nPOST /v1/graphql\nDELETE /v1/objects/{id}\n",
+        encoding="utf-8")
+    # 契约 1 端点 vs raw 多路径 → 1 < N*0.5 → warning
+    warn = check_endpoint_completeness(1, str(raw))
+    assert warn is not None
+    assert "完整度" in warn
+
+
+def test_endpoint_completeness_ok_when_sufficient(tmp_path):
+    """[5] 契约端点 >= raw 路径*0.5 → 无警告。"""
+    from validate_contract import check_endpoint_completeness
+    raw = tmp_path / "raw_knowledge.md"
+    raw.write_text("POST /v1/objects\nGET /v1/schema\n", encoding="utf-8")
+    # 契约 2 端点 vs raw 2 路径 → 2 >= 1 → None
+    warn = check_endpoint_completeness(2, str(raw))
+    assert warn is None
+
+
+def test_endpoint_completeness_skip_when_no_raw(tmp_path):
+    """[5] 无 raw_knowledge → None（跳过，不报错）。"""
+    from validate_contract import check_endpoint_completeness
+    warn = check_endpoint_completeness(10, str(tmp_path / "nope.md"))
+    assert warn is None
+
+
 def test_load_contract_missing_file(tmp_path):
     """不存在文件 → (None, error)。"""
     contract, err = load_contract(str(tmp_path / "nope.json"))

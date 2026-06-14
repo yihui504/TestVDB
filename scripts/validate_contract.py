@@ -104,6 +104,32 @@ def validate_contract(contract):
     return errors, warnings
 
 
+# [5] 端点完整度检测：raw_knowledge 中的 HTTP 路径引用模式
+import re as _re
+_PATH_REF_RE = _re.compile(r'/(?:v\d+/)?[a-z][\w{}.-]*(?:/[\w{}.-]+)+', _re.IGNORECASE)
+
+
+def check_endpoint_completeness(endpoints_count, raw_knowledge_path):
+    """端点完整度检测：契约端点数 vs raw_knowledge HTTP 路径引用数。
+    返回 warning 字符串或 None。启发式（raw_knowledge 非结构化，路径引用是粗略上界）。"""
+    try:
+        with open(raw_knowledge_path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return None  # 无 raw_knowledge，跳过
+    refs = {m.group(0).rstrip(".,;)\"'") for m in _PATH_REF_RE.finditer(text)}
+    refs = {r for r in refs if len(r) > 3}  # 过滤过短
+    ref_count = len(refs)
+    if ref_count == 0:
+        return None
+    if endpoints_count < ref_count * 0.5:
+        return (
+            f"端点完整度可能不全: 契约 {endpoints_count} 端点 vs raw_knowledge {ref_count} 路径引用 "
+            f"(<50%)。contract-formalizer 可能漏提取（见规则 1 提取完整度）。"
+        )
+    return None
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python scripts/validate_contract.py <contract_path>", file=sys.stderr)
@@ -115,6 +141,12 @@ def main():
         return 2
 
     errors, warnings = validate_contract(contract)
+    # [5] 端点完整度检测（vs raw_knowledge，cross-file）
+    from pathlib import Path as _P
+    _raw = _P(path).resolve().parent / "raw_knowledge.md"
+    _comp = check_endpoint_completeness(len(get_endpoints(contract)), str(_raw))
+    if _comp:
+        warnings.append(_comp)
     target = contract.get("target", "?")
     print(f"contract: {path} (target={target})")
     if warnings:

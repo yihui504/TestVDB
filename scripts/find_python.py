@@ -9,18 +9,20 @@ import glob
 print(f"Current python: {sys.executable}")
 print(f"Version: {sys.version}")
 
-# On Windows, check common locations
-common_paths = [
-    r"C:\Python311\python.exe",
-    r"C:\Python310\python.exe",
-    r"C:\Python39\python.exe",
-    r"C:\Users\11428\AppData\Local\Programs\Python\Python311\python.exe",
-    r"C:\Users\11428\AppData\Local\Programs\Python\Python310\python.exe",
-    r"C:\Users\11428\AppData\Local\Programs\Python\Python39\python.exe",
-    r"C:\Program Files\Python311\python.exe",
-    r"C:\Program Files\Python310\python.exe",
-    r"C:\Program Files\Python39\python.exe",
-]
+# On Windows, check common locations（动态构建，不硬编码用户名）
+_localappdata = os.environ.get("LOCALAPPDATA", "")
+_programfiles = os.environ.get("ProgramFiles", r"C:\Program Files")
+common_paths = []
+# %LOCALAPPDATA%\Programs\Python\PythonXY（每用户安装，动态）
+if _localappdata:
+    for _xy in ("313", "312", "311", "310", "39"):
+        common_paths.append(os.path.join(_localappdata, "Programs", "Python", f"Python{_xy}", "python.exe"))
+# C:\PythonXY（系统级安装）
+for _xy in ("313", "312", "311", "310", "39"):
+    common_paths.append(rf"C:\Python{_xy}\python.exe")
+# %ProgramFiles%\PythonXY
+for _xy in ("313", "312", "311", "310", "39"):
+    common_paths.append(os.path.join(_programfiles, f"Python{_xy}", "python.exe"))
 
 for path in common_paths:
     if os.path.exists(path):
