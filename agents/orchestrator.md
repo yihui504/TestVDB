@@ -126,106 +126,39 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 - 网络连接（Crawl4AI 服务需要出站网络访问文档站点）
 - `DOCKER_HUB_TOKEN` 环境变量（**推荐**，Docker Hub API 查询 tags 时有更高频率限制；Docker CLI 命令如 `docker pull` / `docker manifest inspect` 无需 token）
 
-### Step 3: 缓存检查
-检查路径 `results/{target}/{version}/structured_contract.json`：
-- 存在且 `cache_ttl_hours` 未过期 → 跳过 Step 4-5
-- 否则执行完整知识提取流程
+### Step 3: 契约智能消费（批次 D，D 判断）
 
-**TTL 过期计算**：从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取 TTL（默认 168 小时 = 7 天）。读取 `structured_contract.json` 中的 `cached_at`（ISO 8601 时间戳），计算 `当前时间 - cached_at > cache_ttl_hours`。如果 `cached_at` 字段缺失，视为缓存无效。
+> 完整 SOP 见 `commands/contract.md`（独立命令）与 `commands/mine.md` Step 3。本节为参考摘要。
 
-### Step 3.6: 历史情报采集（v2.1 新增，intelligence.enabled=true 时）
+契约阶段按 D 判断（`scripts/check_cache.py contract <dir> <target> <version> --ttl H`，spec 决策 4：存在→TTL→有效性→target/version 匹配）：
+- **USABLE** → 跳过契约生成，直接 Step 7
+- **MISSING / STALE / INVALID** → 派发契约生成（Step 4 → 5 → 6）
+- **MISMATCH** → 报错退出
 
-**⛔ 铁律：主进程只做编排，不做执行。** 本步骤的所有实质性工作通过 `Agent(subagent_type="testvdb:xxx")` 派发。
+TTL 从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取（默认 168h）。
 
-如果 `intelligence.enabled=false`，跳过整个 Step 3.6。
+### Step 3.6: 历史情报采集（intelligence.enabled=true 时）
 
-**主进程在派发以下 Agent 前，先从 settings.json 读取 intelligence 配置并提取为模板变量：**
-```bash
-python -c "
-import json
-with open('settings.json', encoding='utf-8') as f:
-    c = json.load(f).get('intelligence', {})
-print(f'INTEL_TW={c.get(\"time_window_months\", 24)}')
-print(f'INTEL_MI={c.get(\"max_issues\", 500)}')
-print(f'INTEL_MC={c.get(\"max_commits\", 200)}')
-print(f'INTEL_TTL={c.get(\"cache_ttl_hours\", 720)}')
-"
-```
+> 完整 SOP 见 `commands/intel.md`（独立命令）与 `commands/mine.md` Step 3.6。
 
-#### 3.6a: 检查情报缓存
+**⛔ 铁律：主进程只做编排，不做执行。** `intelligence.enabled=false` → 跳过整个 Step 3.6。
 
-检查 `intelligence/{target}/threat_model.json` 是否存在且未过期（TTL = `intelligence.cache_ttl_hours`，默认 720h）。
+按 D 判断（`scripts/check_cache.py intel <dir> <target> --ttl H`）：
+- **USABLE** → 跳过采集，仅加载 threat_model 摘要到上下文（blindspot_count / priority_areas / top_blindspots）
+- **MISSING / STALE / INVALID** → 派发 issue-miner → bug-shape-extractor → threat-modeler（任一失败记录警告继续，Phase 0 非关键路径）
 
-如果缓存有效 → 跳到 Step 3.6e（仅加载 threat_model 到上下文）。
+配置从 `settings.json` 的 `intelligence` 节读取：`time_window_months`(默认24) / `max_issues`(500) / `max_commits`(200) / `cache_ttl_hours`(默认720h)。
 
-#### 3.6b: 派发 issue-miner（⛔ 禁止自己爬取 GitHub）
+### Step 4-6: 契约生成（MISSING/STALE/INVALID 时派发）
 
-```
-Agent(
-  subagent_type="testvdb:issue-miner",
-  description="采集 {target} 历史 Issues 和 Commits",
-  prompt="按照 agents/issue-miner.md 规范...target={target}, version={version}, intelligence_dir=intelligence/{target}/, time_window_months={INTEL_TW}, max_issues={INTEL_MI}, max_commits={INTEL_MC}。"
-)
-```
+> 完整 agent 派发 prompt 见 `commands/contract.md` Step 3-5。
 
-**如果失败** → 记录警告到 error_log，跳过 3.6c/3.6d，继续 Step 4（Phase 0 非关键路径）。
-
-#### 3.6c: 派发 bug-shape-extractor
-
-```
-Agent(subagent_type="testvdb:bug-shape-extractor", ...)
-```
-
-失败 → 记录警告，继续 Step 4。
-
-#### 3.6d: 派发 threat-modeler
-
-```
-Agent(subagent_type="testvdb:threat-modeler", ...)
-```
-
-失败 → 记录警告，继续 Step 4。
-
-#### 3.6e: 加载情报摘要到上下文
-
-从 threat_model.json 提取关键字段（blindspot_count、priority_areas、top_blindspots）供后续步骤注入。
-
-### Step 4: 派 Knowledge Extractor
-使用 Agent 工具派 knowledge-extractor agent。所有子 Agent 通过对应的 `testvdb:` 命名类型派发，Agent 定义（frontmatter 中的 tools/maxTurns/model）由插件系统自动加载。
-
-```
-Agent(
-  subagent_type="testvdb:knowledge-extractor",
-  description="提取 {target} {version} 文档知识",
-  prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识，产出 raw_knowledge.md。输入参数: target={target}, version={version}, session_dir=results/{target}/{version}。将结果写入 results/{target}/{version}/raw_knowledge.md"
-)
-```
-
-确保产出 raw_knowledge.md 后继续。使用 Bash 执行 `ls -la results/{target}/{version}/raw_knowledge.md` 验证文件存在。
-
-### Step 5: 派 Contract Formalizer
-使用 Agent 工具派 contract-formalizer agent：
-
-```
-Agent(
-  subagent_type="testvdb:contract-formalizer",
-  description="形式化 {target} v{version} API 契约",
-  prompt="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.md 转换为 structured_contract.json。输入参数: target={target}, version={version}, session_dir=results/{target}/{version}。将结果写入 results/{target}/{version}/structured_contract.json"
-)
-```
-
-确保产出 structured_contract.json 后继续。使用 Bash 执行 `ls -la results/{target}/{version}/structured_contract.json` 验证文件存在。
-
-### Step 6: 合同门控检查
-检查 structured_contract.json 的端点覆盖率：
-- **核心 CRUD 端点覆盖率 ≥ 90%** → 通过
-- 不通过 → 输出缺失端点列表 + 清理 `results/{target}/{version}/` 下的 mine_state.json（如果已创建）+ 拒绝进入 Mine，终止会话
-
-核心 CRUD 分类规则：
-- 排除管理端点：/indexes/, /partitions/, /aliases/, load, release, flush, compact, /meta, /nodes, /cluster, /users, /roles
-- 对四 DB 通用，不做 per-DB 特殊判断
-
-**覆盖率计算方式**：`核心 CRUD 端点覆盖率 = api_endpoints 中属于核心 CRUD 的端点数 / 文档中已知的核心 CRUD 端点总数`。核心 CRUD 端点包括：collections 的 create/list/get/delete、points 的 insert/get/update/delete、search 的 search/recommend。
+- **Step 4**: `Agent(subagent_type="testvdb:knowledge-extractor")` → `results/{target}/{version}/raw_knowledge.md`
+- **Step 5**: `Agent(subagent_type="testvdb:contract-formalizer")` → `results/{target}/{version}/structured_contract.json`
+- **Step 6**: 合同门控 — `scripts/validate_contract.py`（schema 合法性）+ 核心 CRUD 端点覆盖率 ≥ 90%。不通过 → 输出缺失端点 + 终止会话。
+  - 核心 CRUD：collections create/list/get/delete、points insert/get/update/delete、search/recommend
+  - 排除管理端点：/indexes/, /partitions/, /aliases/, load, release, flush, compact, /meta, /nodes, /cluster, /users, /roles
+  - `material_passport.enabled=true` 时加 `scripts/passport_verify.py`
 
 ### Step 7: 初始化状态
 创建 `results/{target}/{version}/` 目录（不含 timestamp 子目录），初始化 mine_state.json：
