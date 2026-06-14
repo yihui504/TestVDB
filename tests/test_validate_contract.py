@@ -47,27 +47,40 @@ def test_missing_passport_warns_not_errors(make_contract):
     assert any("_passport" in w for w in warnings)
 
 
-def test_category_pollution_warns_for_weaviate(make_contract):
-    """target=weaviate 但用 collections/points category → 警告（bug #3 检测侧）。"""
+def test_non_standard_category_warns(make_contract):
+    """非通用词表 category（如 collections/points）→ 警告，target 无关（bug #3 检测侧）。"""
     _, contract = make_contract(target="weaviate", endpoints=[
-        {"path": "objects", "method": "POST", "category": "objects",
+        {"path": "objects", "method": "POST", "category": "data",
          "source_url": "u", "doc_version": "1"},
-        {"path": "coll", "method": "PUT", "category": "collections",
+        {"path": "coll", "method": "PUT", "category": "collections",  # 非通用词
          "source_url": "u", "doc_version": "1"},
     ])
     errors, warnings = validate_contract(contract)
     assert errors == []
-    assert any("污染" in w or "collections" in w for w in warnings)
+    assert any("非通用词表" in w or "collections" in w for w in warnings)
 
 
-def test_qdrant_category_not_pollution(make_contract):
-    """target=qdrant 用 collections/points → 无污染警告（合法）。"""
+def test_qdrant_non_standard_category_also_warns(make_contract):
+    """新逻辑：collections 是 DB 资源名非功能 category，即使 target=qdrant 也警告。"""
     _, contract = make_contract(target="qdrant", endpoints=[
-        {"path": "c", "method": "PUT", "category": "collections",
+        {"path": "c", "method": "PUT", "category": "collections",  # 非通用词
          "source_url": "u", "doc_version": "1"},
     ])
     _, warnings = validate_contract(contract)
-    assert not any("污染" in w for w in warnings)
+    assert any("非通用词表" in w or "collections" in w for w in warnings)
+
+
+def test_standard_categories_no_category_warning(make_contract):
+    """全通用词表 category（schema/data/...）→ 无 category 警告。"""
+    _, contract = make_contract(target="qdrant", endpoints=[
+        {"path": "c", "method": "PUT", "category": "schema",
+         "source_url": "u", "doc_version": "1"},
+        {"path": "p", "method": "POST", "category": "data",
+         "source_url": "u", "doc_version": "1"},
+    ])
+    errors, warnings = validate_contract(contract)
+    assert errors == []
+    assert not any("非通用词表" in w for w in warnings)
 
 
 def test_legacy_single_api_endpoint_adapted():

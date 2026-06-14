@@ -88,16 +88,17 @@ def validate_contract(contract):
     if "_passport" not in contract:
         warnings.append("missing _passport (pre-v2.0 contract; passport 验证跳过)")
 
-    # bug #3 检测侧：category 污染（collections/points 出现在非 qdrant target）
-    target = str(contract.get("target", "")).lower()
-    if target and target != "qdrant" and endpoints:
-        foreign_cats = {"collections", "points"}
-        polluted = [e.get("path", "?") for e in endpoints
-                    if e.get("category") in foreign_cats]
-        if polluted:
+    # bug #3 检测侧：category 应在通用词表内（schema/data/search/index/admin/other）
+    # 旧 Qdrant 倾向词（collections/points/ddl/dml/management 等）→ 警告
+    valid_categories = {"schema", "data", "search", "index", "admin", "other"}
+    if endpoints:
+        invalid = [(e.get("path", "?"), e.get("category")) for e in endpoints
+                   if e.get("category") and e.get("category") not in valid_categories]
+        if invalid:
             warnings.append(
-                f"category 污染: target={target} 但 {len(polluted)} 个端点用了 qdrant 风格 "
-                f"category (collections/points) — bug #3 检测侧: {polluted[:3]}"
+                f"category 非通用词表: {len(invalid)} 个端点用了非标准 category "
+                f"(应为 schema/data/search/index/admin/other) — bug #3 检测侧: "
+                f"{[(p, c) for p, c in invalid[:3]]}"
             )
 
     return errors, warnings

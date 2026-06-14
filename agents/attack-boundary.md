@@ -156,8 +156,8 @@ if status not in (400, 422):
 
 ```python
 # 契约驱动：建集合/插入的路径、字段、维度从速查表 + contract 取（不同 target 字段名不同）
-CREATE_PATH = "<速查表 category=collections 的 path>"
-UPSERT_PATH = "<速查表 category=points 的 path>"
+CREATE_PATH = "<速查表 category=schema 的 path>"
+UPSERT_PATH = "<速查表 category=data 的 path>"
 # 建集合体 + 点包装结构按 contract.data_types 推导（如 points:[...] / objects:[...]）
 
 # 建集合（维度 = 契约维度 DIM）
