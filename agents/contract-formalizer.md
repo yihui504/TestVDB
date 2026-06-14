@@ -289,7 +289,11 @@ tools:
 
 ## 转换规则
 
-### 规则 1: 端点路径规范化
+### 规则 1: 端点提取完整度 + 路径规范化
+
+**提取完整度（强制）**：从 raw_knowledge.md 提取**所有**文档提及的 HTTP/SQL 端点，**含运维/管理类**——health/ready/liveness、cluster/nodes、modules、backup/restore、shards、tenants、well-known、metrics 等。这些运维端点 category 归 `admin`。**勿漏**：每个文档明确列出的端点都应进入 api_endpoints（旧版本曾漏提取 admin 运维端点，导致契约不完整——见 validate_contract 的完整度检测）。
+
+**路径规范化**：
 
 对于 REST API 端点：
 - 使用 `+` 连接词表示路径分段组合（如 `search+points`）
