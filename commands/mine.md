@@ -518,7 +518,7 @@ python scripts/verify_defects.py "results/{target}/{version}/{timestamp}"
    - consecutive_no_defect_rounds >= 5
    - overall_coverage_pct >= 95
    - current_round >= max_rounds（且 max_rounds > 0）
-   - total_defects_confirmed >= min_defects
+   - total_defects_confirmed >= min_defects（且 min_defects > 0；`--min-defects 0` = 无下限，不触发）
 
 **更新 pipeline_state**: `phases_completed` 追加 `"STATE_SAVE"`
 
@@ -618,7 +618,7 @@ print(f'[pipeline_state] phase → {NEXT_PHASE}')
 1. **Stalemate**: 连续 5 轮无新缺陷
 2. **Coverage**: 合同覆盖率 ≥ 95%
 3. **Max Rounds**: `--max-rounds` 达到（且 > 0）
-4. **Min Defects**: `--min-defects` 达到
+4. **Min Defects**: `--min-defects` 达到（`--min-defects 0` = 无下限，不触发）
 
 ## Output
 

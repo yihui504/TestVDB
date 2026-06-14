@@ -211,8 +211,8 @@ def reconstruct(session_dir: str) -> dict[str, Any]:
         termination_reason = f"覆盖率达标（{overall_coverage:.1f}% ≥ 95%）"
     elif max_rounds > 0 and current_round > max_rounds:
         termination_reason = f"达到最大轮次（{current_round}/{max_rounds}）"
-    elif total_defects >= min_defects:
-        # min_defects reached but max_rounds not — this is soft termination
+    elif min_defects > 0 and total_defects >= min_defects:
+        # min_defects reached (0 = 无下限，不检查) — soft termination
         termination_reason = ""
 
     # Assemble structured result
