@@ -45,3 +45,12 @@ def test_generalize_endpoint_contains_operation():
     """泛化结果含 operation（最后一段动词，如 search）。"""
     result = generalize_endpoint("collections/mycoll/points/search", "qdrant")
     assert "search" in result
+
+
+def test_classify_endpoint_uses_generic_categories():
+    """classify_endpoint 返回通用词表前缀（schema/data/search），非 qdrant 词（collection_*/points_*）。bug #3 修复验证。"""
+    assert classify_endpoint("create collection") == "schema_create"
+    assert classify_endpoint("delete collection") == "schema_delete"
+    assert classify_endpoint("insert points") == "data_insert"
+    assert classify_endpoint("search points") == "search"
+    assert classify_endpoint("create table") == "schema_create"  # ddl → schema

@@ -111,7 +111,7 @@ tools:
           "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "SQL"] },
           "category": {
             "type": "string",
-            "description": "端点功能分类。标准分类：collections, points, search, index, management, ddl, dml, dql。别名映射：vector→points, partition→management, alias→management, cluster→management"
+            "description": "端点功能分类（target 中立通用词表）。标准分类：schema（结构定义/管理）, data（记录读写）, search（检索）, index（索引）, admin（运维管理）, other（兜底）。所有 DB 共用，禁止用 DB 特定概念名（如 collections/points/objects/class）作 category。"
           },
           "description": { "type": "string" },
           "source_url": { "type": "string", "description": "该端点文档的原始 URL，用于证据链追溯" },
@@ -310,34 +310,28 @@ tools:
 | 状态/一致性 | "atomic", "consistent", "after {op}", "should not affect" | state_constraint |
 | 行为/响应 | "returns", "returns error", "successful", "failure", "should not" | assertion (behavioral) |
 
-### 规则 2.5: 端点分类标准化（强制）
+### 规则 2.5: 端点分类标准化（强制，target 中立）
 
-在生成 structured_contract.json 时，所有 api_endpoints[].category 必须使用标准分类名。如果从 raw_knowledge.md 中提取到非标准分类名，必须按以下映射表转换为标准名：
+在生成 structured_contract.json 时，所有 api_endpoints[].category 必须使用**通用功能分类词表**（target 中立，所有 DB 共用）：`schema / data / search / index / admin / other`。禁止用 DB 特定概念名（collections/points/objects/class/entities 等）作 category——它们是 DB 资源名，不是功能分类。
 
-| 非标准分类名 | 标准分类名 |
-|-------------|-----------|
-| vector | points |
-| vectors | points |
-| entities | points |
-| entity | points |
-| partition | management |
-| alias | management |
-| cluster | management |
-| admin | management |
-| system | management |
-| collection | collections |
-| query | search |
-| recommend | search |
-| indexes | index |
-| indices | index |
+从 raw_knowledge.md 提取端点时，按**功能语义**归类到通用词表：
+
+| 端点功能 | 通用 category | 各 DB 对应资源（仅参考，不作 category） |
+|---------|--------------|----------------------------------------|
+| 结构定义/管理（create/drop collection/class/schema/table） | `schema` | qdrant collections, weaviate schema, milvus collection, pgvector DDL |
+| 记录读写（insert/get/delete objects/points/entities/rows） | `data` | qdrant points, weaviate objects, milvus entities, pgvector DML |
+| 检索（search/query/graphql/recommend） | `search` | graphql, search, query, dql |
+| 索引管理（create/drop index） | `index` | ivfflat/hnsw index |
+| 运维管理（cluster/snapshot/backup/shard/partition/health/stats/modules/vacuum） | `admin` | partition, alias, cluster, system |
+| 罕见、无法按功能归类 | `other` | — |
 
 **标准化步骤**：
-1. 从 raw_knowledge.md 提取端点时，先记录原始分类名
-2. 查上表映射为标准分类名
-3. 在 api_endpoints 中只使用标准分类名
-4. 在输出验证第 12 条中确认无非标准分类名
+1. 从 raw_knowledge.md 提取端点时，先识别其功能（管结构/读写数据/检索/索引/运维）
+2. 按上表归到通用 category
+3. 在 api_endpoints 中只使用通用词表（schema/data/search/index/admin/other）
+4. 在输出验证中确认无 DB 特定概念名（collections/points/objects/class 等）作 category
 
-**注意**：此映射是强制性的，不是建议。如果发现未映射的非标准分类名，在输出验证中报错。
+**注意**：此分类是强制性的。DB 特定资源名（collections/points/objects 等）是端点的 path/资源，不是功能 category——category 必须是通用功能词。
 
 ### 规则 3: 置信度标记与证据分级
 

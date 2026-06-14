@@ -33,43 +33,43 @@ LOG_PATH = os.path.join(REGISTRY_DIR, "evolution_log.jsonl")
 
 DB_ENDPOINT_PATTERNS = {
     "milvus": {
-        "collection": r"/v2/vectordb/collections/\{collection_name\}",
-        "points": r"/v2/vectordb/collections/\{collection_name\}/points",
+        "schema": r"/v2/vectordb/collections/\{collection_name\}",
+        "data": r"/v2/vectordb/collections/\{collection_name\}/points",
         "search": r"/v2/vectordb/collections/\{collection_name\}/points/search",
         "index": r"/v2/vectordb/collections/\{collection_name\}/indexes",
     },
     "qdrant": {
-        "collection": r"/collections/\{collection_name\}",
-        "points": r"/collections/\{collection_name\}/points",
+        "schema": r"/collections/\{collection_name\}",
+        "data": r"/collections/\{collection_name\}/points",
         "search": r"/collections/\{collection_name\}/points/search",
         "index": None,
     },
     "weaviate": {
-        "collection": r"/v1/schema/\{class_name\}",
-        "points": r"/v1/objects",
+        "schema": r"/v1/schema/\{class_name\}",
+        "data": r"/v1/objects",
         "search": r"/v1/graphql",
         "index": None,
     },
     "pgvector": {
-        "collection": r"(?:CREATE|DROP|ALTER)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(\w+)",
-        "points": r"INSERT\s+INTO\s+\w+",
+        "schema": r"(?:CREATE|DROP|ALTER)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(\w+)",
+        "data": r"INSERT\s+INTO\s+\w+",
         "search": r"SELECT.*\bORDER\s+BY\b.*<=>",
         "index": r"CREATE\s+INDEX\s+\w+\s+ON\s+\w+\s+USING\s+(?:ivfflat|hnsw)",
     },
 }
 
 ENDPOINT_CATEGORIES = [
-    (r"(?:create|insert|put|post).*collection", "collection_create"),
-    (r"(?:delete|drop).*collection", "collection_delete"),
-    (r"(?:get|list|describe).*collection", "collection_read"),
+    (r"(?:create|insert|put|post).*collection", "schema_create"),
+    (r"(?:delete|drop).*collection", "schema_delete"),
+    (r"(?:get|list|describe).*collection", "schema_read"),
     (r"search.*points?", "search"),
-    (r"(?:insert|upsert|put).*points?", "points_insert"),
-    (r"(?:delete).*points?", "points_delete"),
-    (r"(?:get|retrieve).*points?", "points_read"),
-    (r"(?:update).*points?", "points_update"),
-    (r"count.*points?", "count"),
+    (r"(?:insert|upsert|put).*points?", "data_insert"),
+    (r"(?:delete).*points?", "data_delete"),
+    (r"(?:get|retrieve).*points?", "data_read"),
+    (r"(?:update).*points?", "data_update"),
+    (r"count.*points?", "data_count"),
     (r"(?:create|build).*index", "index_create"),
-    (r"create.*table", "ddl"),
+    (r"create.*table", "schema_create"),
 ]
 
 
