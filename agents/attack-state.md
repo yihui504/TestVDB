@@ -289,7 +289,7 @@ For pgvector: VACUUM → Verify count unchanged
   "script_id": "state_{endpoint}_{counter}",
   "strategy": "count_consistency|delete_consistency|upsert_idempotence|concurrent|transaction|index_state",
   "endpoint": "search+points",
-  "constraint_ids": ["qdrant_state_count_consistency_001"],
+  "constraint_ids": ["<复制 structured_contract.json 中对应的 constraint_id>"],
   "source_url": "(从 constraint/assertion 的 source_url 字段获取)",
   "doc_version": "(从 constraint/assertion 的 doc_version 字段获取，如无则填 \"unknown\")",
   "expected_defect_type": "Type4_StateLogicViolation|Type3_RuntimeFailure|Type1_IllegalSuccess",

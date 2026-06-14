@@ -365,7 +365,7 @@ def test_filter_semantics():
   "script_id": "semantic_{endpoint}_{counter}",
   "strategy": "behavioral_contract|diagnosis_quality|illegal_rejection|type_coercion|search_correctness|metamorphic|filter_semantics",
   "endpoint": "search+points",
-  "constraint_ids": ["qdrant_behavioral_search_points_001"],
+  "constraint_ids": ["<复制 structured_contract.json 中对应的 constraint_id>"],
   "source_url": "(从 constraint/assertion 的 source_url 字段获取)",
   "doc_version": "(从 constraint/assertion 的 doc_version 字段获取，如无则填 \"unknown\")",
   "expected_defect_type": "Type2_PoorDiagnostics|Type4_StateLogicViolation|Type1_IllegalSuccess|Type3_RuntimeFailure",

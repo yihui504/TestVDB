@@ -122,7 +122,7 @@ tools:
 ```python
 # 契约驱动：端点/字段从注入速查表 + contract 取，禁止硬编码端口/路径/字段
 SEARCH_PATH = "<速查表 category=search 的 path>"   # 当前 target 的实际 search 端点
-VECTOR_KEY  = "<contract.data_types 的向量字段名>"  # qdrant=vector, weaviate 按 schema
+VECTOR_KEY  = "<contract.data_types 的向量字段名>"  # 从契约取，勿硬编码 DB 特定名
 DIM         = 128   # 从 contract 取实际维度
 
 status, body, raw = safe_request("POST", SEARCH_PATH,
@@ -275,7 +275,7 @@ if __name__ == "__main__":
   "script_id": "boundary_{endpoint}_{counter}",
   "strategy": "boundary|type|dimension|special_value",
   "endpoint": "search+points",
-  "constraint_ids": ["qdrant_range_search_points_001"],
+  "constraint_ids": ["<复制 structured_contract.json 中对应的 constraint_id>"],
   "source_url": "(从 constraint/assertion 的 source_url 字段获取)",
   "doc_version": "(从 constraint/assertion 的 doc_version 字段获取，如无则填 \"unknown\")",
   "expected_defect_type": "Type1_IllegalSuccess|Type2_PoorDiagnostics|Type3_RuntimeFailure",
