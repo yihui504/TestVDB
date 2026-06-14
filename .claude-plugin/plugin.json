@@ -19,7 +19,9 @@
     "quality-assurance"
   ],
   "commands": [
-    "./commands/mine.md"
+    "./commands/mine.md",
+    "./commands/contract.md",
+    "./commands/intel.md"
   ],
   "agents": [
     "./agents/orchestrator.md",
