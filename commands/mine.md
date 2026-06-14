@@ -54,6 +54,8 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent, ScheduleWakeup
 | `<version>` | Yes | — | 目标版本号 |
 | `--max-rounds N` | No | `5` | 最大挖掘轮数。`0` = 无上限 |
 | `--min-defects N` | No | `1` | 最低缺陷产出要求 |
+| `--intel true\|false` | No | `auto` | 情报阶段控制。`true`=强制重新采集；`false`=禁用采集（C 边界：无情报→报错，有但过期→用+警告）；不传=`auto`（缓存有效→复用，否则采集） |
+| `--contract true\|false` | No | `auto` | 契约阶段控制。`true`=强制重新生成；`false`=禁用生成（C 边界：无契约→报错，有但过期→用+警告）；不传=`auto`（缓存有效→复用，否则生成） |
 
 ---
 
@@ -144,10 +146,26 @@ except json.JSONDecodeError:
 "
 ```
 
-### Step 3: 缓存检查
-检查 `results/{target}/{version}/structured_contract.json` 是否存在且未过期（TTL 见 settings.json 的 `knowledge.cache_ttl_hours`，默认 168h）。如果缓存有效 → 跳到 Step 6。
+### Step 3: 契约智能消费（批次 D，D 判断）
 
-**Passport Hash 验证**（material_passport.enabled=true 时）：
+按 `--contract` 参数决定契约阶段行为（spec 决策 4：存在→TTL→有效性→target/version 匹配）。逻辑与 `/testvdb:contract` 命令相同。
+
+**智能判断（不传 `--contract`，默认 auto）**：
+```bash
+python scripts/check_cache.py contract "results/{target}/{version}" {target} {version} --ttl {knowledge.cache_ttl_hours}
+```
+- **USABLE**（exit 0）→ 跳过契约生成，直接 [Step 7](#step-7-初始化状态)（纯挖掘）
+- **MISSING / STALE / INVALID** → 派发契约生成（Step 4 → Step 5 → Step 6）
+- **MISMATCH**（target/version 不匹配）→ 报错退出
+
+**`--contract true`**：跳过 check_cache，强制派发 Step 4 → Step 5 → Step 6（重新生成）
+
+**`--contract false`（C 边界）**：
+- **MISSING** → 报错退出（"契约缺失，--contract false 跳过生成；请先 `/testvdb:contract {target} {version}`"）
+- **STALE / INVALID** → 用现有契约 + 警告（"契约可能过期/无效，--contract false 跳过刷新"），继续 Step 7
+- **USABLE** → 正常使用
+
+**Passport Hash 验证**（`material_passport.enabled=true` 且契约阶段执行了 Step 4-5 时）：
 ```bash
 python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
 ```
@@ -178,9 +196,24 @@ print(f'INTEL_TTL={c.get(\"cache_ttl_hours\", 720)}')
 "
 ```
 
-#### 3.6a: 检查情报缓存
+#### 3.6a: 情报智能消费（批次 D，D 判断）
 
-检查 `intelligence/{target}/threat_model.json` 是否存在且未过期（TTL = `intelligence.cache_ttl_hours`，默认 720h）。如果缓存有效 → 跳到 Step 3.6e。
+按 `--intel` 参数决定情报阶段行为（spec 决策 4：存在→TTL→有效性）。逻辑与 `/testvdb:intel` 命令相同。
+
+**智能判断（不传 `--intel`，默认 auto）**：
+```bash
+python scripts/check_cache.py intel "intelligence/{target}" {target} --ttl {INTEL_TTL}
+```
+- **USABLE**（exit 0）→ 跳过情报采集，直接 [3.6e](#36e-加载情报摘要)（纯挖掘）
+- **MISSING / STALE / INVALID** → 派发情报采集（3.6b → 3.6c → 3.6d）
+- **MISMATCH** → 报错退出
+
+**`--intel true`**：跳过 check_cache，强制派发 3.6b → 3.6c → 3.6d（重新采集）
+
+**`--intel false`（C 边界）**：
+- **MISSING** → 报错退出（"情报缺失，--intel false 跳过采集；请先 `/testvdb:intel {target}`"）
+- **STALE / INVALID** → 用现有情报 + 警告（"情报可能过期/无效，--intel false 跳过刷新"），继续 3.6e
+- **USABLE** → 正常使用
 
 #### 3.6b: 派发 issue-miner
 ```
