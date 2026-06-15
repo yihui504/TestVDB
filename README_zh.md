@@ -157,7 +157,7 @@ npm install -g @anthropic-ai/claude-code
 
 ```bash
 /plugin marketplace add yihui504/TestVDB
-/plugin install testvdb@yihui504-TestVDB
+/plugin install testvdb@testvdb
 ```
 
 ### 3a. 完整挖掘（默认——向后兼容）
@@ -190,8 +190,10 @@ npm install -g @anthropic-ai/claude-code
 
 ```bash
 /plugin marketplace add yihui504/TestVDB
-/plugin install testvdb@yihui504-TestVDB
+/plugin install testvdb@testvdb
 ```
+
+marketplace 注册名为 `testvdb`（与插件同名），所以安装目标是 `testvdb@testvdb`。后续用 `/plugin marketplace update` 拉取更新。
 
 ### 本地开发安装
 
@@ -415,6 +417,12 @@ TestVDB/
 | GitHub Token | — | 可选；启用完整 novelty judge |
 
 > **CC 版本说明**：子 Agent 派发在部分 proxy 环境下需要 Claude Code 2.1.165（v2.1.166+ 在某些 proxy 下可能不注入 Task/Agent 工具）。若派发返回 `unknown`，将 CC 固定到 2.1.165。
+
+**Python 依赖**：`pip install httpx html2text requests`（hook 和辅助脚本使用）。
+
+**网页抓取**：WebFetch 被某些文档站点封锁。本地 Crawl4AI Docker 服务（`docker/crawl4ai.yml`）作为首要抓取方案（WebFetch 作为降级备选）。Crawl4AI 需 ~2GB 共享内存（`shm_size`），运行在隔离容器中且无主机网络访问——抓取仅限于文档站点。
+
+**安全模型**：所有攻击脚本运行在资源受限的 Docker 容器中（`--memory=1g --cpus=2`），无特权容器，无主机网络访问。所有令牌通过环境变量传递。
 
 ---
 

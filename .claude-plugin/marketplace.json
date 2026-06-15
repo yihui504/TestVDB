@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "testvdb",
+  "description": "基于 LLM 的向量数据库自动化缺陷挖掘工具（Milvus/Qdrant/Weaviate/PGVector）",
+  "owner": {
+    "name": "TestVDB"
+  },
+  "plugins": [
+    {
+      "name": "testvdb",
+      "source": "./",
+      "description": "通过自然语言契约逆向工程从官方文档提取结构化约束，结合多 Agent 辩论机制在 Docker 沙箱中自动发现向量数据库的合规性缺陷。",
+      "category": "testing",
+      "homepage": "https://github.com/yihui504/TestVDB",
+      "repository": "https://github.com/yihui504/TestVDB",
+      "license": "MIT"
+    }
+  ]
+}

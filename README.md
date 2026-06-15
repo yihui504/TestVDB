@@ -157,7 +157,7 @@ npm install -g @anthropic-ai/claude-code
 
 ```bash
 /plugin marketplace add yihui504/TestVDB
-/plugin install testvdb@yihui504-TestVDB
+/plugin install testvdb@testvdb
 ```
 
 ### 3a. Full Mining (default — backward compatible)
@@ -190,8 +190,10 @@ npm install -g @anthropic-ai/claude-code
 
 ```bash
 /plugin marketplace add yihui504/TestVDB
-/plugin install testvdb@yihui504-TestVDB
+/plugin install testvdb@testvdb
 ```
+
+The marketplace is registered as `testvdb` (same name as the plugin), so the install target is `testvdb@testvdb`. Pull updates later with `/plugin marketplace update`.
 
 ### Local Development Install
 
@@ -415,6 +417,12 @@ Configures the GitHub MCP server used by the novelty judge.
 | GitHub Token | — | Optional; enables full novelty judge |
 
 > **Note on CC version**: Subagent dispatch requires Claude Code 2.1.165 in some proxy setups (v2.1.166+ may not inject Task/Agent tools under certain proxies). If dispatch returns `unknown`, pin CC to 2.1.165.
+
+**Python dependencies**: `pip install httpx html2text requests` (used by hooks and helper scripts).
+
+**Web scraping**: WebFetch is blocked by some doc sites. A local Crawl4AI Docker service (`docker/crawl4ai.yml`) is the primary fetcher (WebFetch is the fallback). Crawl4AI needs ~2GB shared memory (`shm_size`) and runs isolated with no host network access — scraping is restricted to documentation sites only.
+
+**Security model**: All attack scripts run in resource-limited Docker containers (`--memory=1g --cpus=2`), with no privileged containers and no host network access. All tokens flow through environment variables.
 
 ---
 
