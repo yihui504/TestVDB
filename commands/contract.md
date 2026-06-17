@@ -20,6 +20,8 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 主进程只使用 `Read`/`Write`/`Bash`(验证)/`Grep`/`Glob`/`Agent` 做编排。
 
+> **派发纪律**：派 `testvdb:*` 子 Agent **只用 `Agent(subagent_type=...)`**；❌ 禁用 `TaskCreate`（不识别 plugin agent_type → `Spawning agent: unknown`，任务永久 `pending` 幽灵条目，`TaskStop` 删不掉，背后无真实 agent 执行）。`Agent` 是核心内置工具，直接调用（`ToolSearch` 搜不到 ≠ 不可用）。详见 `commands/mine.md`「派发工具纪律」。
+
 ---
 
 ## Usage

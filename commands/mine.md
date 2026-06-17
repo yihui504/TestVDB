@@ -38,6 +38,12 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 **主进程只使用这些工具做编排工作：** `Read`(读文件), `Write`(写状态文件), `Bash`(验证产出), `Grep`(搜索), `Glob`(匹配), `Agent`(派发子Agent)。跨 turn 由 Stop hook（`pipeline_gate.py`）驱动，主进程无需调度工具。
 
+> **⚠️ 派发工具纪律（CRITICAL — 避免重犯历史错误）**：派发 `testvdb:*` 子 Agent **只能用 `Agent(subagent_type="testvdb:xxx", ...)`**。
+> - ❌ **禁止用 `TaskCreate`**：它不识别 plugin agent_type，派发记录为 `Spawning agent: unknown (inherit)`，任务永久 `pending`（幽灵条目，`TaskStop` 也删不掉），**背后无真实 agent 执行**。
+> - ✅ `Agent(subagent_type=...)` 是**核心内置工具**——无需 `ToolSearch` 加载（ToolSearch 只索引 deferred 工具清单，**搜不到 ≠ 不可用**），直接调用即可。
+> - ✅ 非 v2.1.166 regression 环境下 plugin subagent 真实可用（2026-06-17 实测：reporter-mre 派发成功，weaviate 3 confirmed defect 产出 `mre/*.done`）。
+> - `TaskCreate`/`TaskList` 等仅用于 OMC 任务追踪，**不派 plugin agent**。探针派发能力也只用 `Agent(subagent_type=...)`，别用 TaskCreate 探针。
+
 ---
 
 ## Usage
