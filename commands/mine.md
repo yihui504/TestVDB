@@ -62,6 +62,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 | `--min-defects N` | No | `1` | 最低缺陷产出要求 |
 | `--intel true\|false` | No | `auto` | 情报阶段控制。`true`=强制重新采集；`false`=禁用采集（C 边界：无情报→报错，有但过期→用+警告）；不传=`auto`（缓存有效→复用，否则采集） |
 | `--contract true\|false` | No | `auto` | 契约阶段控制。`true`=强制重新生成；`false`=禁用生成（C 边界：无契约→报错，有但过期→用+警告）；不传=`auto`（缓存有效→复用，否则生成） |
+| `--new` | No | — | 强制新建会话，忽略未完成运行的自动 RESUME（旧中断废弃时用） |
 
 ---
 
@@ -97,10 +98,10 @@ Final Turn:            终止条件满足 → phase=DONE → Stop hook 放行(ex
 
 ```bash
 python -c "
-import json, sys, os, glob
-# 锁定插件根(与 Step 1 同逻辑)，不依赖 cwd——主目录是 git 仓库时 cwd 漂移会让 os.walk 扫错树
+import sys, os, json
+# 锁定插件根（与 Step 1 同逻辑，防 cwd 漂移）
 root = os.environ.get('TESTVDB_PLUGIN_ROOT', '')
-if not (root and os.path.isfile(os.path.join(root, 'commands', 'mine.md'))):
+if not (root and os.path.isdir(root)):
     cur = os.getcwd()
     for _ in range(7):
         if os.path.isfile(os.path.join(cur, 'commands', 'mine.md')):
@@ -108,32 +109,25 @@ if not (root and os.path.isfile(os.path.join(root, 'commands', 'mine.md'))):
         parent = os.path.dirname(cur)
         if parent == cur: break
         cur = parent
-if not (root and os.path.isfile(os.path.join(root, 'commands', 'mine.md'))):
-    print('FRESH_START'); sys.exit(0)   # 找不到插件根 → 当新会话(Step 1 会 FATAL 报错)
-os.chdir(root)                          # 锁定 cwd，与 Step 1 一致
-# 收集所有 pipeline_state.json，按 mtime 降序（最新活跃会话优先，避免误匹配旧 session）
-states = []
-for sub in ('results', 'intelligence'):
-    for p in glob.glob(os.path.join(root, sub, '**', 'pipeline_state.json'), recursive=True):
-        try: states.append((os.path.getmtime(p), p))
-        except OSError: pass
-states.sort(reverse=True)
-for _, candidate in states:
-    try:
-        with open(candidate, encoding='utf-8') as f: ps = json.load(f)
-    except (json.JSONDecodeError, OSError): continue
-    if ps.get('turn_type') == 'loop' and ps.get('phase') not in ('CLEANUP', 'DONE', None):
-        print('RESUME')
-        print(ps.get('phase', 'ROUND_START'))
-        print(candidate)                       # pipeline_state.json 路径
-        print(os.path.dirname(candidate))      # session_dir（供 Resume Phase 0 reconstruct_context 使用）
-        sys.exit(0)
-print('FRESH_START')
+if not root:
+    print(json.dumps({'decision':'FRESH_START','reason':'no plugin root'}, ensure_ascii=False)); sys.exit(0)
+os.chdir(root)
+sys.path.insert(0, os.path.join(root, 'scripts'))
+import _entry_dispatch as ed
+# 入口判断：扫描所有未完成（loop+setup）续最新；--new 强制新建；resume 命令的 .resume_target 标记优先
+result = ed.dispatch('', '', force_new=os.environ.get('TESTVDB_FORCE_NEW') == '1')
+print(json.dumps(result, ensure_ascii=False))
 "
 ```
 
-- **FRESH_START** → 执行 [Turn 1: Setup + First Round](#turn-1-setup--first-round)
-- **RESUME {phase} {path}** → 执行 [Loop Turn: Resume Round](#loop-turn-resume-round)
+读取 dispatch 结果 JSON：
+- `decision=RESUME`（含 `session_dir`/`phase`/`target`/`version`）→ 从 `session_dir` 执行 [Loop Turn: Resume Round](#loop-turn-resume-round)
+  - 若 `target`/`version` 与本次 `/mine <db> <version>` 请求不符（Turn 1 场景）→ 输出提示："最新未完成是 `{target}/{version}`，与请求 `{db}/{version}` 不符；续它还是新建？建议 `/testvdb:resume {session_id}` 或加 `--new`"
+- `decision=FRESH_START` → 执行 [Turn 1: Setup + First Round](#turn-1-setup--first-round)
+  - 若 `incomplete` 非空（同 target/version 有未完成）→ 输出提示："检测到未完成 `{session_id}`（`{phase}`），建议 `/testvdb:resume {session_id}`；已新建会话（如需续旧的请用 resume）"
+
+> **`--new`**：主进程解析到 `--new` 时，入口判断前 `export TESTVDB_FORCE_NEW=1`（force_new=True 强制 FRESH_START，仍返回 `incomplete` 供知情）。
+> **派发纪律**：续跑实质工作仍经 `Agent(subagent_type=...)`，禁用 `TaskCreate`（见本文件「派发工具纪律」）。
 
 ---
 
