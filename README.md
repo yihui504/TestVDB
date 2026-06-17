@@ -389,7 +389,6 @@ Key configuration sections:
 | Section | Key Parameters | Description |
 |---------|---------------|-------------|
 | `docker` | `cleanup_on_exit`, per-DB ports | Container lifecycle and port mapping |
-| `pipeline` | `default_max_rounds`, `default_min_defects` | Pipeline execution limits |
 | `knowledge` | `cache_enabled`, `cache_ttl_hours` | Contract caching (default 168h) |
 | `intelligence` | `enabled`, `cache_ttl_hours`, `max_issues`, `max_commits`, `inject_to_*` | Strategic intelligence (default 720h TTL) |
 | `evolution` | `enabled`, `strategy_registry_dir` | Cross-session strategy evolution |

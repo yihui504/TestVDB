@@ -389,7 +389,6 @@ TestVDB/
 | 节 | 关键参数 | 说明 |
 |----|---------|------|
 | `docker` | `cleanup_on_exit`、各 DB 端口 | 容器生命周期和端口映射 |
-| `pipeline` | `default_max_rounds`、`default_min_defects` | 流水线执行限制 |
 | `knowledge` | `cache_enabled`、`cache_ttl_hours` | 契约缓存（默认 168h） |
 | `intelligence` | `enabled`、`cache_ttl_hours`、`max_issues`、`max_commits`、`inject_to_*` | 战略情报（默认 720h TTL） |
 | `evolution` | `enabled`、`strategy_registry_dir` | 跨会话策略进化 |

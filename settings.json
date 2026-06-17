@@ -28,10 +28,6 @@
     "llm_format_delay_seconds": 0,
     "_llm_format_delay_comment": "0 = no delay before retrying after LLM format error. Set >0 to add a pause (seconds) between format-error retries."
   },
-  "pipeline": {
-    "default_max_rounds": 5,
-    "default_min_defects": 1
-  },
   "results": {
     "base_dir": "results",
     "max_sessions": 10,
@@ -45,16 +41,8 @@
   "github": {
     "token": ""
   },
-  "notification": {
-    "on_severity": "critical",
-    "webhook_url": "",
-    "validate_on_start": true
-  },
   "session": {
     "session_id": ""
-  },
-  "network": {
-    "proxy": ""
   },
   "evolution": {
     "enabled": true,
@@ -93,6 +81,5 @@
     "_inject_to_attack_agents_comment": "是否将 threat_model.json 的 attack_priority_map 注入到 Attack Agent 的 prompt。",
     "inject_to_judge_agents": true,
     "_inject_to_judge_agents_comment": "是否将 threat_model.json 的 judge_enhancements 注入到 Judge Agent 的 prompt。"
-  },
-  "log_level": "info"
+  }
 }

@@ -4,7 +4,7 @@
   "title": "TestVDB Settings Schema",
   "description": "Configuration schema for the TestVDB vector database defect mining plugin.",
   "type": "object",
-  "required": ["docker", "retry", "pipeline", "results", "knowledge"],
+  "required": ["docker", "retry", "results", "knowledge"],
   "properties": {
     "docker": {
       "type": "object",
@@ -49,13 +49,6 @@
         "script_execution_delay_seconds": { "type": "integer", "minimum": 1, "maximum": 30, "default": 3 },
         "doc_fetch_delay_seconds": { "type": "integer", "minimum": 1, "maximum": 30, "default": 5 },
         "llm_format_delay_seconds": { "type": "integer", "minimum": 0, "maximum": 30, "default": 0 }
-      }
-    },
-    "pipeline": {
-      "type": "object",
-      "properties": {
-        "default_max_rounds": { "type": "integer", "minimum": 0, "maximum": 100, "default": 5 },
-        "default_min_defects": { "type": "integer", "minimum": 0, "maximum": 100, "default": 1 }
       }
     },
     "results": {
