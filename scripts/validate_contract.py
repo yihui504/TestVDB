@@ -2,7 +2,7 @@
 """通用契约验证器（批次 B2，替代 pre-v2.0 的 validate_weaviate_contract.py）。
 
 参数化 target/version（不硬编码），适配 v2.0（api_endpoints list）+ legacy
-（api_endpoint 单数/字符串）schema。旧 validate_weaviate_contract.py 保留不删（可回退）。
+（api_endpoint 单数/字符串）schema。
 
 新增 bug #3 检测侧：target-aware category 污染警告（collections/points 出现在
 非 qdrant target）——这是契约层 bug #3 的检测，根因（formalizer 映射）留专项。
