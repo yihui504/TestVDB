@@ -66,3 +66,25 @@ def test_dispatch_no_target_scans_all(tmp_path, monkeypatch):
     assert d["target"] == "qdrant"
     assert d["version"] == "v1.18.2"
 
+
+def test_resume_target_priority_and_consumed(tmp_path, monkeypatch):
+    """.resume_target 标记优先于扫描，且 RESUME 后被 consume（一次性）。"""
+    monkeypatch.setenv("TESTVDB_PLUGIN_ROOT", str(tmp_path))
+    _make_session(tmp_path, "qdrant", "v1.18.2", "loop", "ATTACK_GEN", sid="q-scan")
+    sd_marked = _make_session(tmp_path, "weaviate", "v1.38.0", "setup", "EXECUTION", sid="w-marked")
+    ed.write_resume_target(str(tmp_path), sd_marked, "weaviate", "v1.38.0")
+    d = ed.dispatch("", "")
+    assert d["decision"] == "RESUME"
+    assert d["session_dir"] == sd_marked  # 标记优先，非扫描的 qdrant
+    assert ed.read_resume_target(str(tmp_path)) is None  # RESUME 后标记已 consume
+
+
+def test_force_new_consumes_resume_target(tmp_path, monkeypatch):
+    """force_new 应 FRESH_START 且清残留 .resume_target（防下次误 RESUME）。"""
+    monkeypatch.setenv("TESTVDB_PLUGIN_ROOT", str(tmp_path))
+    sd = _make_session(tmp_path, "weaviate", "v1.38.0", "setup", "EXECUTION", sid="w1")
+    ed.write_resume_target(str(tmp_path), sd, "weaviate", "v1.38.0")
+    d = ed.dispatch("weaviate", "v1.38.0", force_new=True)
+    assert d["decision"] == "FRESH_START"
+    assert ed.read_resume_target(str(tmp_path)) is None  # 标记已清，不留残留
+

@@ -135,6 +135,7 @@ def dispatch(target: str, version: str, force_new: bool = False) -> dict:
     same_target_incomplete = [i for i in incomplete if i["target"] == target and i["version"] == version]
 
     if force_new:
+        consume_resume_target(root)  # --new 明确新建，清残留 resume 标记防下次误 RESUME
         return {
             "decision": "FRESH_START", "reason": "force_new (--new)",
             "incomplete": same_target_incomplete,
