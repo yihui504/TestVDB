@@ -76,6 +76,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--target", help="filter by target (milvus/qdrant/weaviate/pgvector)")
     ap.add_argument("--running", action="store_true", help="only status == running")
+    ap.add_argument("--incomplete", action="store_true", help="only phase ∉ DONE (未完成，供 resume 列选)")
     ap.add_argument("--json", action="store_true", help="emit JSON")
     args = ap.parse_args()
 
@@ -85,6 +86,20 @@ def main() -> int:
         rows = [r for r in rows if r["target"] == args.target]
     if args.running:
         rows = [r for r in rows if str(r["status"]).lower() == "running"]
+    if args.incomplete:
+        from _entry_dispatch import find_incomplete  # pipeline_state.json 权威，collect 按 mine_state.json 会漏缺文件 session
+        inc = find_incomplete(str(root), target=args.target)
+        if args.json:
+            print(json.dumps(inc, ensure_ascii=False, indent=2))
+        elif not inc:
+            print(f"[session_index] no incomplete sessions under {root / 'results'}")
+        else:
+            print(f"[session_index] {len(inc)} incomplete session(s) (phase ∉ DONE)\n")
+            hdr = f"{'SESSION_ID':<32} {'TARGET':<10} {'VERSION':<10} {'PHASE':<12} {'DIR'}"
+            print(hdr); print("-" * len(hdr))
+            for i in inc:
+                print(f"{str(i['session_id'])[:32]:<32} {i['target']:<10} {str(i['version'])[:10]:<10} {str(i['phase'])[:12]:<12} {i['session_dir']}")
+        return 0
 
     if args.json:
         for r in rows:

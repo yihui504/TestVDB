@@ -97,9 +97,12 @@ def scan_resumable(root: str, target: str, version: str):
 
 
 def find_incomplete(root: str, target: str | None = None, version: str | None = None):
-    """列出所有未完成 session（phase∉DONE），供提示/resume 列选。"""
+    """列出所有未完成 session（phase∉DONE），供提示/resume 列选。只扫 timestamp 级。"""
     out = []
     for p in glob.glob(os.path.join(root, "results", "**", "pipeline_state.json"), recursive=True):
+        rel = os.path.relpath(p, root)
+        if rel.count(os.sep) < 4:  # 跳过 version 根目录残留，只认 timestamp 级（与 scan_resumable 一致）
+            continue
         ps = _read_json(p)
         if not ps or ps.get("phase") in DONE_PHASES:
             continue
