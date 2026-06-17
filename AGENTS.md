@@ -76,12 +76,12 @@ claude --plugin-dir TestVDB
 - **密钥不入库**：API key 走环境变量；`.gitignore` 已覆盖 `*apikey*.txt` / `.secrets/`。
 
 ### Compact 续接机制（v2.2.1 修复）
-跨 turn 续接链：Turn 结束 → **Stop hook `scripts/hooks/pipeline_gate.py`** 检测 `phase != DONE` → `exit 2` → harness 自动开新 turn → 入口判断识别 `turn_type=loop` → `reconstruct_context.py` 从磁盘重建上下文继续。
-- 入口判断（`commands/mine.md`）按 mtime 选最新活跃 session，并输出 session_dir 供 reconstruct 使用——避免匹配到旧 session。
+跨 turn 续接链：Turn 结束 → **Stop hook `scripts/hooks/pipeline_gate.py`** 检测 `phase != DONE` → `exit 2` → harness 自动开新 turn → 入口判断识别 `turn_type ∈ {loop, setup}` → `reconstruct_context.py` 从磁盘重建上下文继续。
+- **入口判断**（`scripts/_entry_dispatch.py`，从 mine.md 抽出可测）：认 `loop`+`setup` 中断（**Turn1 setup 中断也续**，修历史只认 loop 的盲区）、按 target/version 过滤（防 `/mine weaviate` 续到 qdrant 中断）、`.resume_target` 标记优先（`/testvdb:resume` 设）、`--new` 强制新建。version 根目录残留 state 被 depth 过滤忽略（只认 timestamp 级）。
 - `reconstruct_context.py` 无 `--session-dir` 时自动发现最新 session（post-compact agent 丢失上下文也能续接）。
-- 所有 hook/脚本通过 `_plugin_root()`（脚本位置推断，非 cwd）定位 results，对 cwd 漂移鲁棒。
+- 所有 hook/脚本通过 `_plugin_root()`（env 优先 + 脚本位置推断）定位 results，对 cwd 漂移鲁棒。
 - **autoCompact 必需**：`~/.claude/settings.json` 设 `autoCompactEnabled: true`，否则 preflight 硬中止（`TESTVDB_ALLOW_NO_AUTOCOMPACT=1` 可强制继续，风险自负）。
-- 查询所有 session 状态：`python scripts/session_index.py [--running|--target T|--json]`。
+- **Session lifecycle 三件套**：`session_index.py [--running|--target T|--incomplete|--json]`（发现）、`reconstruct_context.py`（查进度）、`/testvdb:resume [session_id]`（续跑未完成，含 Turn1 setup 中断）。
 
 ### ⛔ 架构约束：子 Agent 无法可靠嵌套派发孙 Agent
 

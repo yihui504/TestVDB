@@ -266,9 +266,13 @@ Runs **only** issue-miner → bug-shape-extractor → threat-modeler. Intelligen
 3. **Max Rounds**: `--max-rounds` reached
 4. **Min Defects**: `--min-defects` reached
 
-### Error Recovery
+### Error Recovery — Session Lifecycle
 
-Re-run the same command to resume. The system auto-detects incomplete sessions via `pipeline_state.json`.
+- **Discover runs**: `py -3.12 scripts/session_index.py` (`--incomplete` = only unfinished, `--target T` filter)
+- **Inspect progress**: `py -3.12 scripts/reconstruct_context.py --session-dir <path>` (phase / round / defects / coverage / next step)
+- **Resume unfinished**: `/testvdb:resume` (list & pick) or `/testvdb:resume <session_id>` (direct). `/mine <db> <ver>` also auto-RESUMES interrupted runs — including Turn1 `setup` interruptions (older logic missed these); `--new` forces a fresh session.
+
+Re-running `/mine` auto-detects incomplete sessions via `pipeline_state.json` (v3) and resumes from the exact phase breakpoint.
 
 ### Output Structure
 

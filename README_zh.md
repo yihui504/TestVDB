@@ -268,7 +268,9 @@ claude --plugin-dir .
 
 ### 错误恢复
 
-重新运行相同命令可恢复。系统通过 `pipeline_state.json` 自动检测未完成会话。
+重新运行 `/mine` 通过 `pipeline_state.json`（v3）自动检测未完成会话并从 phase 断点精确恢复。
+
+**Session 生命周期三件套**：发现运行 `py -3.12 scripts/session_index.py`（`--incomplete` 只看未完成、`--target T` 过滤）；查进度 `py -3.12 scripts/reconstruct_context.py --session-dir <path>`；续跑未完成 `/testvdb:resume`（列选）或 `/testvdb:resume <session_id>`（直接续）。`/mine <db> <ver>` 也自动 RESUME 中断运行（含 Turn1 setup 中断），`--new` 强制新建。
 
 ### 产出结构
 
