@@ -55,3 +55,14 @@ def test_find_incomplete_excludes_done(tmp_path, monkeypatch):
     inc = ed.find_incomplete(str(tmp_path))
     ids = [i["session_id"] for i in inc]
     assert "running" in ids and "finished" not in ids
+
+
+def test_dispatch_no_target_scans_all(tmp_path, monkeypatch):
+    """入口判断无 target（Loop Turn 扫描场景）应续最新未完成，跨 target，返回其 target/version。"""
+    monkeypatch.setenv("TESTVDB_PLUGIN_ROOT", str(tmp_path))
+    _make_session(tmp_path, "qdrant", "v1.18.2", "loop", "ATTACK_GEN", sid="q1")
+    d = ed.dispatch("", "")
+    assert d["decision"] == "RESUME"
+    assert d["target"] == "qdrant"
+    assert d["version"] == "v1.18.2"
+

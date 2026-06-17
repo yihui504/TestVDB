@@ -79,7 +79,9 @@ def scan_resumable(root: str, target: str, version: str):
         ps = _read_json(p)
         if not ps:
             continue
-        if ps.get("target") != target or ps.get("version_target") != version:
+        if target and ps.get("target") != target:
+            continue
+        if version and ps.get("version_target") != version:
             continue
         if ps.get("turn_type") not in RESUMABLE_TURN_TYPES:
             continue
@@ -143,6 +145,8 @@ def dispatch(target: str, version: str, force_new: bool = False) -> dict:
         return {
             "decision": "RESUME", "session_dir": rt,
             "phase": ps.get("phase", "ROUND_START"),
+            "target": ps.get("target", ""),
+            "version": ps.get("version_target", ""),
             "reason": f"resume_target 标记 → {rt}",
         }
 
@@ -153,6 +157,8 @@ def dispatch(target: str, version: str, force_new: bool = False) -> dict:
         return {
             "decision": "RESUME", "session_dir": sd,
             "phase": ps.get("phase", "ROUND_START"),
+            "target": ps.get("target", ""),
+            "version": ps.get("version_target", ""),
             "reason": f"扫描命中 {ps.get('turn_type')}/{ps.get('phase')}",
             "incomplete": same_target_incomplete,
         }
