@@ -1,6 +1,6 @@
 ---
 description: 启动向量数据库自动化缺陷挖掘流水线
-allowed-tools: Read, Write, Bash, Grep, Glob, Agent, ScheduleWakeup
+allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 ---
 
 # /testvdb:mine
@@ -36,7 +36,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent, ScheduleWakeup
 | ❌ 自己判断缺陷有效性 | ✅ `Agent(subagent_type="testvdb:judge-*")` |
 | ❌ 自己生成缺陷报告 | ✅ `Agent(subagent_type="testvdb:reporter")` |
 
-**主进程只使用这些工具做编排工作：** `Read`(读文件), `Write`(写状态文件), `Bash`(验证产出), `Grep`(搜索), `Glob`(匹配), `Agent`(派发子Agent), `ScheduleWakeup`(跨 turn 调度)。
+**主进程只使用这些工具做编排工作：** `Read`(读文件), `Write`(写状态文件), `Bash`(验证产出), `Grep`(搜索), `Glob`(匹配), `Agent`(派发子Agent)。跨 turn 由 Stop hook（`pipeline_gate.py`）驱动，主进程无需调度工具。
 
 ---
 
@@ -59,19 +59,27 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent, ScheduleWakeup
 
 ---
 
-## 执行模型：ScheduleWakeup 跨 Turn Loop
+## 执行模型：Stop hook 驱动的跨 Turn Loop
 
 > **📖 完整 SOP 参考**: `agents/orchestrator.md`（阶段详解、投票规则、错误处理）、`skills/pipeline/SKILL.md`（六阶段流水线规范）。本文件只保留编排调度命令，不重复 SOP 描述。
 
-本命令采用 **ScheduleWakeup 驱动的跨 Turn 迭代模型**，每轮挖掘是一个独立的 Turn：
+本命令采用 **Stop hook 驱动的跨 Turn 迭代模型**（`scripts/hooks/pipeline_gate.py` 接入 `.claude/settings.local.json` 的 Stop hook，参考 ralph "boulder never stops"）。每轮挖掘是一个独立的 Turn：
 
 ```
-Turn 1 (FRESH_START):  Step 1-7 (setup) + Round 1 (8a→8j) + ScheduleWakeup
-Turn N (RESUME):       reconstruct_context.py → Round N (8a→8j) + ScheduleWakeup
-Final Turn:            Step 9-10 (汇总 + 清理)
+Turn 1 (FRESH_START):  Step 1-7 (setup) + Round 1 (8a→8j) + 更新 state → 主动结束 turn
+                          ↓ Stop hook: phase != DONE → exit 2 → harness 强制新 turn
+Turn N (RESUME):       reconstruct_context.py → Round N (8a→8j) + 更新 state → 主动结束 turn
+                          ↓ （同上）
+Final Turn:            终止条件满足 → phase=DONE → Stop hook 放行(exit 0) → Step 9-10
 ```
+
+**机制**：主进程每轮结束更新 `pipeline_state.json`（`phase=ROUND_START`, `current_round+1`）后**主动结束 turn**。harness 的 Stop hook 调用 `pipeline_gate.py`：
+- `phase != DONE` → `exit 2`（强制 Claude 新 turn 继续）
+- `phase == DONE` + quality gate 通过 → `exit 0`（允许停止）
 
 **状态持久化**：`pipeline_state.json`（v3 schema）是跨 Turn 的唯一状态源。每个 phase 完成后立即更新，确保断点恢复精确到步骤。
+
+> ⚠️ **autoCompact 必需**：跨 turn 循环依赖 `~/.claude/settings.json` 的 `autoCompactEnabled: true`（每个 turn 间压缩 context）。preflight 会检查并警告。
 
 ---
 
@@ -83,23 +91,37 @@ Final Turn:            Step 9-10 (汇总 + 清理)
 
 ```bash
 python -c "
-import json, sys
-# 检查当前目录和 session 目录
-for d in ['results', 'intelligence']:
-    import os
-    for root, dirs, files in os.walk(d):
-        if 'pipeline_state.json' in files:
-            candidate = os.path.join(root, 'pipeline_state.json')
-            try:
-                with open(candidate, encoding='utf-8') as f:
-                    ps = json.load(f)
-                if ps.get('turn_type') == 'loop' and ps.get('phase') not in ('CLEANUP', 'DONE', None):
-                    print('RESUME')
-                    print(ps.get('phase', 'ROUND_START'))
-                    print(candidate)
-                    sys.exit(0)
-            except (json.JSONDecodeError, OSError):
-                continue
+import json, sys, os, glob
+# 锁定插件根(与 Step 1 同逻辑)，不依赖 cwd——主目录是 git 仓库时 cwd 漂移会让 os.walk 扫错树
+root = os.environ.get('TESTVDB_PLUGIN_ROOT', '')
+if not (root and os.path.isfile(os.path.join(root, 'commands', 'mine.md'))):
+    cur = os.getcwd()
+    for _ in range(7):
+        if os.path.isfile(os.path.join(cur, 'commands', 'mine.md')):
+            root = cur; break
+        parent = os.path.dirname(cur)
+        if parent == cur: break
+        cur = parent
+if not (root and os.path.isfile(os.path.join(root, 'commands', 'mine.md'))):
+    print('FRESH_START'); sys.exit(0)   # 找不到插件根 → 当新会话(Step 1 会 FATAL 报错)
+os.chdir(root)                          # 锁定 cwd，与 Step 1 一致
+# 收集所有 pipeline_state.json，按 mtime 降序（最新活跃会话优先，避免误匹配旧 session）
+states = []
+for sub in ('results', 'intelligence'):
+    for p in glob.glob(os.path.join(root, sub, '**', 'pipeline_state.json'), recursive=True):
+        try: states.append((os.path.getmtime(p), p))
+        except OSError: pass
+states.sort(reverse=True)
+for _, candidate in states:
+    try:
+        with open(candidate, encoding='utf-8') as f: ps = json.load(f)
+    except (json.JSONDecodeError, OSError): continue
+    if ps.get('turn_type') == 'loop' and ps.get('phase') not in ('CLEANUP', 'DONE', None):
+        print('RESUME')
+        print(ps.get('phase', 'ROUND_START'))
+        print(candidate)                       # pipeline_state.json 路径
+        print(os.path.dirname(candidate))      # session_dir（供 Resume Phase 0 reconstruct_context 使用）
+        sys.exit(0)
 print('FRESH_START')
 "
 ```
@@ -116,7 +138,29 @@ print('FRESH_START')
 ### Step 1: 解析参数
 - 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector}
 - 解析 `version`, `max_rounds`, `min_defects`
-- 确定 `PROJECT_ROOT`: `git rev-parse --show-toplevel 2>/dev/null || pwd`
+- **version 规范化**：统一为 `vX.Y.Z`（用户传 `1.38.0` 或 `v1.38.0` 都归一为 `v1.38.0`），用于 session_id 和 `results/{target}/{version}/` 目录名——历史曾出现 `2.6.17`/`1.38.0`(不带v) 与 `v1.18.2`(带v) 混用，导致脚本按一种格式找不到另一种格式的产出：
+```bash
+version="${version#v}"   # 去掉可能的前缀 v
+version="v${version}"    # 统一加回 v 前缀
+```
+- 确定 `PROJECT_ROOT`（**禁止用 `git rev-parse --show-toplevel`**：用户主目录 `~/` 本身是 git 仓库，在父目录启动 claude 时它会漂移到 `~/`，导致 `results/` 写错根——这是历史目录错位的根因）：
+```bash
+# 校验式锁定：必须是含 commands/mine.md 的 testvdb 插件根
+PROJECT_ROOT="${TESTVDB_PLUGIN_ROOT:-}"
+if [ -z "$PROJECT_ROOT" ] || [ ! -f "$PROJECT_ROOT/commands/mine.md" ]; then
+  cur="$PWD"
+  for _ in 1 2 3 4 5 6; do
+    [ -f "$cur/commands/mine.md" ] && PROJECT_ROOT="$cur" && break
+    cur="$(dirname "$cur")"
+  done
+fi
+if [ -z "$PROJECT_ROOT" ] || [ ! -f "$PROJECT_ROOT/commands/mine.md" ]; then
+  echo "FATAL: 找不到 testvdb 插件根（含 commands/mine.md）。请在 TestVDB 目录启动，或设 TESTVDB_PLUGIN_ROOT。"; exit 1
+fi
+cd "$PROJECT_ROOT"          # 锁定 cwd，后续所有相对路径 results/... 一律相对此根
+export TESTVDB_PLUGIN_ROOT="$PROJECT_ROOT"   # 供 hook 脚本（_session_utils/pipeline_gate）读取
+echo "[TestVDB] PROJECT_ROOT=$PROJECT_ROOT"
+```
 
 ### Step 2: 前置条件检查
 自行检查 Docker/Python/磁盘/网络：
@@ -136,9 +180,13 @@ try:
     if s.get('autoCompactEnabled'):
         print('[Preflight] autoCompactEnabled: OK')
     else:
-        print('[Preflight] autoCompactEnabled: MISSING — 多轮流水线可能因上下文溢出而中断')
-        print('[Preflight] 建议: 在 ~/.claude/settings.json 中设置 \"autoCompactEnabled\": true')
-        sys.exit(0)
+        print('[Preflight] autoCompactEnabled: MISSING — 多轮流水线会因上下文溢出而中断(这是 compact 后从头开始的根因之一)')
+        print('[Preflight] 修复: 在 ~/.claude/settings.json 设置 "autoCompactEnabled": true')
+        if os.environ.get('TESTVDB_ALLOW_NO_AUTOCOMPACT') == '1':
+            print('[Preflight] TESTVDB_ALLOW_NO_AUTOCOMPACT=1 → 继续运行(风险自负,单轮可用)')
+        else:
+            print('[Preflight] 中止。设 TESTVDB_ALLOW_NO_AUTOCOMPACT=1 可强制继续。')
+            sys.exit(1)
 except FileNotFoundError:
     print('[Preflight] ~/.claude/settings.json 不存在，跳过 autoCompact 检查')
 except json.JSONDecodeError:
@@ -273,7 +321,15 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
 ### Step 7: 初始化状态
 
 - 生成 `session_id`: `{target}-{version_short}-{counter}`（sanitize: `[a-z0-9-]`，≤63字符）
-- 创建 `results/{target}/{version}/` 目录
+- **生成 TIMESTAMP（单一权威入口）**：后续所有 `{timestamp}` 一律引用此变量，禁止 ad-hoc 生成——历史曾出现 ISO `2026-06-06T14-26-53Z` / 紧凑T `20260611T013818` / 紧凑- `20260614-173709` 三种格式混用，根因即无统一入口。格式定为 `YYYY-MM-DDTHH-MM-SSZ`（ISO 风格、冒号→破折号、NTFS 安全、字典序可排序）：
+```bash
+TIMESTAMP="$(python -c "from datetime import datetime,timezone;print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H-%M-%SZ'))")"
+SESSION_DIR="results/${target}/${version}/${TIMESTAMP}"
+mkdir -p "$SESSION_DIR"
+export TESTVDB_TIMESTAMP="$TIMESTAMP" TESTVDB_SESSION_DIR="$SESSION_DIR"
+echo "[TestVDB] TIMESTAMP=$TIMESTAMP SESSION_DIR=$SESSION_DIR"
+```
+- 创建 session 目录 `$SESSION_DIR`（即 `results/{target}/{version}/{TIMESTAMP}/`）
 - 写入 `mine_state.json` 和 `.session.lock`
 - **写入 `pipeline_state.json`（v3 schema）**：
 
@@ -291,8 +347,8 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
     "phase_step_index": 0,
     "turn_type": "setup",
     "project_root": "{PROJECT_ROOT}",
-    "session_dir": "results/{target}/{version}",
-    "timestamp_dir": "",
+    "session_dir": "results/{target}/{version}/{TIMESTAMP}",
+    "timestamp_dir": "{TIMESTAMP}",
     "phases_completed": [],
     "phase_data": {},
     "global_state": {
@@ -317,21 +373,17 @@ python scripts/passport_verify.py "results/{target}/{version}/structured_contrac
 >
 > 完成后：
 > - 如果满足终止条件 → 直接在当前 Turn 执行 [Final Turn: Cleanup](#final-turn-cleanup)
-> - 如果继续 → 更新 `pipeline_state.json`（`turn_type` 改为 `"loop"`，`current_round` += 1，`phase` = `"ROUND_START"`，`phases_completed` = []），然后调用 ScheduleWakeup：
+> - 如果继续 → 更新 `pipeline_state.json`（`turn_type` 改为 `"loop"`，`current_round` += 1，`phase` = `"ROUND_START"`，`phases_completed` = []），然后**主动结束当前 turn**（不调用任何调度工具）。
 
-```
-ScheduleWakeup(
-  delaySeconds: 60,
-  reason: "TestVDB round 2 for {target} {version}",
-  prompt: "/testvdb:mine {target} {version} --max-rounds {max_rounds} --min-defects {min_defects}\n\n[LOOP CONTEXT]\nSession: {session_id}\nRound: 2/{max_rounds}\nTarget: {target} {version}\nSession dir: {session_dir}\nConfirmed defects: {total_defects}\nCoverage: {coverage_pct}%\n\n系统将自动从 pipeline_state.json 恢复并继续执行。"
-)
-```
+Stop hook（`scripts/hooks/pipeline_gate.py`）检测 `phase != DONE` → `exit 2` → harness 自动开启新 turn。新 turn 的入口判断识别 `turn_type=loop` 进入 [Loop Turn: Resume Round](#loop-turn-resume-round)。
+
+> **不使用 ScheduleWakeup**——它在非 `/loop` runtime 环境（如 glm proxy）gate 关闭不可用。Stop hook `exit 2` 是可靠的跨 turn 驱动力（参考 ralph "boulder never stops"）。
 
 ---
 
 ## Loop Turn: Resume Round
 
-> 在 ScheduleWakeup 触发时执行。从磁盘重建上下文，继续下一轮挖掘。
+> 在 Stop hook `exit 2` 强制的新 turn 执行（主进程结束 turn 后，pipeline_gate 检测 `phase != DONE` → `exit 2` → harness 重启 turn）。从磁盘重建上下文，继续下一轮挖掘。
 
 ### Phase 0: 上下文重建
 
@@ -364,7 +416,7 @@ docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" 2>/dev/null
 ### Phase 2: 轮次结束
 
 - 如果满足终止条件 → 执行 [Final Turn: Cleanup](#final-turn-cleanup)
-- 如果继续 → 更新 `pipeline_state.json`（`current_round` += 1，`phase` = `"ROUND_START"`，`phases_completed` = []），然后 ScheduleWakeup 触发下一轮
+- 如果继续 → 更新 `pipeline_state.json`（`current_round` += 1，`phase` = `"ROUND_START"`，`phases_completed` = []），然后**结束 turn**。Stop hook 触发下一轮（同 Step 8 末尾机制）。
 
 ---
 
@@ -548,6 +600,19 @@ mkdir -p results/{target}/{version}/{timestamp}/issues
 #### 9a.5 Issue 审核提醒
 
 > ⚠️ **人工审核必需**：Issue 草稿由 AI 生成，需人工审核后手动提交。
+
+#### 9a.6 生成 MRE 脚本（派 reporter-mre）
+
+主进程为通过审查的确认缺陷派发 reporter-mre，生成自包含 MRE 脚本（每个缺陷一个不依赖 TestVDB 代码的独立 Python 脚本）。reporter 专注 defect-N.md 报告，MRE 脚本由 reporter-mre 独立生成（v2.1.1 Reporter 拆分）。
+
+```
+Agent(subagent_type="testvdb:reporter-mre", description="生成 MRE 脚本 {target}",
+  prompt="按照 agents/reporter-mre.md 规范，为以下确认缺陷生成自包含 MRE 脚本：{confirmed_defects}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}")
+```
+
+**验证：** `ls results/{target}/{version}/{timestamp}/mre/defect-*-script.py.done 2>/dev/null | wc -l`（应 ≥1；reporter-mre 完成每个脚本后 `touch .done` 并通过 `py_compile`）
+
+> reporter 的 Pre-Submit Gate 复现验证用 curl 回退（reporter.md 已支持）——MRE 脚本由本步骤的 reporter-mre 独立生成，供外部一键复现。
 
 #### 9b. 生成 summary.md + defect-review.md
 
