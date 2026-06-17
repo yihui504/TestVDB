@@ -34,53 +34,70 @@ tools:
 | ❌ 分析 exit code / 输出含义 | 只管执行，不管解释 |
 | ❌ 执行前做任何验证 | 脚本已通过 Stage 1 语法验证 |
 | ❌ 使用 Agent 工具派发孙 Agent | 你已是子 Agent |
-| ❌ 跳过 Step 0 | 变量必须先设置 |
+| ❌ 跳过 Step 0 | 配置必须先写入 .executor.env |
 
 ---
 
 ## 执行 SOP（4 步，≤4 turns）
 
-主进程在 prompt 中提供三个值：`TARGET=...`, `SESSION_DIR=...`, `DB_PORT=...`。每个步骤的 bash 命令使用 `$TARGET`, `$SESSION_DIR`, `$DB_PORT` 变量引用——Agent 只在 Step 0 做一次值替换。
+主进程在 prompt 中提供两个值：`TARGET=...`, `SESSION_DIR=...`。`DB_PORT` 与 `HEALTH_PATH` 由 Step 0 按 `TARGET` 推导（单一数据源，主进程无需记端口）。Step 0 把全部配置写入 `$SESSION_DIR/.executor.env`，**后续每个 Step 开头 `source .executor.env`**——这是跨 turn 的唯一真相源，取代旧版"每 Step 重复硬编码声明变量"的做法（旧法在 shell 状态丢失时退化为写死 qdrant，是非 qdrant target 执行全空的根因）。
 
 ---
 
-### Step 0 (Turn 1): 设置变量 + 路径标准化
+### Step 0 (Turn 1): 设置变量 + 写入 .executor.env
 
 > ⛔ 第一步也是最重要的一步。不做任何其他操作。
 
-从主进程 prompt 中提取三个值，替换下面等号右边的占位符，然后执行：
+从主进程 prompt 中提取 `TARGET` 和 `SESSION_DIR`，替换下面等号右边的占位符，然后执行：
 
 ```bash
 # 从主进程 prompt 中提取值，替换下面的占位符
-TARGET=qdrant
-SESSION_DIR="C:/Users/11428/Desktop/mftui/TestVDB/results/qdrant/v1.18.2/20260611T060009"
-DB_PORT=6333
+TARGET=weaviate
+SESSION_DIR="C:/Users/11428/Desktop/mftui/TestVDB/results/weaviate/1.38.0/2026-06-13T01-44-09Z"
 
-# 路径标准化：确保使用正斜杠（Windows bash 兼容）
+# 路径标准化：正斜杠（Windows bash 兼容）
 SESSION_DIR=$(echo "$SESSION_DIR" | sed 's|\\|/|g')
 
-echo "TARGET=$TARGET"
-echo "SESSION_DIR=$SESSION_DIR"
-echo "DB_PORT=$DB_PORT"
+# per-target 端口与健康端点（单一数据源；主进程无需记端口）
+case "$TARGET" in
+  qdrant)   DB_PORT=6333;  HEALTH_PATH="/health" ;;
+  weaviate) DB_PORT=8080;  HEALTH_PATH="/v1/.well-known/ready" ;;
+  milvus)   DB_PORT=19530; HEALTH_PATH="/healthz" ;;
+  pgvector) DB_PORT=5432;  HEALTH_PATH="/" ;;  # postgres 无 HTTP 健康，Step 1 用 TCP 回退
+  *) echo "FATAL: unknown TARGET=$TARGET"; exit 1 ;;
+esac
 
 # 验证目录存在
 if [ ! -d "$SESSION_DIR" ]; then
   echo "FATAL: Session directory not found: $SESSION_DIR"
   exit 1
 fi
+
+# 持久化配置到 .executor.env：跨 turn 单一真相源（消除各 Step 重复硬编码）；
+# export TESTVDB_DB_URL 供攻击脚本子进程继承（attack-boundary/state/semantic.md 契约要求 executor 设置）
+cat > "$SESSION_DIR/.executor.env" <<EOF
+export TARGET=$TARGET
+export DB_PORT=$DB_PORT
+export HEALTH_PATH=$HEALTH_PATH
+export SESSION_DIR=$SESSION_DIR
+export TESTVDB_DB_URL=http://localhost:$DB_PORT
+EOF
+
+echo "TARGET=$TARGET DB_PORT=$DB_PORT HEALTH_PATH=$HEALTH_PATH"
+echo "TESTVDB_DB_URL=http://localhost:$DB_PORT  (written to .executor.env)"
 echo "OK: Session directory exists"
 ```
 
-> **说明**：后续所有步骤使用 `$TARGET`, `$SESSION_DIR`, `$DB_PORT` 变量，由 bash 展开——不再需要在命令内部做模板替换。
+> **说明**：后续所有步骤开头 `source .executor.env` 即可拿到 `$TARGET`/`$DB_PORT`/`$HEALTH_PATH`/`$SESSION_DIR`/`$TESTVDB_DB_URL`——跨 turn 安全，无需在命令里重复声明或硬编码。
 
 ---
 
 ### Step 1 (Turn 1): 确保 DB 容器运行
 
 ```bash
-# 确保容器运行（已在 Step 0 设置过变量，这里重新声明以确保可用）
-TARGET=qdrant
-DB_PORT=6333
+cd "${SESSION_DIR:-.}" 2>/dev/null
+[ -f .executor.env ] || { echo "FATAL: .executor.env missing (run Step 0 first)"; exit 1; }
+source .executor.env
 
 # 如果容器未运行则启动
 docker ps --filter "name=testvdb-$TARGET" --format "{{.Names}}" | grep -q . || {
@@ -88,10 +105,12 @@ docker ps --filter "name=testvdb-$TARGET" --format "{{.Names}}" | grep -q . || {
   docker compose -f docker/$TARGET.yml up -d --wait 2>/dev/null
 }
 
-# 等待健康检查
+# 等待健康检查（per-target 端点；pgvector 无 HTTP 健康，回退 TCP 连通性）
 for i in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -s "http://localhost:$DB_PORT/health" >/dev/null 2>&1; then
-    echo "OK: $TARGET healthy on port $DB_PORT"
+  if [ "$TARGET" = "pgvector" ]; then
+    (echo > /dev/tcp/localhost/$DB_PORT) >/dev/null 2>&1 && { echo "OK: $TARGET reachable on port $DB_PORT"; break; }
+  elif curl -sf "http://localhost:$DB_PORT$HEALTH_PATH" >/dev/null 2>&1; then
+    echo "OK: $TARGET healthy on port $DB_PORT ($HEALTH_PATH)"
     break
   fi
   echo "Waiting ($i/10)..."
@@ -106,25 +125,28 @@ done
 > ⛔ 这是一条命令。不做任何修改。不检查。不分析。不预先 ls 或 find。
 
 ```bash
-TARGET=qdrant
-DB_PORT=6333
-SESSION_DIR="C:/Users/11428/Desktop/mftui/TestVDB/results/qdrant/v1.18.2/20260611T060009"
-
+cd "${SESSION_DIR:-.}" 2>/dev/null
+[ -f .executor.env ] || { echo "FATAL: .executor.env missing (run Step 0 first)"; exit 1; }
+source .executor.env
 cd "$SESSION_DIR" || { echo "FATAL: Cannot cd to $SESSION_DIR"; exit 1; }
 
-# 检测 Python（跨平台兼容）
+# 检测 Python：优先 py -3.12（脚本含 str|None 等 3.10+ 语法，3.8 会 SyntaxError）
 PYTHON=""
-command -v python3 >/dev/null 2>&1 && PYTHON=python3
-[ -z "$PYTHON" ] && command -v python >/dev/null 2>&1 && PYTHON=python
-[ -z "$PYTHON" ] && command -v py >/dev/null 2>&1 && PYTHON="py -3"
+command -v py >/dev/null 2>&1 && PYTHON="py -3.12"
+[ -z "$PYTHON" ] && command -v python3.12 >/dev/null 2>&1 && PYTHON=python3.12
+[ -z "$PYTHON" ] && command -v python3 >/dev/null 2>&1 && PYTHON=python3
 
 if [ -z "$PYTHON" ]; then
-  echo "FATAL: No Python found"
+  echo "FATAL: No Python >=3.10 found"
   exit 1
 fi
 echo "Python: $PYTHON"
 
-# 执行所有脚本
+# Windows 编码兜底（脚本内已 reconfigure utf-8，子进程再加一道环境变量保险）
+export PYTHONIOENCODING=utf-8
+export PYTHONUTF8=1
+
+# 执行所有脚本（TESTVDB_DB_URL 已由 source 继承，脚本子进程自动拿到）
 N=0
 PASS=0
 FAIL=0
@@ -180,7 +202,9 @@ echo "Exit non-zero: $FAIL"
 ### Step 3 (Turn 3): 验证产出
 
 ```bash
-SESSION_DIR="C:/Users/11428/Desktop/mftui/TestVDB/results/qdrant/v1.18.2/20260611T060009"
+cd "${SESSION_DIR:-.}" 2>/dev/null
+[ -f .executor.env ] || { echo "FATAL: .executor.env missing (run Step 0 first)"; exit 1; }
+source .executor.env
 cd "$SESSION_DIR" || { echo "FATAL: Cannot cd to $SESSION_DIR"; exit 1; }
 
 echo "=== Verification ==="
@@ -207,8 +231,8 @@ ls -lh output_*.log 2>/dev/null | awk '{print $5, $NF}' | sed 's|output_||;s|\.l
 
 ## 约束
 
-- **Step 0 先于一切**：变量必须先设置。每个 Step 的命令开头重复声明变量，确保即使 turn 间 shell 状态丢失也能正常执行
+- **Step 0 先于一切**：配置（含 `TESTVDB_DB_URL`）写入 `$SESSION_DIR/.executor.env`。后续每个 Step 开头 `source .executor.env`——这是跨 turn 的单一真相源，取代旧的"每 Step 重复声明变量"（旧法在 shell 状态丢失时退化为硬编码 qdrant，是非 qdrant target 执行全空的根因）
 - 执行完不清理容器——容器保持运行供 Reporter 复现验证
 - 不分析脚本内容、不检查依赖、不验证任何东西——只执行
 - 如果脚本返回非零 exit code，这是正常的——继续 Step 3 验证产出即可
-- **无需修改 Step 2 的 bash 命令。命令本身不包含任何需要 Agent 替换的模板变量**——变量值在命令前通过赋值语句设置，由 bash 自动展开
+- **Step 2 的 bash 循环不含任何模板变量**——配置全部由 `.executor.env` 提供，Agent 只需在 Step 0 替换 `TARGET`/`SESSION_DIR` 两个占位符
