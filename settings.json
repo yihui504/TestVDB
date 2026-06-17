@@ -29,9 +29,7 @@
     "_llm_format_delay_comment": "0 = no delay before retrying after LLM format error. Set >0 to add a pause (seconds) between format-error retries."
   },
   "results": {
-    "base_dir": "results",
-    "max_sessions": 10,
-    "_max_sessions_comment": "Maximum concurrent mining sessions. Orchestrator checks active sessions before starting a new one. Exceeding this limit will cause the new session to be queued or rejected."
+    "base_dir": "results"
   },
   "knowledge": {
     "cache_enabled": true,
