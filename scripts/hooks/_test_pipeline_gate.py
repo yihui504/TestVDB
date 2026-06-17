@@ -17,6 +17,7 @@ exit codes. Covers the hooks-gate plan acceptance criteria:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -49,6 +50,7 @@ def _run_gate(root: Path) -> tuple[int, str]:
     proc = subprocess.run(
         [sys.executable, str(GATE)],
         cwd=str(root),
+        env={**os.environ, "TESTVDB_PLUGIN_ROOT": str(root)},
         capture_output=True,
         text=True,
         encoding="utf-8",
