@@ -112,11 +112,21 @@ def verify_session(session_dir, target="unknown"):
             diag_match = re.search(r"Log:\s*`?output_([a-z_0-9]+)\.log", content)
             if diag_match:
                 log_basename = f"output_{diag_match.group(1)}.log"
+        # Derive from Source Script (debate_logs/{name}.py -> output_{name}.log)
+        # Handles reporter 输出引用 "Source Script" 而非直接 output_*.log 的情况
+        if log_basename is None:
+            script_match = re.search(r"debate_logs/([\w-]+)\.py", content)
+            if script_match:
+                log_basename = f"output_{script_match.group(1)}.log"
 
         script_error = False
         log_verdicts = []
         if log_basename:
             log_path = os.path.join(session_dir, log_basename)
+            log_path_done = log_path + ".done"
+            # 兼容 executor 的 output_*.log.done 命名（优先 .log，fallback .log.done）
+            if not os.path.exists(log_path) and os.path.exists(log_path_done):
+                log_path = log_path_done
             script_error = extract_script_errors_from_log(log_path)
             log_verdicts = extract_verdict_from_log(log_path)
 

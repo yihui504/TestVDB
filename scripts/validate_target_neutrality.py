@@ -32,7 +32,10 @@ SIGNATURES: dict[str, dict[str, list[str]]] = {
         "paths": [r"/collections/[\w-]+/points(?:/search|/count)?",
                   r"/collections/\{[^}]+\}/points"],
         "filter_keys": [r'"must"\s*:', r"'must'\s*:", r'"match"\s*:'],
-        "resp_keys": [r'\[\s*"result"\s*\]', r'\.get\(\s*"result"'],
+        # resp_keys 清空：result 字段非 Qdrant 独有——weaviate POST /v1/batch/objects 响应
+        # item 内嵌 {result:{status,errors}} 是合法格式，`.get("result")`/`["result"]` 会误报。
+        # Qdrant 靠 ports(6333)/paths(/collections/.../points)/filter_keys(must/match) 强信号检测。
+        "resp_keys": [],
     },
     "weaviate": {
         "ports": [r":8080\b", r"\b8080/"],

@@ -361,7 +361,9 @@ def generate_judge_novelty_injection(tm):
     if rra:
         p.append("### Regression Risks")
         for r in rra:
-            p.append("  - " + r)
+            if isinstance(r, dict):
+                r = r.get("area") or r.get("name") or r.get("description") or r.get("pattern") or r.get("id") or str(r)
+            p.append("  - " + str(r))
         p.append("")
     return chr(10).join(p)
 

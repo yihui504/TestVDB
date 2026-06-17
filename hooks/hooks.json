@@ -28,8 +28,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/notify_check.py",
-            "timeout": 15
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/write_location_check.py",
+            "timeout": 10
           }
         ]
       }
@@ -52,19 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/cleanup_stop.py",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/emergency_cleanup.py",
+            "command": "python ${CLAUDE_PLUGIN_ROOT}/scripts/hook_runner.py ${CLAUDE_PLUGIN_ROOT}/scripts/hooks/pipeline_gate.py",
             "timeout": 30
           }
         ]

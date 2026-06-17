@@ -172,9 +172,11 @@ def check_step_completeness(
     # the brake. Strict ">" (not ">=") so a budgeted round like 1/1 that simply
     # hasn't finished yet is still forced to continue (symptom ③). Only release
     # when current has overshot max (e.g. 2/1), proving the loop is stuck.
+    # max_rounds=0 means UNLIMITED (per mine.md --max-rounds 0) — never exhausted.
     if (
         current is not None
         and max_rounds is not None
+        and max_rounds > 0  # 0 = unlimited, anti-loop guard must not fire
         and current > max_rounds
     ):
         log.warning(
@@ -372,17 +374,40 @@ def _evaluate(cfg: GateConfig) -> tuple[int, str, dict[str, Any] | None]:
     return 0, "all gates passed", state
 
 
+def _plugin_root() -> Path:
+    """Authoritative plugin root — does NOT depend on cwd.
+
+    cwd drifts when claude is launched from a parent dir (e.g. ``mftui/``
+    instead of ``TestVDB/``); deriving project_root from cwd made the gate scan
+    the wrong ``results/`` tree and silently never fire. The script location is
+    stable: pipeline_gate.py lives at ``<plugin_root>/scripts/hooks/``.
+
+    Priority: ``TESTVDB_PLUGIN_ROOT`` env var > script location.
+    """
+    env_root = os.environ.get("TESTVDB_PLUGIN_ROOT", "")
+    if env_root and os.path.isdir(env_root):
+        return Path(env_root)
+    return Path(__file__).resolve().parents[2]
+
+
 def main() -> int:
     _drain_stdin()
 
-    project_root = Path(
-        os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-    )
+    project_root = _plugin_root()
+    # CLAUDE_PROJECT_DIR is honoured ONLY if it genuinely points at a TestVDB
+    # plugin root (contains commands/mine.md). A bare cwd-derived value that
+    # happens to be a parent dir must not override the stable script-location
+    # root — that override was the root cause of "gate never fires".
+    cpd = os.environ.get("CLAUDE_PROJECT_DIR", "")
+    if cpd and (Path(cpd) / "commands" / "mine.md").is_file():
+        project_root = Path(cpd)
     cfg = GateConfig(
         project_root=project_root,
         results_dir=project_root / "results",
         active_threshold_seconds=int(
-            os.environ.get("TESTVDB_GATE_ACTIVE_THRESHOLD", "600")
+            # 24h: covers multi-round pipelines (each round 10-30min × N rounds).
+            # Legacy state > 24h treated as stale (won't force-continue a dead session).
+            os.environ.get("TESTVDB_GATE_ACTIVE_THRESHOLD", "86400")
         ),
         doc_coverage_threshold=float(
             os.environ.get("TESTVDB_DOC_COVERAGE_THRESHOLD", "0.6")

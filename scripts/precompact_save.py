@@ -17,17 +17,14 @@ def _plugin_root():
 
 
 def find_session_dir():
-    """Find the active session directory by looking for mine_state.json."""
-    plugin_root = _plugin_root()
-    # Check current directory first
-    if os.path.exists("mine_state.json"):
-        return "."
+    """Active session dir: newest mine_state.json under plugin results (by mtime).
 
-    # Search results/{target}/{version}/{timestamp}/ pattern
-    for state_file in glob.glob(os.path.join(plugin_root, "results", "*", "*", "*", "mine_state.json")):
-        return os.path.dirname(state_file)
+    Delegates to the shared ``find_latest_session_dir`` so pre-compact recovery
+    always targets the most-recently-active session regardless of cwd.
+    """
+    from _session_utils import find_latest_session_dir
 
-    return None
+    return find_latest_session_dir(require_running=False)
 
 
 def main():

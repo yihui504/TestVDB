@@ -422,8 +422,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--session-dir",
-        required=True,
-        help="Path to the session directory (e.g., results/qdrant/v1.13.0/20260611T013818)",
+        required=False,
+        default=None,
+        help="Path to the session directory. If omitted, auto-discovers the newest "
+        "mine_state.json under <plugin_root>/results (robust to cwd drift and to a "
+        "post-compact agent that no longer remembers the session_dir).",
     )
     parser.add_argument(
         "--format",
@@ -433,7 +436,22 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    session_dir = os.path.abspath(args.session_dir)
+    if args.session_dir:
+        session_dir = os.path.abspath(args.session_dir)
+    else:
+        # Auto-discover newest session so resume works even when the caller
+        # (e.g. a post-compact agent) has lost the session_dir from context.
+        from _session_utils import find_latest_session_dir
+
+        session_dir = find_latest_session_dir(require_running=False)
+        if not session_dir:
+            print(
+                "[ERROR] No --session-dir given and no mine_state.json found under "
+                "<plugin_root>/results. Pass --session-dir explicitly.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        print(f"[reconstruct] auto-discovered session: {session_dir}", file=sys.stderr)
     if not os.path.isdir(session_dir):
         print(f"[ERROR] Session directory not found: {session_dir}", file=sys.stderr)
         sys.exit(1)

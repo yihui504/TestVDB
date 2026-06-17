@@ -82,3 +82,8 @@ mine_*.log
 scripts/gen_boundary_*.py
 scripts/bug_shape_extractor.py
 scripts/build_contract_qdrant.py
+
+# tidied 2026-06-17
+*.tgz
+.session.env
+logs/

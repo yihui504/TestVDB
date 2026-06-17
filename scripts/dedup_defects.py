@@ -46,16 +46,15 @@ def dedup_defects(session_dir: str) -> dict:
     defects = current.get("defects", [])
 
     for d in defects:
-        key = (d.get("endpoint", ""), d.get("type", ""))
+        # stage2_aggregation.json 的 defect 用 defect_id 标识（无 endpoint/type 字段）
+        key = d.get("defect_id", "")
+        if not key:
+            continue
         if key in seen:
             continue
 
-        # Cross-round check
-        is_dup = False
-        for h in history:
-            if (h.get("endpoint", ""), h.get("type", "")) == key:
-                is_dup = True
-                break
+        # Cross-round check (by defect_id)
+        is_dup = any(h.get("defect_id", "") == key for h in history)
 
         if not is_dup:
             seen.add(key)
@@ -72,12 +71,12 @@ def dedup_defects(session_dir: str) -> dict:
 
     # Write back to history for cross-round dedup in future sessions
     if deduped:
+        existing_ids = {h.get("defect_id", "") for h in history}
         updated_history = {
             "confirmed": history + [
-                {"endpoint": d.get("endpoint", ""), "type": d.get("type", "")}
+                {"defect_id": d.get("defect_id", "")}
                 for d in deduped
-                if (d.get("endpoint", ""), d.get("type", ""))
-                not in {(h.get("endpoint", ""), h.get("type", "")) for h in history}
+                if d.get("defect_id", "") not in existing_ids
             ],
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
@@ -91,7 +90,7 @@ def dedup_defects(session_dir: str) -> dict:
     return {
         "before_count": len(defects),
         "after_count": len(deduped),
-        "deduped": [d.get("endpoint", "") for d in deduped],
+        "deduped": [d.get("defect_id", "") for d in deduped],
     }
 
 
