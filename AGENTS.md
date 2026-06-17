@@ -67,6 +67,22 @@ claude --plugin-dir TestVDB
 - Docker 沙箱是测试执行的核心基础设施，所有探针在隔离容器中运行
 - 16 个 Agent 通过文件系统（structured_contract.json, threat_model.json, pipeline_state.json, debate_logs/*.json）通信
 
+### 文件存放与 PROJECT_ROOT 约定（v2.2.1 强化）
+- **PROJECT_ROOT 锁定**：流水线入口（`commands/mine.md` Step 1）校验式锁定插件根（含 `commands/mine.md` 的目录），并 `cd` + `export TESTVDB_PLUGIN_ROOT`。**禁止用 `git rev-parse --show-toplevel`**——用户主目录 `~/` 本身是 git 仓库，在父目录启动时会漂移到 `~/`，导致 `results/` 写到错误根（这是历史「文件乱放/读不到/误读」的根因）。
+- **唯一产出根**：所有流水线产出写入 `results/{target}/{version}/{timestamp}/`。中间/临时产物写入 `.testvdb/tmp/`，**不要散落到插件根目录**——PostToolUse hook（`write_location_check.py`）会警告根目录散落文件。
+- **version 规范化**：统一 `vX.Y.Z`（`1.38.0` 与 `v1.18.2` 都归一为 `v1.18.2`），杜绝目录名混用。
+- **TIMESTAMP 规范化**（v2.2.2）：session 目录名时间戳由 `commands/mine.md` Step 7 **单一入口**生成，格式 `YYYY-MM-DDTHH-MM-SSZ`（ISO 风格、冒号→破折号、NTFS 安全、字典序可排序），`export TESTVDB_TIMESTAMP`/`TESTVDB_SESSION_DIR` 供全流程引用。禁止各处 ad-hoc 生成——这是历史 ISO `2026-06-06T14-26-53Z` / 紧凑T `20260611T013818` / 紧凑- `20260614-173709` 三格式混用的根因。历史遗留异格式目录**无需迁移**：session 定位按 mtime（见下文 Compact 续接），不解析目录名。
+- **无自动文件 GC**：session 目录与 `.done` 标记持续累积，**不做自动 retention**（防误删用户数据）；磁盘吃紧时手动按 mtime 清理旧 session，`.done` 是功能性原子标记（写入完整性）不可清。
+- **密钥不入库**：API key 走环境变量；`.gitignore` 已覆盖 `*apikey*.txt` / `.secrets/`。
+
+### Compact 续接机制（v2.2.1 修复）
+跨 turn 续接链：Turn 结束 → **Stop hook `scripts/hooks/pipeline_gate.py`** 检测 `phase != DONE` → `exit 2` → harness 自动开新 turn → 入口判断识别 `turn_type=loop` → `reconstruct_context.py` 从磁盘重建上下文继续。
+- 入口判断（`commands/mine.md`）按 mtime 选最新活跃 session，并输出 session_dir 供 reconstruct 使用——避免匹配到旧 session。
+- `reconstruct_context.py` 无 `--session-dir` 时自动发现最新 session（post-compact agent 丢失上下文也能续接）。
+- 所有 hook/脚本通过 `_plugin_root()`（脚本位置推断，非 cwd）定位 results，对 cwd 漂移鲁棒。
+- **autoCompact 必需**：`~/.claude/settings.json` 设 `autoCompactEnabled: true`，否则 preflight 硬中止（`TESTVDB_ALLOW_NO_AUTOCOMPACT=1` 可强制继续，风险自负）。
+- 查询所有 session 状态：`python scripts/session_index.py [--running|--target T|--json]`。
+
 ### ⛔ 架构约束：子 Agent 无法可靠嵌套派发孙 Agent
 
 **技术根因（2026-06-06 确认）：** Claude Code 插件体系中，子 Agent（如 orchestrator）
