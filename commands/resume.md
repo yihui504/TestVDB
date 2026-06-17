@@ -29,17 +29,12 @@ py -3.12 scripts/session_index.py --incomplete
 
 ### 形态 B: 带 session_id — 续指定
 
-1. 定位 session_dir（按 id 匹配 pipeline_state.json）：
+1. 定位 session_dir（复用 `_entry_dispatch.find_by_session_id`，避免重复 glob）：
 ```bash
-PYTHONIOENCODING=utf-8 py -3.12 -c "
-import sys, os, glob, json
-sys.path.insert(0, 'scripts')
+py -3.12 -c "
+import sys; sys.path.insert(0,'scripts')
 import _entry_dispatch as ed
-root = ed._plugin_root()
-for p in glob.glob(os.path.join(root,'results','**','pipeline_state.json'), recursive=True):
-    d = json.load(open(p, encoding='utf-8'))
-    if d.get('session_id') == '{session_id}':
-        print(os.path.dirname(p)); break
+print(ed.find_by_session_id(ed._plugin_root(), '{session_id}') or 'NOT_FOUND')
 "
 ```
 2. 设 `.resume_target` 标记（供后续 `/mine` 兜底，防重复）：
@@ -54,7 +49,7 @@ ed.write_resume_target(ed._plugin_root(), '{session_dir}', '{target}', '{version
 ```bash
 PYTHONIOENCODING=utf-8 py -3.12 scripts/reconstruct_context.py --session-dir "{session_dir}" --format text
 ```
-4. 按 reconstruct 输出的 `next_action`（resume_from_phase / skip_phases）执行 [commands/mine.md 的 Loop Turn: Resume Round](mine.md#loop-turn-resume-round) 续跑流程（reconstruct Phase 0 已提供断点，后续派发 Attack/Judge/Reporter 等按 mine.md SOP）。
+4. 按 reconstruct 输出的 `next_action`（resume_from_phase / skip_phases）执行 [commands/mine.md 的 Loop Turn: Resume Round](mine.md#loop-turn-resume-round) 续跑流程：reconstruct Phase 0 已提供断点，主进程执行该轮 next_action（派发 Attack/Judge/Reporter 等按 mine.md SOP），**完成后主动结束当前 turn**——`pipeline_gate.py` Stop hook 检测 `phase != DONE` → `exit 2` → harness 自动开新 turn 继续后续轮（与正常 mine Loop Turn 一致，无需手动驱动）。
 
 ## 约束
 

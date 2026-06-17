@@ -121,11 +121,24 @@ def find_incomplete(root: str, target: str | None = None, version: str | None = 
     return out
 
 
+def find_by_session_id(root: str, session_id: str) -> str | None:
+    """按 session_id 定位 session_dir（只扫 timestamp 级，resume 命令用，避免重复 glob）。"""
+    for p in glob.glob(os.path.join(root, "results", "**", "pipeline_state.json"), recursive=True):
+        rel = os.path.relpath(p, root)
+        if rel.count(os.sep) < 4:
+            continue
+        ps = _read_json(p)
+        if ps and ps.get("session_id") == session_id:
+            return os.path.dirname(p)
+    return None
+
+
 def dispatch(target: str, version: str, force_new: bool = False) -> dict:
     """主入口判断。
 
-    返回 {decision: FRESH_START|RESUME, session_dir?, phase?, reason, incomplete?}
+    返回 {decision: FRESH_START|RESUME, session_dir?, phase?, target?, version?, reason, incomplete}
     - force_new=True: 强制新建（--new），仍列出未完成供知情
+    - incomplete 字段：指定 target/version → 同 target 未完成（精确提示）；未指定（Loop Turn 扫描）→ 所有未完成
     """
     root = _plugin_root()
     if not root:
@@ -133,12 +146,13 @@ def dispatch(target: str, version: str, force_new: bool = False) -> dict:
 
     incomplete = find_incomplete(root, target, version)
     same_target_incomplete = [i for i in incomplete if i["target"] == target and i["version"] == version]
+    incomplete_field = same_target_incomplete if (target or version) else incomplete
 
     if force_new:
         consume_resume_target(root)  # --new 明确新建，清残留 resume 标记防下次误 RESUME
         return {
             "decision": "FRESH_START", "reason": "force_new (--new)",
-            "incomplete": same_target_incomplete,
+            "incomplete": incomplete_field,
         }
 
     # 1. .resume_target 标记优先（resume 命令设，精确续指定）
@@ -152,6 +166,7 @@ def dispatch(target: str, version: str, force_new: bool = False) -> dict:
             "target": ps.get("target", ""),
             "version": ps.get("version_target", ""),
             "reason": f"resume_target 标记 → {rt}",
+            "incomplete": incomplete_field,
         }
 
     # 2. 扫描匹配 target/version 的中断（认 loop+setup，Bug ①②）
@@ -164,10 +179,10 @@ def dispatch(target: str, version: str, force_new: bool = False) -> dict:
             "target": ps.get("target", ""),
             "version": ps.get("version_target", ""),
             "reason": f"扫描命中 {ps.get('turn_type')}/{ps.get('phase')}",
-            "incomplete": same_target_incomplete,
+            "incomplete": incomplete_field,
         }
 
-    return {"decision": "FRESH_START", "reason": "无可恢复中断", "incomplete": same_target_incomplete}
+    return {"decision": "FRESH_START", "reason": "无可恢复中断", "incomplete": incomplete_field}
 
 
 if __name__ == "__main__":

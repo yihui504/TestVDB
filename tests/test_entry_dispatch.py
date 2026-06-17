@@ -88,3 +88,11 @@ def test_force_new_consumes_resume_target(tmp_path, monkeypatch):
     assert d["decision"] == "FRESH_START"
     assert ed.read_resume_target(str(tmp_path)) is None  # 标记已清，不留残留
 
+
+def test_find_by_session_id(tmp_path, monkeypatch):
+    """resume 命令按 session_id 定位 session_dir（timestamp 级，未找到返回 None）。"""
+    monkeypatch.setenv("TESTVDB_PLUGIN_ROOT", str(tmp_path))
+    sd = _make_session(tmp_path, "weaviate", "v1.38.0", "setup", "EXECUTION", sid="w-find")
+    assert ed.find_by_session_id(str(tmp_path), "w-find") == sd
+    assert ed.find_by_session_id(str(tmp_path), "nonexistent") is None
+

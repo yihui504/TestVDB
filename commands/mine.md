@@ -94,7 +94,7 @@ Final Turn:            终止条件满足 → phase=DONE → Stop hook 放行(ex
 
 ### 入口判断
 
-每次 Turn 开始时，首先执行入口判断：
+每次 Turn 开始时，首先执行入口判断。**主进程：若 `/mine` 命令行含 `--new`，执行下面的脚本前先 `export TESTVDB_FORCE_NEW=1`**（force_new 强制 FRESH_START，并清残留 `.resume_target` 标记）。
 
 ```bash
 python -c "
