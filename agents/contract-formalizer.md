@@ -337,6 +337,25 @@ tools:
 
 **注意**：此分类是强制性的。DB 特定资源名（collections/points/objects 等）是端点的 path/资源，不是功能 category——category 必须是通用功能词。
 
+### 规则 2.6: 耦合约束展开 + 字面量格式记录 + by-design 标注（强制 — 防系统性假阳性）
+
+> 源自 pgvector v0.8.3 实战教训：契约漏记下列三类信息，attack agent 据错误契约生成边界测试 → 6/6 假阳性。生成每条约束时逐项自检。
+
+**1. 耦合约束必须展开为显式表达式** — 参数间相互制约时，禁止只写独立绝对下限。
+- ❌ `"ef_construction >= 4"`（漏与 m 的耦合 → attack 测 ef_construction=4 配 m=16 必失败，误报 Type3）
+- ✅ `"ef_construction >= max(4, 2*m)"`
+- 自检：该下限/上限是否依赖其他参数？是 → 写成含所有相关参数的表达式。
+
+**2. 字面量格式/语法必须作为显式 type_constraint** — 非平凡字面量语法的类型（sparsevec/bit/jsonb/自定义），格式规范单独建 constraint，不得只在 data_types.description 一笔带过。
+- ❌ sparsevec 仅 description 写 "Sparse vector"
+- ✅ type_constraint `"字面量格式 {idx:val,...}/dims，idx 1-based"`，evidence_tier=explicit
+- 自检：该类型有特殊字面量语法？有 → 单独建格式 constraint。
+
+**3. by-design 行为必须标注** — 文档明确支持的隐式行为（隐式 cast/类型转换/合理拒绝），记录为 assertion 且 expected_behavior 显式写 "by-design"，供 attack agent 规避。
+- ❌ halfvec 类型描述不提 cast
+- ✅ assertion `"vector → halfvec 隐式 cast (by-design)；跨类型距离操作应成功"`，不设 defect_type_if_violated
+- 自检：成对可操作类型间，文档是否支持隐式转换？支持 → 记 by-design。
+
 ### 规则 3: 置信度标记与证据分级
 
 每条约束/断言都需标记 `confidence`（0.0-1.0）和 `evidence_tier` 字段。

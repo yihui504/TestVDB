@@ -73,6 +73,34 @@ def check_ring_completeness(defect_content):
     }
     return rings
 
+def find_script(session_dir, name):
+    """在脚本子目录查找 name.py。"""
+    if not name:
+        return None
+    for d in ("boundary_scripts", "state_scripts", "scripts", "debate_logs"):
+        p = os.path.join(session_dir, d, name + ".py")
+        if os.path.exists(p):
+            return p
+    return None
+
+def check_methodology_pitfalls(script_content, log_path):
+    """检测 SQL 测试方法论陷阱 — 脚本自身 bug 产生的伪 VERDICT（advisory）。
+    源自 pgvector v0.8.3 实战：6 假阳性中 defect-1/2/5 属此类。
+    返回命中描述列表；空 = 无命中。"""
+    pitfalls = []
+    log_c = (safe_read(log_path) or "").lower() if log_path else ""
+    # ponytail: defect-1 事务中止遮蔽 — log 层最强信号
+    if log_c and "current transaction is aborted" in log_c:
+        pitfalls.append("log 含 'current transaction is aborted' — 脚本共享连接未隔离事务，首个错误后所有断言被遮蔽")
+    sc = script_content or ""
+    scl = sc.lower()
+    # ponytail: defect-5 伪索引测试（全程顺序扫描）+ defect-2 浮点字符串比较 — 脚本层静态特征
+    if "order by" in scl and "limit" in scl and "index" in scl and "create index" not in scl:
+        pitfalls.append("脚本测索引语义但无 CREATE INDEX — '索引 vs 非索引'对比无效（两者都顺序扫描）")
+    if "::text" in sc and (".6f" in sc or ".4f" in sc or "checksum" in scl):
+        pitfalls.append("浮点值用 ::text vs f-string 字符串比较 — 格式表示差异伪不一致")
+    return pitfalls
+
 # ── main verification ──────────────────────────────────
 
 def verify_session(session_dir, target="unknown"):
@@ -121,6 +149,7 @@ def verify_session(session_dir, target="unknown"):
 
         script_error = False
         log_verdicts = []
+        log_path = None
         if log_basename:
             log_path = os.path.join(session_dir, log_basename)
             log_path_done = log_path + ".done"
@@ -130,10 +159,25 @@ def verify_session(session_dir, target="unknown"):
             script_error = extract_script_errors_from_log(log_path)
             log_verdicts = extract_verdict_from_log(log_path)
 
+        # 2.5 方法论陷阱检测（pgvector v0.8.3 实战：defect-1/2/5 类假阳性根源）
+        script_name = None
+        sm = re.search(r"(boundary_scripts|state_scripts|scripts|debate_logs)/([\w-]+)\.py", content)
+        if sm:
+            script_name = sm.group(2)
+        elif log_basename and log_basename.startswith("output_"):
+            script_name = log_basename[len("output_"):-len(".log")]
+        script_path = find_script(session_dir, script_name) if script_name else None
+        # Task 4b fix: Handle None script_path safely
+        script_content = safe_read(script_path) or "" if script_path else ""
+        methodology = check_methodology_pitfalls(script_content, log_path)
+
         # 3. Classification
         if script_error:
             status = "NEEDS_IMPROVEMENT"
             reason = "Execution log contains Python errors — may co-occur with real DB defect, manual verification needed"
+        elif methodology:
+            status = "FALSE_POSITIVE"
+            reason = f"方法论陷阱（脚本自身 bug 导致伪 VERDICT）: {methodology[0]}"
         elif missing_rings:
             status = "NEEDS_IMPROVEMENT"
             reason = f"Missing evidence rings: {', '.join(missing_rings)}"
