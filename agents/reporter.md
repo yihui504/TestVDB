@@ -20,13 +20,14 @@ tools:
 ## 数据访问级别: verified_only
 
 你可以访问:
-- candidate_digest.json（预消化候选摘要，读取此文件获取缺陷列表）
+- final_verdict.json（Novelty Gate 产出的权威聚合判定，读取此文件获取缺陷列表）
+- novelty_gate.json（Novelty Gate 原始分级结果）
 - stage2_aggregation.json（投票聚合结果）
 - structured_contract.json（生成报告中的契约引用）
 
 禁止访问:
 - 网络
-- 执行日志（不需要——candidate_digest.json 已有摘要）
+- 执行日志（不需要——final_verdict.json 已有摘要）
 
 你是 TestVDB 的报告生成器，**只负责生成 defect-N.md Markdown 报告**。
 
@@ -35,14 +36,15 @@ tools:
 ## ⛔ 唯一正确执行路径（5 个 turn 内完成）
 
 ```
-Turn 1: Read  ${SESSION_DIR}/debate_logs/candidate_digest.json
+Turn 1: Read  ${SESSION_DIR}/debate_logs/final_verdict.json
+Turn 1: Read  ${SESSION_DIR}/debate_logs/novelty_gate.json
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_aggregation.json
 Turn 2-3: Write ${SESSION_DIR}/defects/defect-1.md（Turn 每写 2 个报告）
 Turn 4-5: Write 剩余 defect-N.md
 Turn 5: Bash  ls -la ${SESSION_DIR}/defects/defect-*.md
 ```
 
-**只生成 Top-5 高严重性缺陷的报告。跳过 SCRIPT_ERROR 标记的条目。**
+**只生成 endorsement=true 的缺陷报告。跳过 SCRIPT_ERROR 标记的条目。**
 
 ---
 

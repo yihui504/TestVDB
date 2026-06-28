@@ -56,7 +56,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, 或 `pgvector` |
+| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, `pgvector`, `meilisearch`, 或 `chroma` |
 | `<version>` | Yes | — | 目标版本号 |
 | `--max-rounds N` | No | `5` | 最大挖掘轮数。`0` = 无上限 |
 | `--min-defects N` | No | `1` | 最低缺陷产出要求 |
@@ -136,7 +136,7 @@ print(json.dumps(result, ensure_ascii=False))
 > 仅在 FRESH_START 时执行。完成所有初始化工作后进入第一轮挖掘。
 
 ### Step 1: 解析参数
-- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector}
+- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}
 - 解析 `version`, `max_rounds`, `min_defects`
 - **version 规范化**：统一为 `vX.Y.Z`（用户传 `1.38.0` 或 `v1.38.0` 都归一为 `v1.38.0`），用于 session_id 和 `results/{target}/{version}/` 目录名——历史曾出现 `2.6.17`/`1.38.0`(不带v) 与 `v1.18.2`(带v) 混用，导致脚本按一种格式找不到另一种格式的产出：
 ```bash
@@ -296,12 +296,44 @@ print(json.dumps({
 " 2>/dev/null || echo "THREAT_MODEL_NOT_AVAILABLE"
 ```
 
-### Step 4: 派 Knowledge Extractor
+### Step 4: 派 Knowledge Extractor（Task 4a：失败时复用+标记）
+
 ```
-Agent(subagent_type="testvdb:knowledge-extractor", description="提取 {target} {version} 文档知识",
-  prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识。将结果写入 results/{target}/{version}/raw_knowledge.md")
+# 先检查是否有旧版本 knowledge 可复用
+OLD_VERSION=$(find results/{target} -maxdepth 2 -name "raw_knowledge.md" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d" " -f2- | sed 's|/raw_knowledge.md||')
+
+if [ -n "$OLD_VERSION" ] && [ -f "$OLD_VERSION/raw_knowledge.md" ]; then
+  OLD_VER=$(basename "$OLD_VERSION" | sed 's/^v//')
+  echo "[Knowledge Extractor] 降级：复用旧版本 v${OLD_VER} knowledge（glm proxy 下 agent 频繁 HTTP 400）"
+  # Task 4a: 复用旧版本 + 强制标记
+  cp "$OLD_VERSION/raw_knowledge.md" "results/{target}/{version}/raw_knowledge.md"
+  # 标记 KNOWLEDGE_DEGRADED（后续写入 mine_state.json）
+  export KNOWLEDGE_DEGRADED="true"
+  export OLD_KNOWLEDGE_VERSION="$OLD_VER"
+else
+  # 无旧版本可复用，正常派发
+  Agent(subagent_type="testvdb:knowledge-extractor", description="提取 {target} {version} 文档知识",
+    prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识。将结果写入 results/{target}/{version}/raw_knowledge.md")
+
+  # 派发后检查是否成功（检查 raw_knowledge.md 是否被创建/更新）
+  if [ ! -f "results/{target}/{version}/raw_knowledge.md" ] || [ ! -s "results/{target}/{version}/raw_knowledge.md" ]; then
+    echo "[Knowledge Extractor] 失败：无法提取 knowledge，且无旧版本可复用"
+    exit 1
+  fi
+fi
 ```
+
 **验证：** `ls -la results/{target}/{version}/raw_knowledge.md`
+
+**Task 4a：如果复用旧版本，在 Step 7 写入 mine_state.json 时标记 `KNOWLEDGE_DEGRADED`**：
+```python
+if os.environ.get("KNOWLEDGE_DEGRADED") == "true":
+    mine_state["knowledge_degraded"] = {
+        "reused_from": os.environ.get("OLD_KNOWLEDGE_VERSION"),
+        "reason": "knowledge-extractor agent failed (glm proxy HTTP 400)",
+        "error_log": "Agent 派发失败或超时，复用旧版本 knowledge 契约可能过时"
+    }
+```
 
 ### Step 5: 派 Contract Formalizer
 ```
@@ -538,7 +570,33 @@ Agent(subagent_type="testvdb:judge-severity", ..., prompt="...${THREAT_MODEL_JUD
 python scripts/dedup_defects.py "results/{target}/{version}/{timestamp}"
 ```
 
-**更新 pipeline_state**: `phase` = `"REPORTING"`, `phases_completed` 追加 `"DEBATE_S2"`, `phase_data.DEBATE_S2` = `{confirmed_defects: N, rejected_defects: M}`
+**更新 pipeline_state**: `phase` = `"VERIFY_LIVE"`, `phases_completed` 追加 `"DEBATE_S2"`, `phase_data.DEBATE_S2` = `{confirmed_defects: N, rejected_defects: M}`
+
+### 8e.6. VERIFY_LIVE — L1 机械闸门 + L2 语义闸门
+
+> **设计原则**: L1 纯脚本(0 token)覆盖 ~90% 历史假阳性模式。L2 轻量 Agent 覆盖剩余 ~10% 语义微妙情况。
+
+#### L1 机械闸门
+
+```bash
+python scripts/verify_live_l1.py "results/{target}/{version}/{timestamp}" --target {target}
+```
+
+**产出**: `verify_live_l1.json`。每个候选: REFUTED | UNCERTAIN。
+
+**处理**:
+- 所有 REFUTED: 从 confirmed_defects 移除
+- UNCERTAIN > 0: 派发 L2 Agent
+- 全部 REFUTED 且 confirmed_defects 为空: consecutive_no_defect_rounds += 1
+
+#### L2 语义闸门(按需)
+
+```
+Agent(subagent_type="testvdb:verify-live-l2", description="L2 语义闸门 {target}",
+  prompt="按照 agents/verify-live-l2.md 规范，对 verify_live_l1.json 中 UNCERTAIN 候选执行 Docker 实测验证。session_dir=results/{target}/{version}/{timestamp}, target={target}。")
+```
+
+**更新 pipeline_state**: `phase` = `"REPORTING"`, `phases_completed` 追加 `"VERIFY_LIVE"`
 
 ### 8f. REPORTING — 派 Reporter
 
@@ -587,7 +645,30 @@ python scripts/verify_defects.py "results/{target}/{version}/{timestamp}"
 
 ### Step 9: Issue 草稿 + 汇总 + 清理
 
-#### 9a. 生成 Issue 草稿
+#### 9a. 运行 Novelty Gate（Task 1）
+
+**在生成 Issue 草稿前，必须先运行 Novelty Gate 进行可信度治理（ADR-0001）。**
+
+```bash
+python scripts/novelty_gate.py --session-dir results/{target}/{version}/{timestamp}
+```
+
+**Exit code 处理**：
+- `0`（有 NOVEL 背书）→ 继续 9b，仅对 `endorsement=true` 的缺陷生成 Issue 草稿
+- `1`（全拒绝）→ 跳过 Issue 生成，直接生成汇总
+- `2`（有 UNVERIFIED）→ 跳过 Issue 生成，记录警告
+
+**读取 Gate 结果**：
+```bash
+cat results/{target}/{version}/{timestamp}/debate_logs/novelty_gate.json | python -c "
+import json, sys
+data = json.load(sys.stdin)
+endorsed = [d for d, r in data.items() if r.get('endorsement')]
+print(json.dumps({'endorsed_defects': endorsed}, ensure_ascii=False))
+"
+```
+
+#### 9b. 生成 Issue 草稿（仅背书的 NOVEL，candidate 级）
 
 **⛔ 绝对禁止：直接提交 Issue 到 GitHub。所有产出仅限本地文件系统。**
 
@@ -595,9 +676,12 @@ python scripts/verify_defects.py "results/{target}/{version}/{timestamp}"
 mkdir -p results/{target}/{version}/{timestamp}/issues
 ```
 
-对每个通过审查的缺陷，生成 `issues/issue-{N}-{slug}.md`。
+**粒度映射规则（ADR-0002）**：Novelty Gate 按 candidate/script 级判定（一个 defect 聚合可含多个 candidate，如 defect-2 含 7 个参数）。映射如下：
+- **Issue 草稿**：按 **candidate 级**生成，仅 `endorsement=true` 的 candidate → `issues/issue-{param-slug}-novel.md`。reject 的 candidate **不**生成 issue 草稿。
+- **拒绝清单**：reject 的 candidate 记入 `summary.md` 的「Novelty Gate 拒绝清单」（candidate + param + grade + evidence_url）。`judge_discrepancy=true` 的 candidate 须标注（门控推翻了 judge 的 NOVEL——这是门控核心价值）。
+- **Defect 聚合报告**（`defects/defect-N.md`）仍生成，但头部必须标注门控汇总：含 N candidate，M endorse / (N-M) reject，避免聚合叙事掩盖 candidate 级门控决策。
 
-#### 9a.5 Issue 审核提醒
+#### 9b.5 Issue 审核提醒
 
 > ⚠️ **人工审核必需**：Issue 草稿由 AI 生成，需人工审核后手动提交。
 
