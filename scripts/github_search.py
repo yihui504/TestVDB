@@ -18,6 +18,8 @@ REPO_MAP = {
     "qdrant": "qdrant/qdrant",
     "weaviate": "weaviate/weaviate",
     "pgvector": "pgvector/pgvector",
+    "meilisearch": "meilisearch/meilisearch",
+    "chroma": "chroma-core/chroma",
 }
 
 GITHUB_API = "https://api.github.com/search/issues"
