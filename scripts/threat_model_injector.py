@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict
 
-VALID_TARGETS = {"milvus", "qdrant", "weaviate", "pgvector"}
+VALID_TARGETS = {"milvus", "qdrant", "weaviate", "pgvector", "meilisearch", "chroma"}
 
 PROJECT_ROOT = os.environ.get("PROJECT_ROOT", os.getcwd())
 _proj_resolved = Path(PROJECT_ROOT).resolve()

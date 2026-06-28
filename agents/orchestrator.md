@@ -89,7 +89,7 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 ### 输入参数
 | 参数 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
-| target | ✅ | — | milvus / qdrant / weaviate / pgvector |
+| target | ✅ | — | milvus / qdrant / weaviate / pgvector / meilisearch / chroma |
 | version | ✅ | — | 目标版本号 |
 | max_rounds | ❌ | 5 | 最大挖掘轮数（0=无上限） |
 | min_defects | ❌ | 1 | 最低缺陷产出要求 |
@@ -107,7 +107,7 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 ## 流水线详细规范
 
 ### Step 1: 解析参数
-- target 必须在 {milvus, qdrant, weaviate, pgvector} 内，否则报错退出
+- target 必须在 {milvus, qdrant, weaviate, pgvector, meilisearch, chroma} 内，否则报错退出
 - version 格式不做强制校验（由镜像tag预检验证）
 - max_rounds = 0 表示不限上限，但有僵局终止机制
 

@@ -34,7 +34,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, 或 `pgvector` |
+| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, `pgvector`, `meilisearch`, 或 `chroma` |
 | `<version>` | Yes | — | 目标版本号（如 `1.38.0`） |
 | `--force` | No | — | 强制重新生成，忽略缓存（即使缓存有效也重跑） |
 
@@ -44,7 +44,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 ### Step 1: 解析参数 + 前置检查
 
-- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector}
+- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}
 - 解析 `version`、`force`
 - 确定 `PROJECT_ROOT`: `git rev-parse --show-toplevel 2>/dev/null || pwd`
 - 前置检查：`python scripts/preflight.py`

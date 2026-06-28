@@ -55,6 +55,25 @@ SIGNATURES: dict[str, dict[str, list[str]]] = {
         "filter_keys": [],
         "resp_keys": [],
     },
+    "meilisearch": {
+        "ports": [r":7700\b", r"\b7700/"],
+        "paths": [r"/indexes/[\w-]+/(?:documents|search|settings|tasks)",
+                  r"/indexes/\{[^}]+\}"],
+        # hybrid/semanticRatio 是 Meilisearch 向量混合搜索独有的请求键
+        "filter_keys": [r'"semanticRatio"\s*:', r'"hybrid"\s*:\s*\{'],
+        "resp_keys": [],
+    },
+    "chroma": {
+        "ports": [],  # 8000 太通用（django/jupyter 等共用），不用端口指纹避免误报
+        # Task 4c fix: Add whitelist for /v1/schema/{class}/indexes/{prop} pattern (Weaviate reindex API)
+        # to avoid matching Meilisearch /indexes/{uid} pattern
+        "paths": [r"/api/v2/tenants", r"/api/v2/databases",
+                  r"/api/v[12]/[^/]*/collections/\{[^}]+\}"],
+        # Chroma where 用 mongo 风格操作符 $contains/$and/$or（区别于 weaviate 的 "where"）
+        "filter_keys": [r'"\$contains"\s*:', r"'\$contains'\s*:",
+                        r'"\$and"\s*:', r"'\$or'\s*:"],
+        "resp_keys": [],
+    },
 }
 
 

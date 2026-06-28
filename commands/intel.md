@@ -37,7 +37,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, 或 `pgvector` |
+| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, `pgvector`, `meilisearch`, 或 `chroma` |
 | `--max-issues N` | No | settings.json `intelligence.max_issues`（默认 500） | 采集最近 N 条 issue + 已合并 PR |
 | `--max-commits N` | No | settings.json `intelligence.max_commits`（默认 200） | 采集最近 N 个 commit |
 | `--force` | No | — | 强制重新采集，忽略缓存 |
@@ -48,7 +48,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 ### Step 1: 解析参数 + 前置检查
 
-- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector}
+- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}
 - 解析 `max_issues`、`max_commits`、`force`
 - 确定 `PROJECT_ROOT`: `git rev-parse --show-toplevel 2>/dev/null || pwd`
 - 前置检查：`python scripts/preflight.py`

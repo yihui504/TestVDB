@@ -64,6 +64,8 @@ case "$TARGET" in
   weaviate) DB_PORT=8080;  HEALTH_PATH="/v1/.well-known/ready" ;;
   milvus)   DB_PORT=19530; HEALTH_PATH="/healthz" ;;
   pgvector) DB_PORT=5432;  HEALTH_PATH="/" ;;  # postgres 无 HTTP 健康，Step 1 用 TCP 回退
+  meilisearch) DB_PORT=7700; HEALTH_PATH="/health" ;;
+  chroma)   DB_PORT=8000; HEALTH_PATH="/api/v2/heartbeat" ;;
   *) echo "FATAL: unknown TARGET=$TARGET"; exit 1 ;;
 esac
 
@@ -75,12 +77,30 @@ fi
 
 # 持久化配置到 .executor.env：跨 turn 单一真相源（消除各 Step 重复硬编码）；
 # export TESTVDB_DB_URL 供攻击脚本子进程继承（attack-boundary/state/semantic.md 契约要求 executor 设置）
+# per-target DB URL 格式（单一数据源；消除历史硬编码 HTTP URL 的跨 target bug）
+case "$TARGET" in
+  pgvector)
+    # PostgreSQL DSN 格式（pgvector 是 PG 扩展，不使用 HTTP）
+    DB_URL="postgresql://postgres:postgres@localhost:$DB_PORT/testvdb"
+    ;;
+  meilisearch)
+    DB_URL="http://localhost:$DB_PORT"
+    ;;
+  chroma)
+    DB_URL="http://localhost:$DB_PORT"
+    ;;
+  *)
+    # qdrant, weaviate, milvus — REST API
+    DB_URL="http://localhost:$DB_PORT"
+    ;;
+esac
+
 cat > "$SESSION_DIR/.executor.env" <<EOF
 export TARGET=$TARGET
 export DB_PORT=$DB_PORT
 export HEALTH_PATH=$HEALTH_PATH
 export SESSION_DIR=$SESSION_DIR
-export TESTVDB_DB_URL=http://localhost:$DB_PORT
+export TESTVDB_DB_URL=$DB_URL
 EOF
 
 echo "TARGET=$TARGET DB_PORT=$DB_PORT HEALTH_PATH=$HEALTH_PATH"

@@ -31,33 +31,6 @@ PROJECT_ROOT = os.environ.get("PROJECT_ROOT", os.getcwd())
 REGISTRY_DIR = os.path.join(PROJECT_ROOT, "strategy_registry")
 LOG_PATH = os.path.join(REGISTRY_DIR, "evolution_log.jsonl")
 
-DB_ENDPOINT_PATTERNS = {
-    "milvus": {
-        "schema": r"/v2/vectordb/collections/\{collection_name\}",
-        "data": r"/v2/vectordb/collections/\{collection_name\}/points",
-        "search": r"/v2/vectordb/collections/\{collection_name\}/points/search",
-        "index": r"/v2/vectordb/collections/\{collection_name\}/indexes",
-    },
-    "qdrant": {
-        "schema": r"/collections/\{collection_name\}",
-        "data": r"/collections/\{collection_name\}/points",
-        "search": r"/collections/\{collection_name\}/points/search",
-        "index": None,
-    },
-    "weaviate": {
-        "schema": r"/v1/schema/\{class_name\}",
-        "data": r"/v1/objects",
-        "search": r"/v1/graphql",
-        "index": None,
-    },
-    "pgvector": {
-        "schema": r"(?:CREATE|DROP|ALTER)\s+TABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?(\w+)",
-        "data": r"INSERT\s+INTO\s+\w+",
-        "search": r"SELECT.*\bORDER\s+BY\b.*<=>",
-        "index": r"CREATE\s+INDEX\s+\w+\s+ON\s+\w+\s+USING\s+(?:ivfflat|hnsw)",
-    },
-}
-
 ENDPOINT_CATEGORIES = [
     (r"(?:create|insert|put|post).*collection", "schema_create"),
     (r"(?:delete|drop).*collection", "schema_delete"),
@@ -155,7 +128,7 @@ def extract_strategy_from_defect(defect: dict, session_dir: str) -> dict:
             "applicable_endpoints": []
         },
         "migration": {
-            "applicable_dbs": ["milvus", "qdrant", "weaviate", "pgvector"],
+            "applicable_dbs": ["milvus", "qdrant", "weaviate", "pgvector", "meilisearch", "chroma"],
             "confirmed_dbs": [],
             "rejected_dbs": [],
             "migration_rules": {}
@@ -239,7 +212,7 @@ def main():
     session_dir = sys.argv[1]
     target_db = sys.argv[2].lower()
 
-    if target_db not in ("milvus", "qdrant", "weaviate", "pgvector"):
+    if target_db not in ("milvus", "qdrant", "weaviate", "pgvector", "meilisearch", "chroma"):
         print(f"Error: Unknown target_db '{target_db}'")
         sys.exit(1)
 

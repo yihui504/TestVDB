@@ -1,0 +1,29 @@
+# TestVDB Docker Compose - Chroma (server mode)
+# Port uses ${CHROMA_PORT:-8000} for user-customizable port
+# Health: /api/v2/heartbeat (200 → ready). 默认无 auth (token auth 可选，开发测试关闭).
+# Chroma API: v2 tenant/database/collection 模型；v1 兼容 (/api/v1/collections).
+#   向量：collection.add({ids, embeddings, documents}) → collection.query({query_embeddings}).
+#
+# healthcheck 用 python（chromadb/chroma 基于 python-slim，未必含 curl/wget）；
+# docker-executor Step 1 另用主机 curl 轮询 /api/v2/heartbeat 兜底。
+
+services:
+  chroma:
+    container_name: testvdb-chroma-${TESTVDB_SESSION_ID:-standalone}
+    image: chromadb/chroma:${CHROMA_VERSION:-0.6.3}
+    environment:
+      - IS_PERSISTENT=TRUE
+      - PERSIST_DIRECTORY=/chroma/chroma
+      - ANONYMIZED_TELEMETRY=FALSE
+    ports:
+      - "${CHROMA_PORT:-8000}:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat')\" || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  chroma_data:

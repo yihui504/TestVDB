@@ -1,0 +1,34 @@
+# TestVDB Docker Compose - Meilisearch
+# Port uses ${MEILISEARCH_PORT:-7700} for user-customizable port
+# Health: /health (200 → ready). Development mode = no master key (无 auth，攻击脚本直连).
+#   production 模式强制 MEILI_MASTER_KEY 且需 Authorization 头；开发测试用 development.
+# Meilisearch 向量搜索：先 PUT /indexes/{uid}/settings 的 embedders (userProvided + dimensions)，
+#   再 POST /indexes/{uid}/search 带 vector/hybrid。
+
+services:
+  meilisearch:
+    container_name: testvdb-meilisearch-${TESTVDB_SESSION_ID:-standalone}
+    image: getmeili/meilisearch:${MEILISEARCH_VERSION:-v1.12}
+    # v1.12 向量 store 通过 HTTP /experimental-features 启用（无 CLI flag；
+    # --experimental-vector-store 已在 v1.12 移除，传入会导致启动崩溃）。
+    # wrapper: 启动 meilisearch 后台 → 等 /health → PATCH vectorStore=true → wait。
+    # 不启用则 embedders 配置与 hybrid/vector search 全 400 (feature_not_enabled)。
+    command:
+      - sh
+      - -c
+      - 'meilisearch & sleep 2; until curl -sf http://localhost:7700/health >/dev/null; do sleep 1; done; curl -sf -X PATCH http://localhost:7700/experimental-features -H "Content-Type: application/json" -d "{\"vectorStore\":true}" >/dev/null && echo "[init] vectorStore enabled" || echo "[init] WARN: vectorStore enable failed"; wait'
+    environment:
+      - MEILI_ENV=development
+      - MEILI_NO_ANALYTICS=true
+    ports:
+      - "${MEILISEARCH_PORT:-7700}:7700"
+    volumes:
+      - meili_data:/meili_data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7700/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  meili_data:

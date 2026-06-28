@@ -6,7 +6,7 @@
 ## 核心原则
 
 1. **唯一真理源 = `structured_contract.json`**。从契约读取一切 DB 特定信息：
-   - `target` 字段 → 当前 DB（weaviate / qdrant / milvus / pgvector）
+   - `target` 字段 → 当前 DB（weaviate / qdrant / milvus / pgvector / meilisearch / chroma）
    - `api_endpoints` → 端点路径（method + path + category + parameters + source_url）
    - `data_types` → 数据结构（字段命名、向量格式，如 weaviate 的 `properties`/`Class`/`vector`）
    - `constraints` / `assertions` → 待测约束与预期行为
