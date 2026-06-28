@@ -8,6 +8,11 @@ Provides find_session_id() and is_session_locked() used by:
   - retry_policy.py
 """
 
+# Python 3.8 compat: defer annotation evaluation so `str | None` / `dict | None`
+# (PEP 604) used below doesn't raise TypeError at import time. Required because
+# hooks invoke this module via the system `python` which may be 3.8.
+from __future__ import annotations
+
 import json
 import os
 
