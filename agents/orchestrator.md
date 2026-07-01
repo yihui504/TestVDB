@@ -283,7 +283,8 @@ THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} -
 
 #### 8b. 并发出动 Attack Trio
 
-**完成后更新 pipeline_state**: `phase` → `"DEBATE_S1"`, `phases_completed` 追加 `"ATTACK_GEN"`, `phase_data.ATTACK_GEN` = `{scripts_generated: N, agents_completed: [...]}`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S1 --phase-data '{"ATTACK_GEN": {"scripts_generated": N, "agents_completed": [...]}}'`
+
 **并发（非顺序）** 派三个 Attack Agent，**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
 > **派发者说明（v2.1.2）**：实际由**主进程**（`commands/mine.md`）直接派发这三个 attack agent，**orchestrator 不嵌套派孙 agent**（嵌套派发不可靠，见 `commands/mine.md:18` 与 memory `nested-agent-dispatch-limitation`）。本节描述的是派发的**内容契约**，不是 orchestrator 自行派发。⚠️ 派发依赖环境原生 Task 工具；若当前环境未暴露（非标准 provider），主进程须降级为单 agent 串行执行，或换到支持原生 Task 的环境——此为平台层限制，非代码 bug。
@@ -331,7 +332,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
 #### 8c. 辩论 Stage 1（自动化审查 + 去重 + 交叉审查）
 
-**完成后更新 pipeline_state**: `phase` → `"EXECUTION"`, `phases_completed` 追加 `"DEBATE_S1"`, `phase_data.DEBATE_S1` = `{approved_count: N, rejected_count: M}`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EXECUTION --phase-data '{"DEBATE_S1": {"approved_count": N, "rejected_count": M}}'`
 
 收集三个 Agent 产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
 
@@ -385,7 +386,8 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
 #### 8d. 派 Executor 执行通过辩论的脚本
 
-**完成后更新 pipeline_state**: `phase` → `"DEBATE_S2"`, `phases_completed` 追加 `"EXECUTION"`, `phase_data.EXECUTION` = `{scripts_executed: N, scripts_passed: M, scripts_error: K}`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S2 --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
+
 **必须使用 Agent 工具派生 docker-executor 子 agent**，禁止自己直接执行：
 
 ```
@@ -404,7 +406,8 @@ ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l
 
 #### 8e. 收集结果 → 辩论 Stage 2
 
-**完成后更新 pipeline_state**: `phase` → `"REPORTING"`, `phases_completed` 追加 `"DEBATE_S2"`, `phase_data.DEBATE_S2` = `{confirmed_defects: N, rejected_defects: M}`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase REPORTING --phase-data '{"DEBATE_S2": {"debate_confirmed": N, "rejected_defects": M}}'`
+
 将执行结果分发给 Judge Quartet（**4 个 Judge，分两阶段派发**）：
 
 **阶段 1：先派 judge-doc（文档契约验证）**
@@ -432,7 +435,7 @@ echo "evidence: $(test -f results/{target}/{version}/{timestamp}/debate_logs/sta
 echo "novelty: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_novelty.json.done && echo 1 || echo 0)"
 echo "severity: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_severity.json.done && echo 1 || echo 0)"
 ```
-如果任一 Judge 计数为 0，**禁止 Orchestrator 自己做 Judge 判断**，必须在 error_log 中记录缺失的 Judge 名称。**⛔ 绝对禁止 Orchestrator 自己执行 WebSearch 或代码审查来替代 Judge。如果 Judge 失败，缺失的 Judge 投 not_defect（保守策略）。**
+如果任一 Judge 计数为 0，**禁止 Orchestrator 自己做 Judge 判断**，必须在 error_log 中记录缺失的 Judge 名称。**⛔ 绝对禁止 Orchestrator 自己执行 WebSearch 或代码审查来替代 Judge。如果 Judge 失败，缺失的 Judge 投 not_defect（保守策略）。注意：judge-novelty 超时 → 全部标记 `unknown`，投 `is_defect`（不因网络问题丢弃缺陷，v2.3）。**
 
 **平局处理规则（v2.2 新增）**：
 - evidence 2:2 平局 → 投 `not_defect`（保守策略：证据不足不确认）
@@ -451,29 +454,34 @@ evidence 和 severity 按 is_defect/not_defect 投票，novelty 根据新颖性�
 1. **文档门控**（judge-doc）：产出 DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH，调节其他 Judge 审查严格度
 2. **证据门控**（judge-evidence）：证据等级 D → 自动 not_defect，无需继续
 3. **严重性门控**（judge-severity）：severity = trivial → not_defect
-4. **新颖性门控**（judge-novelty）：
+4. **新颖性初筛**（judge-novelty，v2.3 修正 — 不做 kill）：
    - `new` / `new_similar` / `unknown`（网络不可用）→ 投 is_defect
-   - `already_reported` / `known_wontfix` → 投 not_defect（已有人报告，不再重复提交）(v2.2 修正)
+   - `already_reported` → 投 is_defect（**不 kill**，附带 related_issue_numbers 传递给 Novelty Gate）
+   - `known_wontfix` → 投 not_defect（维护者明确拒绝，唯一 kill 场景）
 
 **缺陷确认规则（按优先级判定）：**
 1. evidence=not_defect → **丢弃**（证据不足，记录驳回原因，不检查 severity）
 2. severity=trivial → **丢弃**（影响过小不值得报告，记录驳回原因）
    - **重要**：severity 降级逻辑（如 DOC_PARTIAL → 自动降级）可能在 judge-severity 内部将 Low 降为 trivial，此降级不代表缺陷不存在，仅影响是否值得单独报告。降级被丢弃的缺陷记录到 `downgraded_defects` 数组，供 reflection_context 参考
-3. evidence=is_defect AND severity∈{Critical,High,Medium,Low} → **确认缺陷**
-4. novelty_rating 影响确认状态 (v2.2 修正)：
-   - `new` / `new_similar` / `unknown` → 正常进入其他维度判定
-   - `already_reported` / `known_wontfix` → vote=not_defect，缺陷被丢弃（记录关联 issue 编号到 dedup_log.json）
+3. evidence=is_defect AND severity∈{Critical,High,Medium,Low} → **辩论确认 (Debate-Confirmed)**
+4. novelty_rating 影响确认状态 (v2.3 修正 — Triage 不做 kill)：
+   - `new` / `new_similar` / `unknown` / `already_reported` → 正常进入其他维度判定
+   - `already_reported` 的候选保留 `related_issue_numbers`，传递给 Novelty Gate 做最终裁决
+   - `known_wontfix` → vote=not_defect，缺陷被丢弃（记录关联 issue 编号到 dedup_log.json）
    - novelty 超时 → 全部标记 `unknown`，投 `is_defect`（不因网络问题丢弃缺陷）
+   - **关键变更**：`already_reported` 不再 kill candidate——judge-novelty 是初筛（Novelty Triage），Novelty Gate（Step 9a）是唯一权威的"是否可提交"决策点
 5. doc_verification_result 附加到缺陷元数据：
    - DOC_VERIFIED → 正常格式
    - DOC_PARTIAL → 标注文档引用为 PARTIAL，严重性自动降一级（但仅影响 severity 输出，不影响 evidence 判定）
    - DOC_MISMATCH → 标注文档引用不匹配，严重性自动降两级，但**不阻塞缺陷确认**（只要 evidence 确认即可）
 
+> **术语精确化（v2.3）**：此处产出的是 **Debate-Confirmed**（辩论确认）candidate。后续 VERIFY_LIVE、Reporter、DEFECT_REVIEW、dev-reviewer、Novelty Gate 五层中仍可能被推翻。只有 Gate 的 `endorsement=true` 产出才是 **Gate-Endorsed**（闸门背书）——真正可提交的级别。`confirmed_defects` JSON 字段保留不变，指代通过本轮辩论的 candidate 列表。
+
 辩论日志写入 `debate_logs/stage2.json`（含 stage2_doc.json 的文档验证结果）。
 
 #### 8e.5 缺陷去重（v2.2 新增 — 防止同一根因的多个缺陷重复报告）
 
-**主进程在派发 Reporter 之前，必须对 confirmed_defects 执行跨轮次去重。**
+**主进程在派发 Reporter 之前，必须对 debate_confirmed 列表执行跨轮次去重。**
 
 去重维度：
 1. **同 endpoint + 同 defect_type** → 合并为单个缺陷，保留所有 reproduction scenario
@@ -484,11 +492,12 @@ evidence 和 severity 按 is_defect/not_defect 投票，novelty 根据新颖性�
 
 #### 8f. 派 Reporter
 
-**完成后更新 pipeline_state**: `phase` → `"DEFECT_REVIEW"`, `phases_completed` 追加 `"REPORTING"`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEFECT_REVIEW`
+
 **必须使用 Agent 工具派生 reporter 子 agent**：
 
 ```
-Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}", prompt="按照 agents/reporter.md 规范，为以下确认的缺陷生成报告：{confirmed_defects}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}", prompt="按照 agents/reporter.md 规范，为以下 Debate-Confirmed 缺陷生成报告：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
 **自动化输出验证**：Reporter 完成后，使用 Bash 工具执行以下命令验证产出：
@@ -516,41 +525,14 @@ FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Repor
 
 #### 8g. 保存状态
 
-**完成后更新 pipeline_state**: `phases_completed` 追加 `"STATE_SAVE"`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase STATE_SAVE`
 每轮结束保存 mine_state.json + coverage.json + experience_handoff.json + pipeline_state.json。
 
-**pipeline_state.json（v3 跨 Turn 状态机）：**
-```json
-{
-  "version": 3,
-  "session_id": "{session_id}",
-  "target": "{target}",
-  "version_target": "{version}",
-  "current_round": 1,
-  "max_rounds": 5,
-  "min_defects": 1,
-  "phase": "ROUND_START",
-  "phase_step_index": 0,
-  "turn_type": "setup",
-  "project_root": "{PROJECT_ROOT}",
-  "session_dir": "results/{target}/{version}",
-  "timestamp_dir": "",
-  "phases_completed": [],
-  "phase_data": {},
-  "global_state": {
-    "total_defects_confirmed": 0,
-    "consecutive_no_defect_rounds": 0,
-    "overall_coverage_pct": 0.0,
-    "docker_container_running": false
-  },
-  "error_log": [],
-  "timestamps": {
-    "session_started": "{ISO_8601}",
-    "last_phase_change": "{ISO_8601}"
-  }
-}
-```
-每个子步骤完成后，主进程必须更新 `pipeline_state.json`：将当前 phase 追加到 `phases_completed`，设置 `phase` 为下一阶段，记录产出到 `phase_data`。后续 agent 可读取此文件了解当前进度。跨 Turn 恢复时，`reconstruct_context.py` 读取此文件确定断点。
+**pipeline_state.json（v3 跨 Turn 状态机，ADR-0004）：**
+
+由 `scripts/pipeline_state.py` CLI 管理，禁止手动构造 JSON。Schema 参考 [pipeline_state.py](scripts/pipeline_state.py) 的 `PipelineState.create()`。
+
+每个子步骤完成后，调用 `pipeline_state.py advance --phase <NEXT> [--phase-data '...']`。phase 转换受硬编码 transition map 校验（无效跳转 → InvalidTransition 报错）。全局状态计数器通过 `pipeline_state.py mutate --total-defects N --coverage P...` 更新。跨 Turn 恢复时，`reconstruct_context.py` 读取此文件确定断点。
 
 ### Agent 间通信可靠性机制（.done 标记文件）
 
@@ -563,7 +545,7 @@ FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Repor
 5. **Orchestrator 写入规范**：先写 `.tmp` 临时文件，完成后 rename + touch `.done`
 
 **experience_handoff.json 写入逻辑：**
-- 记录本轮关键发现：confirmed_defects 的 endpoint 分布、驳回原因分类、新发现的高价值攻击策略
+- 记录本轮关键发现：debate_confirmed 的 endpoint 分布、驳回原因分类、新发现的高价值攻击策略
 - 记录当前辩论机制状态：stage1/stage2 的 approve/reject 比例、Judge Quartet 一致率
 - 供下次 session 或上下文压缩恢复时快速理解当前进度
 

@@ -363,7 +363,19 @@ echo "[TestVDB] TIMESTAMP=$TIMESTAMP SESSION_DIR=$SESSION_DIR"
 ```
 - 创建 session 目录 `$SESSION_DIR`（即 `results/{target}/{version}/{TIMESTAMP}/`）
 - 写入 `mine_state.json` 和 `.session.lock`
-- **写入 `pipeline_state.json`（v3 schema）**：
+- **通过 CLI 初始化 `pipeline_state.json`（v3 schema, ADR-0004）**：
+
+```bash
+python scripts/pipeline_state.py init \
+    --target "{target}" \
+    --version "{version}" \
+    --session-dir "$SESSION_DIR" \
+    --max-rounds {max_rounds} \
+    --min-defects {min_defects} \
+    --project-root "{PROJECT_ROOT}"
+```
+
+> 等价于以下 v3 schema JSON（供参考，无需手写）：
 
 ```python
 # pipeline_state.json v3 — 跨 Turn 状态机
@@ -405,7 +417,7 @@ echo "[TestVDB] TIMESTAMP=$TIMESTAMP SESSION_DIR=$SESSION_DIR"
 >
 > 完成后：
 > - 如果满足终止条件 → 直接在当前 Turn 执行 [Final Turn: Cleanup](#final-turn-cleanup)
-> - 如果继续 → 更新 `pipeline_state.json`（`turn_type` 改为 `"loop"`，`current_round` += 1，`phase` = `"ROUND_START"`，`phases_completed` = []），然后**主动结束当前 turn**（不调用任何调度工具）。
+> - 如果继续 → 更新 `pipeline_state.json`：先 `advance --phase ROUND_START`（含 STATE_SAVE → ROUND_START transition），再 `mutate --current-round {N+1}`，然后**主动结束当前 turn**（不调用任何调度工具）。
 
 Stop hook（`scripts/hooks/pipeline_gate.py`）检测 `phase != DONE` → `exit 2` → harness 自动开启新 turn。新 turn 的入口判断识别 `turn_type=loop` 进入 [Loop Turn: Resume Round](#loop-turn-resume-round)。
 
@@ -570,7 +582,7 @@ Agent(subagent_type="testvdb:judge-severity", ..., prompt="...${THREAT_MODEL_JUD
 python scripts/dedup_defects.py "results/{target}/{version}/{timestamp}"
 ```
 
-**更新 pipeline_state**: `phase` = `"VERIFY_LIVE"`, `phases_completed` 追加 `"DEBATE_S2"`, `phase_data.DEBATE_S2` = `{confirmed_defects: N, rejected_defects: M}`
+**更新 pipeline_state**: `phase` = `"VERIFY_LIVE"`, `phases_completed` 追加 `"DEBATE_S2"`, `phase_data.DEBATE_S2` = `{debate_confirmed: N, rejected_defects: M}`
 
 ### 8e.6. VERIFY_LIVE — L1 机械闸门 + L2 语义闸门
 
@@ -585,9 +597,9 @@ python scripts/verify_live_l1.py "results/{target}/{version}/{timestamp}" --targ
 **产出**: `verify_live_l1.json`。每个候选: REFUTED | UNCERTAIN。
 
 **处理**:
-- 所有 REFUTED: 从 confirmed_defects 移除
+- 所有 REFUTED: 从 debate_confirmed 列表移除
 - UNCERTAIN > 0: 派发 L2 Agent
-- 全部 REFUTED 且 confirmed_defects 为空: consecutive_no_defect_rounds += 1
+- 全部 REFUTED 且 debate_confirmed 为空: consecutive_no_defect_rounds += 1
 
 #### L2 语义闸门(按需)
 
@@ -602,7 +614,7 @@ Agent(subagent_type="testvdb:verify-live-l2", description="L2 语义闸门 {targ
 
 ```
 Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}",
-  prompt="按照 agents/reporter.md 规范，为以下确认的缺陷生成报告：{confirmed_defects}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}")
+  prompt="按照 agents/reporter.md 规范，为以下 Debate-Confirmed 缺陷生成报告：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}")
 ```
 **验证：** `ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -l`
 
@@ -645,9 +657,9 @@ python scripts/verify_defects.py "results/{target}/{version}/{timestamp}"
 
 ### Step 9: Issue 草稿 + 汇总 + 清理
 
-#### 9a. 运行 Novelty Gate（Task 1）
+#### 9a. 运行 Novelty Gate
 
-**在生成 Issue 草稿前，必须先运行 Novelty Gate 进行可信度治理（ADR-0001）。**
+**在生成 Issue 草稿前，必须对全部 Debate-Confirmed candidate 运行 Novelty Gate。Gate 产出 Gate-Endorsed（endorsement=true）才是真正可提交的缺陷（ADR-0001）。**
 
 ```bash
 python scripts/novelty_gate.py --session-dir results/{target}/{version}/{timestamp}
@@ -687,11 +699,11 @@ mkdir -p results/{target}/{version}/{timestamp}/issues
 
 #### 9a.6 生成 MRE 脚本（派 reporter-mre）
 
-主进程为通过审查的确认缺陷派发 reporter-mre，生成自包含 MRE 脚本（每个缺陷一个不依赖 TestVDB 代码的独立 Python 脚本）。reporter 专注 defect-N.md 报告，MRE 脚本由 reporter-mre 独立生成（v2.1.1 Reporter 拆分）。
+主进程为通过审查的 Debate-Confirmed 缺陷派发 reporter-mre，生成自包含 MRE 脚本（每个缺陷一个不依赖 TestVDB 代码的独立 Python 脚本）。reporter 专注 defect-N.md 报告，MRE 脚本由 reporter-mre 独立生成（v2.1.1 Reporter 拆分）。
 
 ```
 Agent(subagent_type="testvdb:reporter-mre", description="生成 MRE 脚本 {target}",
-  prompt="按照 agents/reporter-mre.md 规范，为以下确认缺陷生成自包含 MRE 脚本：{confirmed_defects}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}")
+  prompt="按照 agents/reporter-mre.md 规范，为以下 Debate-Confirmed 缺陷生成自包含 MRE 脚本：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}")
 ```
 
 **验证：** `ls results/{target}/{version}/{timestamp}/mre/defect-*-script.py.done 2>/dev/null | wc -l`（应 ≥1；reporter-mre 完成每个脚本后 `touch .done` 并通过 `py_compile`）
@@ -722,43 +734,35 @@ docker network rm testvdb-net-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || t
 
 ## Phase 更新指令
 
-> 每个子步骤完成后，主进程必须执行以下更新。
+> 每个子步骤完成后，主进程必须执行以下更新。使用 `pipeline_state.py` CLI (ADR-0004)。
 
-**更新模板**（使用 Bash 工具执行 Python 脚本）：
+### advance — 阶段推进
+
 ```bash
-python -c "
-import json, os
-ps_path = '{session_dir}/pipeline_state.json'
-with open(ps_path, encoding='utf-8') as f:
-    ps = json.load(f)
-
-# 更新当前 phase
-ps['phase'] = '{NEXT_PHASE}'
-
-# 追加已完成的 phase
-completed = ps.get('phases_completed', [])
-if '{COMPLETED_PHASE}' not in completed:
-    completed.append('{COMPLETED_PHASE}')
-ps['phases_completed'] = completed
-
-# 更新 phase_data
-ps['phase_data']['{COMPLETED_PHASE}'] = {PHASE_OUTPUT}
-
-# 更新全局状态
-ps['global_state']['total_defects_confirmed'] = {total_defects}
-ps['global_state']['overall_coverage_pct'] = {coverage}
-ps['global_state']['docker_container_running'] = {docker_running}
-ps['global_state']['consecutive_no_defect_rounds'] = {consecutive_no_defect}
-
-# 更新时间戳
-from datetime import datetime, timezone
-ps['timestamps']['last_phase_change'] = datetime.now(timezone.utc).isoformat()
-
-with open(ps_path, 'w', encoding='utf-8') as f:
-    json.dump(ps, f, indent=2, ensure_ascii=False)
-print(f'[pipeline_state] phase → {NEXT_PHASE}')
-"
+python scripts/pipeline_state.py advance \
+    --session-dir "{session_dir}" \
+    --phase "{NEXT_PHASE}" \
+    --phase-data '{"{COMPLETED_PHASE}": {PHASE_OUTPUT}}'
 ```
+
+### mutate — 更新全局状态计数器
+
+```bash
+python scripts/pipeline_state.py mutate \
+    --session-dir "{session_dir}" \
+    --total-defects {total_defects} \
+    --coverage {coverage} \
+    --docker-running {docker_running} \
+    --consecutive-no-defect {consecutive_no_defect}
+```
+
+### status — 查询当前状态
+
+```bash
+python scripts/pipeline_state.py status --session-dir "{session_dir}"
+```
+
+> 等价于原始的手动 JSON 编辑，但提供 seam 校验（无效 phase 转换 → InvalidTransition 报错）。
 
 ---
 

@@ -22,18 +22,31 @@ _Avoid_: ground truth, fact
 流水线产出的待判定缺陷假设（端点 + 参数/非法值 + 观察到的契约违规）。
 _Avoid_: finding, hit, bug report
 
-**Confirmed Defect**:
-通过 4-Judge 辩论的 candidate。仍可能是已知的（未必通过 Novelty Gate 背书）。
-_Avoid_: real bug, verified defect
+**Confirmed Defect**（上位概念）:
+通过 4-Judge 辩论的 candidate 的统称。**口头简称**，在精确语境中使用以下两个子级：
+
+**Debate-Confirmed（辩论确认）**:
+通过 Stage 2 辩论（evidence + severity + novelty triage + doc）存活的 candidate。进入后续验证管道：VERIFY_LIVE → Reporter → DEFECT_REVIEW → dev-reviewer → Novelty Gate。在管道的任一后续步骤中仍可能被推翻（REFUTED / IRREPRODUCIBLE / FALSE_POSITIVE）。
+_Avoid_: confirmed, verified defect
+
+**Gate-Endorsed（闸门背书）**:
+通过全部验证层（L1+2 / Reporter 复现 / DEFECT_REVIEW / dev-reviewer）**且** Novelty Gate 判定 NOVEL 的 Debate-Confirmed candidate。可生成 issue 草稿、进入可提交列表。这是流水线唯一承诺"这不是假阳性"的输出级别。
+_Avoid_: approved, validated, real bug
 
 ## Novelty 与提交
 
-**Novelty Gate**:
-生成 issue 草稿前对 Confirmed Defect 做的独立查重环节；输出"是否背书为 NOVEL"。
-_Avoid_: dup-check, novelty judge（后者是流水线内部判定，语义不同——judge 决定 candidate 是否值得做，Gate 决定能否背书提交）
+**Novelty Triage（新颖性初筛）**:
+judge-novelty Agent 在辩论 Stage 2 中对候选缺陷做初步搜索和标注。使用 5 级标注（new / new_similar / already_reported / known_wontfix / unknown），**不做 kill 决策**——`already_reported` 的候选仍投 `is_defect`，附带 `related_issue_numbers` 传递给 Novelty Gate。
+_Avoid_: novelty check, novelty judge（后者暗示最终裁决——初筛不做裁决）
+
+**Novelty Gate（新颖性闸门）**:
+Step 9a 中 `scripts/novelty_gate.py` 对 **Debate-Confirmed** candidate 做的独立双层查重（L1 Consumer: threat_model + local corpora / L2 Corrector: GitHub Search API）。使用 6 级分级（NOVEL / KNOWN_OPEN / COVERED_BY_PR / BY_DESIGN / POSSIBLY_FIXED / UNVERIFIED），是**唯一的"是否可提交"权威决策点**。输出 `endorsement=true` 的 candidate 升级为 **Gate-Endorsed**。
+_Avoid_: dup-check, novelty judge
+
+> **关键区分**：Triage 是流水线内部的**初筛标注**（收集信息，不 kill），Gate 是流水线末尾的**最终背书**（决定能否提交）。`already_reported` 在 Triage 阶段不 kill candidate——Gate 用更丰富的数据源（threat_model + issue/commit corpus + GitHub API）做精确判定。这解决了 v2.2 中 Triage 误杀的问题：judge-novelty 的 GitHub 搜索不如 Gate 的双层架构全面，过早 kill 会丢失 Gate 能做精确判定（如 COVERED_BY_PR vs KNOWN_OPEN vs BY_DESIGN）的机会。
 
 **可提交背书 (Submittable Endorsement)**:
-Gate 判定 NOVEL，candidate 进入可提交列表并生成 issue 草稿。
+Novelty Gate 判定 NOVEL，Debate-Confirmed candidate 升级为 Gate-Endorsed，进入可提交列表并生成 issue 草稿。Triage 阶段的 `already_reported` 标注不阻塞此流程——Gate 独立验证。
 _Avoid_: approval, pass, green-light
 
 **提交 (Submit)**:
@@ -56,7 +69,7 @@ _Avoid_: auto-submit, publish
 ## 判定链
 
 **Final Verdict**:
-一个 Confirmed Defect 在流水线结束时的权威判定（聚合全部 Judge + Novelty Gate 的分级与背书），是人工审查的**唯一事实源**；per-round 原始判定仅作溯源。
+一个 Debate-Confirmed candidate 在流水线结束时的权威判定（聚合全部 Judge + Novelty Gate 的分级与背书），是人工审查的**唯一事实源**；per-round 原始判定仅作溯源。Gate 的判决覆盖 Triage 的初筛标注——即使 Triage 标了 `already_reported`，Gate 仍可判定 NOVEL（Triage 误判）或 COVERED_BY_PR（精确确认）。
 _Avoid_: summary, aggregation（后者是 per-round 的，非跨 round 权威）
 
 > 关键约束：Final Verdict 必须**脚本生成、可重跑、带时间戳**，永不手工编辑——否则会与原始判定文件漂移，沦为新的"假事实源"（weaviate v1.38.2 的事后审查正是因为无权威入口、读漏 r2 文件而连环误诊）。

@@ -60,11 +60,11 @@ version: 1.1.0
 **阶段 1：** 先派 judge-doc（文档契约验证，权重调节器）
 **阶段 2：** 确认 doc 结果后，并发派其他 3 个 Judge：
 - judge-evidence：6 维度证据评分（复现性/隔离性/完整性/类型准确性/源可追溯性）
-- judge-novelty：GitHub Issues 搜索验证新颖性（永远投 is_defect，仅标记新颖性元数据）
+- judge-novelty（Novelty Triage）：GitHub Issues 搜索初筛，5 级标注（new/new_similar/already_reported/known_wontfix/unknown），仅 known_wontfix 投 not_defect，其余投 is_defect
 - judge-severity：4 级严重性分类 + 触发频率 + Workaround 评估
 
 **投票逻辑（加权 AND）：**
-- evidence=is_defect AND severity∈{Critical,High,Medium,Low} → 确认缺陷
+- evidence=is_defect AND severity∈{Critical,High,Medium,Low} → 辩论确认 (Debate-Confirmed)
 - evidence=not_defect OR severity=trivial → 丢弃
 - doc_verification_result 作为权重调节器（DOC_PARTIAL/MISMATCH 时降级但不阻塞确认）
 

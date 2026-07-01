@@ -20,7 +20,7 @@ tools:
 ## 数据访问级别: verified_only
 
 你可以访问:
-- final_verdict.json（Novelty Gate 产出的权威聚合判定，读取此文件获取缺陷列表）
+- final_verdict.json（Novelty Gate 产出的权威聚合判定，读取此文件获取缺陷列表。亦可 `python -c "from debate_record import FinalVerdict; v=FinalVerdict.from_file('$SESSION_DIR'); print(v.summary())"` 获取结构化摘要）
 - novelty_gate.json（Novelty Gate 原始分级结果）
 - stage2_aggregation.json（投票聚合结果）
 - structured_contract.json（生成报告中的契约引用）
