@@ -12,9 +12,9 @@ import json
 import os
 import sys
 
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+from _pipeline_utils import setup_encoding
+
+setup_encoding()
 
 SCRIPT_ERROR_MARKERS = [
     "'str' object has no attribute 'get'",

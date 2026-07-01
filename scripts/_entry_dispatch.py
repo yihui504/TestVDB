@@ -10,6 +10,8 @@
 from __future__ import annotations
 import glob, json, os
 
+from _pipeline_utils import read_json
+
 DONE_PHASES = {"CLEANUP", "DONE", None}
 RESUMABLE_TURN_TYPES = {"loop", "setup"}
 
@@ -29,13 +31,6 @@ def _plugin_root() -> str:
     return ""
 
 
-def _read_json(path: str):
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
-
 
 def _resume_target_path(root: str) -> str:
     return os.path.join(root, "results", ".resume_target")
@@ -43,7 +38,7 @@ def _resume_target_path(root: str) -> str:
 
 def read_resume_target(root: str):
     """读 .resume_target 标记（resume 命令设）。返回 session_dir 或 None。"""
-    data = _read_json(_resume_target_path(root))
+    data = read_json(_resume_target_path(root))
     if not data or not data.get("session_dir"):
         return None
     sd = data["session_dir"]
@@ -76,7 +71,7 @@ def scan_resumable(root: str, target: str, version: str):
         rel = os.path.relpath(p, root)
         if rel.count(os.sep) < 4:  # 跳过 version 根目录残留（3 层），只认 timestamp 级（4 层）
             continue
-        ps = _read_json(p)
+        ps = read_json(p)
         if not ps:
             continue
         if target and ps.get("target") != target:
@@ -103,7 +98,7 @@ def find_incomplete(root: str, target: str | None = None, version: str | None = 
         rel = os.path.relpath(p, root)
         if rel.count(os.sep) < 4:  # 跳过 version 根目录残留，只认 timestamp 级（与 scan_resumable 一致）
             continue
-        ps = _read_json(p)
+        ps = read_json(p)
         if not ps or ps.get("phase") in DONE_PHASES:
             continue
         if target and ps.get("target") != target:
@@ -127,7 +122,7 @@ def find_by_session_id(root: str, session_id: str) -> str | None:
         rel = os.path.relpath(p, root)
         if rel.count(os.sep) < 4:
             continue
-        ps = _read_json(p)
+        ps = read_json(p)
         if ps and ps.get("session_id") == session_id:
             return os.path.dirname(p)
     return None
@@ -159,7 +154,7 @@ def dispatch(target: str, version: str, force_new: bool = False) -> dict:
     rt = read_resume_target(root)
     if rt:
         consume_resume_target(root)
-        ps = _read_json(os.path.join(rt, "pipeline_state.json")) or {}
+        ps = read_json(os.path.join(rt, "pipeline_state.json")) or {}
         return {
             "decision": "RESUME", "session_dir": rt,
             "phase": ps.get("phase", "ROUND_START"),

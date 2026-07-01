@@ -22,21 +22,9 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _session_utils import _plugin_root  # noqa: E402
+from _pipeline_utils import setup_encoding, read_json  # noqa: E402
 
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-    except (AttributeError, OSError):
-        pass
-
-
-def _read_json(path: Path) -> dict | None:
-    try:
-        with path.open(encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else None
-    except (OSError, json.JSONDecodeError):
-        return None
+setup_encoding()
 
 
 def collect(root: Path) -> list[dict]:
@@ -50,8 +38,8 @@ def collect(root: Path) -> list[dict]:
         if "mine_state.json" not in files:
             continue
         ms_path = Path(dirpath) / "mine_state.json"
-        ms = _read_json(ms_path) or {}
-        ps = _read_json(Path(dirpath) / "pipeline_state.json") or {}
+        ms = read_json(ms_path) or {}
+        ps = read_json(Path(dirpath) / "pipeline_state.json") or {}
         try:
             mtime = datetime.fromtimestamp(ms_path.stat().st_mtime, tz=timezone.utc)
         except OSError:

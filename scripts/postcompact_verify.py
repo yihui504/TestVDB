@@ -11,22 +11,12 @@ import json
 import os
 import sys
 from _session_utils import find_session_id
+from _pipeline_utils import read_json, setup_encoding
 
 
 def _plugin_root():
     """Determine plugin root from script location."""
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-
-def _read_json(path: str):
-    """Read JSON file, return None on failure."""
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def find_latest_pipeline_state():
@@ -45,7 +35,7 @@ def find_latest_pipeline_state():
         for root, dirs, files in os.walk(os.path.join(plugin_root, "results")):
             if "pipeline_state.json" in files:
                 ps_path = os.path.join(root, "pipeline_state.json")
-                ps = _read_json(ps_path)
+                ps = read_json(ps_path)
                 if ps and ps.get("session_id") == session_id:
                     return ps_path
 
@@ -74,7 +64,7 @@ def find_latest_mine_state():
         for root, dirs, files in os.walk(os.path.join(plugin_root, "results")):
             if "mine_state.json" in files:
                 ms_path = os.path.join(root, "mine_state.json")
-                ms = _read_json(ms_path)
+                ms = read_json(ms_path)
                 if ms and ms.get("session_id") == session_id:
                     return ms_path
 
@@ -103,15 +93,13 @@ PHASE_NAMES = {
 
 
 def main():
-    # Ensure UTF-8 output on Windows
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout.reconfigure(encoding="utf-8")
+    setup_encoding()
 
     print("[TestVDB] PostCompact: Context compressed. Verifying state...")
 
     # Try pipeline_state.json (v3) first
     ps_path = find_latest_pipeline_state()
-    ps = _read_json(ps_path) if ps_path else None
+    ps = read_json(ps_path) if ps_path else None
 
     if ps and ps.get("version", 0) >= 3:
         # v3 schema — precise phase recovery
@@ -158,7 +146,7 @@ def main():
     else:
         # Fallback to legacy mine_state.json
         ms_path = find_latest_mine_state()
-        ms = _read_json(ms_path) if ms_path else None
+        ms = read_json(ms_path) if ms_path else None
 
         if ms:
             pipeline_state = ms.get("pipeline_state", "unknown")
@@ -172,7 +160,7 @@ def main():
             phase = "unknown"
             if ms_path:
                 legacy_ps_path = os.path.join(os.path.dirname(ms_path), "pipeline_state.json")
-                legacy_ps = _read_json(legacy_ps_path)
+                legacy_ps = read_json(legacy_ps_path)
                 if legacy_ps:
                     phase = legacy_ps.get("phase", "unknown")
 

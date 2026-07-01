@@ -14,25 +14,23 @@ import os
 import sys
 from datetime import datetime, timezone
 
+from _pipeline_utils import read_json, write_json, debate_log_path
+
 
 def dedup_defects(session_dir: str) -> dict:
     """Deduplicate confirmed defects across rounds.
 
     Returns dict with 'before_count', 'after_count', and 'deduped' list.
     """
-    stage2_agg_path = os.path.join(
-        session_dir, "debate_logs", "stage2_aggregation.json"
-    )
-    if not os.path.exists(stage2_agg_path):
+    stage2_agg_path = debate_log_path(session_dir, "stage2_aggregation")
+    current = read_json(str(stage2_agg_path))
+    if current is None:
         return {
             "before_count": 0,
             "after_count": 0,
             "deduped": [],
             "error": "stage2_aggregation.json not found",
         }
-
-    with open(stage2_agg_path, encoding="utf-8") as f:
-        current = json.load(f)
 
     # Load historical confirmed defects (if any)
     history_file = os.path.join(os.path.dirname(session_dir), "dedup_state.json")
@@ -61,13 +59,12 @@ def dedup_defects(session_dir: str) -> dict:
             deduped.append(d)
 
     # Write deduplicated result
-    output_path = os.path.join(session_dir, "debate_logs", "stage2_deduped.json")
+    output_path = debate_log_path(session_dir, "stage2_deduped")
     output = {
         "defects": deduped,
         "deduped_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2)
+    write_json(str(output_path), output)
 
     # Write back to history for cross-round dedup in future sessions
     if deduped:
@@ -81,9 +78,7 @@ def dedup_defects(session_dir: str) -> dict:
             "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
         try:
-            os.makedirs(os.path.dirname(history_file), exist_ok=True)
-            with open(history_file, "w", encoding="utf-8") as f:
-                json.dump(updated_history, f, indent=2)
+            write_json(history_file, updated_history)
         except OSError:
             pass  # Non-fatal — dedup history write failure shouldn't block pipeline
 

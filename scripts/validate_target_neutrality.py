@@ -20,9 +20,9 @@ import os
 import re
 import sys
 
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+from _pipeline_utils import setup_encoding
+
+setup_encoding()
 
 
 # DETECTION-ONLY — 不用于生成。高置信度稳定指纹（默认端口、核心路径前缀、过滤关键字、响应键访问语法）。

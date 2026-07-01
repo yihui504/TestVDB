@@ -18,20 +18,13 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
+from _pipeline_utils import read_json, setup_encoding
+from debate_record import FinalVerdict
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _read_json(path: str) -> dict[str, Any] | None:
-    """Read a JSON file, return None on any failure."""
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return None
 
 
 def _safe_get(d: dict | None, *keys: str, default: Any = "") -> Any:
@@ -122,7 +115,7 @@ def reconstruct(session_dir: str) -> dict[str, Any]:
 
     # 1. pipeline_state.json (primary state source)
     ps_path = os.path.join(session_dir, "pipeline_state.json")
-    ps = _read_json(ps_path)
+    ps = read_json(ps_path)
     if ps is None:
         result["status"] = "no_pipeline_state"
         result["errors"].append(f"pipeline_state.json not found at {ps_path}")
@@ -140,13 +133,13 @@ def reconstruct(session_dir: str) -> dict[str, Any]:
     global_state = ps.get("global_state", {})
 
     # 2. mine_state.json
-    ms = _read_json(os.path.join(session_dir, "mine_state.json"))
+    ms = read_json(os.path.join(session_dir, "mine_state.json"))
     defects_count = len(_safe_get(ms, "defects", default=[]))
     pipeline_state_str = _safe_get(ms, "pipeline_state", default="unknown")
 
     # 3. experience_handoff.json
     eh_path = os.path.join(session_dir, "experience_handoff.json")
-    eh = _read_json(eh_path)
+    eh = read_json(eh_path)
     key_learnings = _safe_get(eh, "key_learnings", default=[])
     rejection_patterns = _safe_get(eh, "rejection_patterns", default=[])
     high_value_endpoints = _safe_get(eh, "high_value_endpoints", default=[])
@@ -154,13 +147,13 @@ def reconstruct(session_dir: str) -> dict[str, Any]:
     next_action = _safe_get(eh, "next_action", default="")
 
     # 4. coverage.json
-    cov = _read_json(os.path.join(session_dir, "coverage.json"))
+    cov = read_json(os.path.join(session_dir, "coverage.json"))
     overall_coverage = _safe_get(cov, "overall_coverage_pct", default=0.0)
     core_crud_coverage = _safe_get(cov, "core_crud_coverage_pct", default=0.0)
 
     # 5. structured_contract.json — summary + target_reference 速查表（组件 C）
     contract_path = os.path.join(session_dir, "structured_contract.json")
-    contract = _read_json(contract_path)
+    contract = read_json(contract_path)
     endpoint_count = 0
     constraint_count = 0
     endpoint_cheatsheet: list[dict[str, str]] = []
@@ -189,7 +182,7 @@ def reconstruct(session_dir: str) -> dict[str, Any]:
     # 6. threat_model.json (summary, if exists)
     project_root = _safe_get(ps, "project_root", default="")
     tm_path = os.path.join(project_root, "intelligence", target, "threat_model.json")
-    tm = _read_json(tm_path)
+    tm = read_json(tm_path)
     blindspot_count = 0
     priority_areas: list[str] = []
     if tm:
@@ -199,7 +192,27 @@ def reconstruct(session_dir: str) -> dict[str, Any]:
         areas = _safe_get(tm, "attack_surface", "high_priority_areas", default=[])
         priority_areas = [a.get("area", "") for a in areas if isinstance(a, dict)]
 
-    # 7. Termination condition check
+    # 7. final_verdict.json (ADR-0005 — typed access via debate_record)
+    debate_verdict = None
+    try:
+        debate_verdict = FinalVerdict.from_file(session_dir)
+    except (FileNotFoundError, ValueError):
+        pass  # not yet generated (early phases)
+
+    defect_summary = {}
+    if debate_verdict:
+        ds = debate_verdict.summary()
+        defect_summary = {
+            "total_judged": ds["total"],
+            "endorsed": ds["endorsed"],
+            "rejected": ds["rejected"],
+            "grades": ds["grades"],
+            "discrepancies": len(debate_verdict.discrepancies()),
+        }
+
+    result["defect_verdict"] = defect_summary
+
+    # 8. Termination condition check
     consecutive_no_defect = global_state.get("consecutive_no_defect_rounds", 0)
     total_defects = global_state.get("total_defects_confirmed", defects_count)
     min_defects = ps.get("min_defects", 1)
@@ -413,9 +426,7 @@ def format_json(data: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    # Ensure UTF-8 output on Windows (cp1252 can't encode CJK characters)
-    if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    setup_encoding()
 
     parser = argparse.ArgumentParser(
         description="Reconstruct TestVDB agent context from disk state files."

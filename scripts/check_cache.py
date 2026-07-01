@@ -18,8 +18,9 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+from _pipeline_utils import setup_encoding
+
+setup_encoding()
 
 
 class CacheStatus(Enum):

@@ -19,6 +19,8 @@ Usage:
     python scripts/novelty_gate.py --session-dir <path> [--github-token <token>]
 """
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
@@ -32,6 +34,8 @@ from typing import Any, Optional, Dict, List
 # Add scripts directory to path for imports
 SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
+
+from _pipeline_utils import setup_encoding
 
 try:
     from github_search import REPO_MAP, _cache_path, _read_cache, _write_cache
@@ -574,11 +578,13 @@ def generate_final_verdict(
             "gate_evidence_url": gate_result.get("evidence_url", ""),
             "endorsement": gate_result.get("endorsement", False),
             "endorsement_reason": gate_result.get("endorsement_reason", ""),
-            # discrepancy = judge leaned NOVEL/NOVEL_SIMILAR but the gate rejected
-            # (the gate's value-add over the recall-biased judge).
+            # discrepancy = Triage leaned novel (new/new_similar) but the Gate rejected
+            # (the Gate's value-add over the recall-biased Triage).
+            # v2.3: Triage ratings are new/new_similar/already_reported/known_wontfix/unknown.
+            # Legacy data may use "NOVEL" / "NOVEL_SIMILAR" — also handled.
             "judge_discrepancy": (
-                "NOVEL" in str(judge_novelty).upper()
-                and gate_result.get("grade") != "NOVEL"
+                str(judge_novelty).lower() in ("new", "new_similar", "novel", "novel_similar")
+                and gate_result.get("grade") not in ("NOVEL",)
             ),
         }
 
@@ -648,7 +654,5 @@ def main():
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    setup_encoding()
     main()
