@@ -1,6 +1,8 @@
 
 #!/usr/bin/env python3
 """L1 Mechanical Gate — zero-LLM false positive filter (ADR-0006 Check Protocol)."""
+from __future__ import annotations
+
 import json, os, re, sys
 from pathlib import Path
 from typing import Optional
