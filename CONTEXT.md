@@ -86,3 +86,21 @@ _Avoid_: intelligence（那是本地缓存目录）, model（泛）
 **Self-archive**:
 本工具历史生成的 issue 草稿存档（`issues/`）。Gate 优先查它——自家曾报过的是最强 dup 源（实证：weaviate `dynamicEfMin>Max` 被判 NOVEL，实为作者自家提交的 #11399）。
 _Avoid_: local history, cache
+
+## 流水线基础设施 (v2.3.0, ADR-0004~0007)
+
+**Pipeline State** (`scripts/pipeline_state.py`):
+流水线状态机深度模块。拥有 `pipeline_state.json` 的全部读写权——11 个 phase 的硬编码 transition map、`advance()`/`mutate()`/`mark_done()` 三个 mutation 方法、WHITELIST 限制的全局状态更新。CLI 版本供 `mine.md` Bash 步骤调用。
+_Avoid_: mine state, pipeline config
+
+**Debate Record** (`scripts/debate_record.py`):
+`final_verdict.json` 的 schema owner。`FinalVerdict.from_file()` 提供带验证的加载，`DefectVerdict` (16 typed fields) 携带门控分级与背书数据。消费者（reporter / reconstruct_context）导入此模块而非手写 `json.load` + 防御性 `.get()`。
+_Avoid_: verdict reader, debate loader
+
+**Check Protocol** (`scripts/checks.py`):
+L1 机械检查的形式化接口。`Check` Protocol 定义 `check(candidate, log_path, ctx) → Verdict | None`，`CheckContext` 携带可选依赖（contract / db_url / target）。`verify_live_l1.py` 的 11 个检查全部转为协议类，显式 `ALL_CHECKS` 注册表。
+_Avoid_: verification pipeline, filter chain
+
+**Pipeline Utils** (`scripts/_pipeline_utils.py`):
+共享脚本基础设施（下划线前缀 = 内部模块）。`setup_encoding()` / `read_json()` / `write_json()` / `debate_log_path()` / `find_log()` / `is_done()` / `touch_done()`——消除了 14 个脚本中的重复样板。
+_Avoid_: script helpers, common utils
