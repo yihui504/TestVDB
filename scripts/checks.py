@@ -16,6 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Optional, Protocol
 
+from _pipeline_utils import find_log as _find
+
 
 @dataclass
 class Verdict:
@@ -85,8 +87,6 @@ def refuted_candidates(
     Only includes candidates that had at least one REFUTED verdict.
     UNCERTAIN-only candidates are not included (they go to L2).
     """
-    from _pipeline_utils import find_log as _find
-
     refuted: dict[str, list[Verdict]] = {}
 
     for candidate in candidates:

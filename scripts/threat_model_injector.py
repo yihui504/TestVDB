@@ -2,12 +2,13 @@
 # -*- coding: utf-8 -*-
 """Threat Model Injector v2.1"""
 
-import io
 import json
 import os
 import sys
 from pathlib import Path
 from typing import Optional, Dict
+
+from _pipeline_utils import setup_encoding
 
 VALID_TARGETS = {"milvus", "qdrant", "weaviate", "pgvector", "meilisearch", "chroma"}
 
@@ -393,10 +394,7 @@ def generate_judge_evidence_injection(tm):
 
 
 def main():
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
-    else:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    setup_encoding()
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("target_db", choices=sorted(VALID_TARGETS))

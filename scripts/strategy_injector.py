@@ -21,6 +21,8 @@ import json
 import os
 import sys
 
+from _pipeline_utils import setup_encoding
+
 
 PROJECT_ROOT = os.environ.get("PROJECT_ROOT", os.getcwd())
 REGISTRY_DIR = os.path.join(PROJECT_ROOT, "strategy_registry")
@@ -107,11 +109,7 @@ def generate_injection_text(strategies: list, target_db: str) -> str:
 
 
 def main():
-    import io
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8')
-    else:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    setup_encoding()
 
     import argparse
 

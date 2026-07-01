@@ -26,6 +26,8 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
+from _pipeline_utils import setup_encoding
+
 
 PROJECT_ROOT = os.environ.get("PROJECT_ROOT", os.getcwd())
 REGISTRY_DIR = os.path.join(PROJECT_ROOT, "strategy_registry")
@@ -199,11 +201,7 @@ def merge_strategy(new_strategy: dict, existing: dict) -> dict:
 
 
 def main():
-    import io
-    if hasattr(sys.stdout, 'reconfigure'):
-        sys.stdout.reconfigure(encoding='utf-8')
-    else:
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    setup_encoding()
 
     if len(sys.argv) < 3:
         print("Usage: python scripts/strategy_extractor.py <session_dir> <target_db>")
