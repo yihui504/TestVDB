@@ -20,14 +20,25 @@ import os
 def _plugin_root():
     """Determine plugin root directory.
 
-    Priority: TESTVDB_PLUGIN_ROOT env var > script location inference.
-    The env var approach is preferred because it doesn't depend on file location.
+    Priority:
+    1. TESTVDB_PLUGIN_ROOT env var
+    2. _pipeline_utils.plugin_root() — canonical walk-up implementation (ADR-0007)
+    3. Fallback: script-relative inference (2 levels up from scripts/)
     """
     root = os.environ.get("TESTVDB_PLUGIN_ROOT", "")
     if root and os.path.isdir(root):
         return root
-    # Fallback: infer from script location (assumes scripts/_session_utils.py
-    # is exactly 2 levels below plugin root)
+
+    # Delegate to the canonical _pipeline_utils implementation if available
+    try:
+        from _pipeline_utils import plugin_root as _canonical_root
+        result = _canonical_root()
+        if result is not None:
+            return str(result)
+    except ImportError:
+        pass
+
+    # Fallback: infer from script location (works regardless of cwd)
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 

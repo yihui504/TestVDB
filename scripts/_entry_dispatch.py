@@ -20,14 +20,11 @@ def _plugin_root() -> str:
     root = os.environ.get("TESTVDB_PLUGIN_ROOT", "")
     if root and os.path.isdir(root):  # env 显式指定即信；mine.md 校验仅用于 fallback 推断防漂移
         return root
-    cur = os.getcwd()
-    for _ in range(7):
-        if os.path.isfile(os.path.join(cur, "commands", "mine.md")):
-            return cur
-        parent = os.path.dirname(cur)
-        if parent == cur:
-            break
-        cur = parent
+    # Delegate to canonical _pipeline_utils.plugin_root() (ADR-0007)
+    from _pipeline_utils import plugin_root
+    result = plugin_root()
+    if result is not None:
+        return str(result)
     return ""
 
 
