@@ -3,7 +3,7 @@ name: issue-miner
 description: 历史 Issue 挖掘 Agent — 爬取目标仓库的 Issues 和已合并 PR，构建原始缺陷语料库。
 model: sonnet
 dataAccess: raw
-maxTurns: 45
+maxTurns: 300
 tools:
   - Bash
   - WebSearch

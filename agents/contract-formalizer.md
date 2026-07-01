@@ -3,7 +3,7 @@ name: contract-formalizer
 description: 将原始 API 知识文档转换为结构化的机器可读契约 JSON。
 model: sonnet
 dataAccess: redacted
-maxTurns: 18
+maxTurns: 300
 tools:
   - Bash
   - Read

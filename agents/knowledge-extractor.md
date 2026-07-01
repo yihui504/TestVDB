@@ -3,7 +3,7 @@ name: knowledge-extractor
 description: 从官方文档中提取目标向量数据库的 API 知识和约束信息。
 model: sonnet
 dataAccess: raw
-maxTurns: 30
+maxTurns: 300
 tools:
   - Bash
   - WebSearch

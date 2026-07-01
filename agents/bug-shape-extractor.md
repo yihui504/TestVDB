@@ -3,7 +3,7 @@ name: bug-shape-extractor
 description: Bug Shape 提取 Agent — 对历史 Issues 三分类并提取根因模式和开发者认知边界。
 model: opus
 dataAccess: redacted
-maxTurns: 40
+maxTurns: 300
 tools:
   - Read
   - Write

@@ -3,7 +3,7 @@ name: docker-executor
 description: Docker 沙箱执行 Agent — 在独立容器中运行攻击脚本并收集结果。
 model: sonnet
 dataAccess: redacted
-maxTurns: 5
+maxTurns: 300
 tools:
   - Bash
   - Write

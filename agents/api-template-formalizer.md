@@ -3,7 +3,7 @@ name: api-template-formalizer
 description: 从 raw_knowledge.md 提炼聚焦的 API 语法模板（请求体/响应结构），供攻击 Agent 按需消费。
 model: sonnet
 dataAccess: redacted
-maxTurns: 18
+maxTurns: 300
 tools:
   - Bash
   - Read

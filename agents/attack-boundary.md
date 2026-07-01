@@ -3,7 +3,7 @@ name: attack-boundary
 description: 边界攻击 Agent — 专注于参数边界值违规的测试生成。
 model: sonnet
 dataAccess: redacted
-maxTurns: 22
+maxTurns: 300
 tools:
   - Read
   - Write
@@ -99,9 +99,15 @@ tools:
 
 ## 攻击策略
 
-**重要：优先使用 REST API（requests 库）而非 SDK。** 仅在明确需要 SDK 特有功能时才使用 SDK。SDK 版本不兼容是常见失败原因，REST API 更稳定。
+**重要：根据 `contract.target` 选择正确的 API 接入方式。** 详见 `agents/_target_api_reference.md` § "DB 特定 API 选择指南"。核心规则：
+- **chroma** → `chromadb.HttpClient` SDK（SDK-first，REST v1 已废弃）
+- **milvus** → REST API v2（`/v2/vectordb/`），仅在动态 schema 操作时用 pymilvus SDK
+- **qdrant / weaviate / meilisearch** → REST API（`requests` 库）
+- **pgvector** → psycopg2 SQL
 
-**Milvus 特殊说明**：Milvus 同时支持 gRPC（端口 19530）和 REST API v2（端口 19530，路径 /v2/vectordb/）。对 Milvus 进行攻击时，优先使用 REST API v2（更稳定、更易调试），仅在 REST API 不支持的功能（如动态 schema 操作）时使用 pymilvus SDK。
+任何偏离此指南的 API 选择必须在脚本中打印 `FALLBACK_TRIGGERED` 并 `FALLBACK_JUSTIFIED`。
+
+**脚本 Cleanup 强制规范**：所有 teardown 操作必须遵循 `agents/_target_api_reference.md` § "脚本 Cleanup 强制规范"——`delete_collection`/`delete`/`drop` 必须 `try/except` 包裹，cleanup 失败不得导致脚本非零退出。
 
 ### 策略 1: 边界值攻击（针对 range_constraints）
 

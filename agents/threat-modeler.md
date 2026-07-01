@@ -3,7 +3,7 @@ name: threat-modeler
 description: 威胁模型建模 Agent — 基于历史缺陷数据构建 Threat Model 和 Developer Cognitive Blindspot 模型。
 model: opus
 dataAccess: redacted
-maxTurns: 35
+maxTurns: 300
 tools:
   - Read
   - Write

@@ -3,7 +3,7 @@ name: judge-severity
 description: 严重性评估 Agent — 按照四类标准评估缺陷的严重程度和用户影响。
 model: sonnet
 dataAccess: verified_only
-maxTurns: 12
+maxTurns: 300
 tools:
   - Read
   - Write

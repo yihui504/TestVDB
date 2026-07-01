@@ -3,7 +3,7 @@ name: judge-doc
 description: 验证候选缺陷的文档引用可达性、版本匹配、内容一致性和端点路径精确性。
 model: sonnet
 dataAccess: raw
-maxTurns: 20
+maxTurns: 300
 tools:
   - Read
   - Write

@@ -3,7 +3,7 @@ name: dev-reviewer
 description: 开发者视角终审 Agent — 模拟目标 DB 维护者，对初审确认的缺陷做独立复现与证伪，是缺陷真伪的唯一出口。消费 developer_cognition.json。
 model: opus
 dataAccess: verified_only
-maxTurns: 20
+maxTurns: 300
 tools:
   - Read
   - Write

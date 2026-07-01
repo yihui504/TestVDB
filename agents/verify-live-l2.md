@@ -3,7 +3,7 @@ name: verify-live-l2
 description: L2 语义闸门 — 对 L1 无法裁决的候选缺陷执行 Docker 实测验证。
 model: sonnet
 dataAccess: redacted
-maxTurns: 5
+maxTurns: 300
 tools:
   - Read
   - Write

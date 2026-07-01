@@ -3,7 +3,7 @@ name: judge-evidence
 description: 证据审查 Agent — 按可复现性、隔离性和完整性标准审查缺陷证据。
 model: sonnet
 dataAccess: verified_only
-maxTurns: 15
+maxTurns: 300
 tools:
   - Write
   - Bash

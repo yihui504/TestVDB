@@ -3,7 +3,7 @@ name: judge-novelty
 description: 新颖性初筛 Agent (Novelty Triage) — 对候选缺陷做初步新颖性搜索和标注，不做 kill 决策。
 model: sonnet
 dataAccess: raw
-maxTurns: 22
+maxTurns: 300
 tools:
   - Bash
   - WebSearch

@@ -3,7 +3,7 @@ name: orchestrator
 description: TestVDB 缺陷挖掘流水线主编排器。协调全部 16 个 Agent 完成从战略情报采集到缺陷报告的全流程。
 model: opus
 dataAccess: redacted
-maxTurns: 120
+maxTurns: 300
 tools:
   - Read
   - Write

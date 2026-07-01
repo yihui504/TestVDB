@@ -3,7 +3,7 @@ name: reporter-mre
 description: MRE 脚本生成 Agent — 为确认的缺陷生成自包含的最小可复现脚本。
 model: sonnet
 dataAccess: verified_only
-maxTurns: 12
+maxTurns: 300
 tools:
   - Write
   - Read
