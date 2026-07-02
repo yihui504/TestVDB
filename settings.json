@@ -49,11 +49,6 @@
     "min_confidence_for_injection": 0.6,
     "auto_deprecate_after_failures": 3
   },
-  "fan_out": {
-    "enabled": true,
-    "seeds_per_agent": 3,
-    "profiles": ["priority_first", "coverage_gap", "rejection_pattern"]
-  },
   "ai_failure_check": {
     "enabled": true,
     "halt_on": ["M4", "M7"],

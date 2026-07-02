@@ -517,8 +517,6 @@ Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target
   prompt="按照 agents/attack-semantic.md 规范...（同上格式）{THREAT_MODEL_ATTACK}")
 ```
 
-**Fan-Out 模式**（fan_out.enabled=true）：每个 Agent 使用 3 种 focus_profile 各派发一次（共 9 个 Agent）。详见 `agents/orchestrator.md`。
-
 **验证产出**：
 ```bash
 ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l

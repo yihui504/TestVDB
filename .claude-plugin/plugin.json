@@ -45,7 +45,6 @@
     "./agents/judge-doc.md",
     "./agents/reporter.md",
     "./agents/reporter-mre.md",
-    "./agents/model-test.md",
     "./agents/dev-reviewer.md",
     "./agents/verify-live-l2.md"
   ],
