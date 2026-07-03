@@ -107,6 +107,10 @@ Turn 5: Bash  ls -la ${SESSION_DIR}/defects/defect-*.md
 ## Impact Analysis
 {description of user impact}
 
+## Original Execution Log
+- Log: `output_<defect_id>.log`（原 attack script 的执行 log，含 VERDICT 行 — ⛔ **必须包含**，供 verify_defects.py 机械验证 defect 真实性；defect_id 从 confirmed candidate 取，如 `boundary_add_nan_embeddings_001` → `output_boundary_add_nan_embeddings_001.log`）
+- Script: `<defect_id>.py`（原 attack script，位于 `boundary_scripts/` / `state_scripts/` / `scripts/` 之一）
+
 ## MRE
 - Script: `defect-{N}-script.py`
 - Run: `python defect-{N}-script.py`
