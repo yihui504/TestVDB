@@ -22,21 +22,24 @@ from _pipeline_utils import setup_encoding
 
 setup_encoding()
 
-# summary.md 里"声称 defect 数"的提取 pattern（按可靠性排序）
-_CLAIM_PATTERNS = (
-    r"defects?\s*reported[^\d\n|]*\|?\s*(\d+)",                       # "| Defects Reported | 5 |"
-    r"(?:total\s+)?defects?\s*confirmed[^\d\n|]*\|?\s*(\d+)",         # "Total Defects Confirmed: 5"
-    r"confirmed\s+defects?[^\d\n|]*\|?\s*(\d+)",
-    r"(\d+)\s*(?:confirmed|defects?\s+confirmed)",                    # "5 confirmed"
-)
+# ponytail: claimed_count 取关键词行的**最后一个**数字（避免中间数字误匹配）。
+# 旧 regex pattern 陷阱：`| Defects Confirmed (Debate Stage 2) | 8 |` 的 "Stage 2" 被
+# `[^\d\n|]*\|?\s*(\d+)` 捕获为 count=2（错误，应 8）。根因：pattern 允许数字前有非数字文本，
+# 贪婪匹配到第一个数字。修复：按行扫描关键词，取该行最后一个数字（表格 cell 的 count）。
+_CLAIM_KEYWORDS = ("defects reported", "defects confirmed", "confirmed defects")
 
 
 def claimed_count(summary_text: str) -> int | None:
-    """从 summary.md 提取声称的 confirmed defect 数。多 pattern fallback。"""
-    for pat in _CLAIM_PATTERNS:
-        m = re.search(pat, summary_text, re.IGNORECASE)
-        if m:
-            return int(m.group(1))
+    """从 summary.md 提取声称的 confirmed defect 数。
+
+    取关键词行的最后一个数字，避免 "(Debate Stage 2)" 等中间数字误匹配。
+    """
+    for kw in _CLAIM_KEYWORDS:
+        for line in summary_text.split("\n"):
+            if kw in line.lower():
+                nums = re.findall(r"\d+", line)
+                if nums:
+                    return int(nums[-1])  # 最后一个数字（表格 cell 的 count）
     return None
 
 
@@ -88,6 +91,16 @@ def _self_check() -> None:
             (Path(td) / "defects" / f"defect-{i+1}.md").write_text("x", encoding="utf-8")
         r = run(td)
         assert r["status"] == "pass", "5/5 must pass"
+        # Stage 2 陷阱：中间数字 "Stage 2" 不应被捕获为 count（实战 bug 2026-07-03）
+        (Path(td) / "summary.md").write_text(
+            "# S\n| Defects Confirmed (Debate Stage 2) | 8 |\n", encoding="utf-8")
+        os.makedirs(Path(td) / "defects_2", exist_ok=True)  # actual_count 仍读 defects/
+        # 清空 defects/ 重置 actual=0，验证 claimed 取最后数字（8）而非 "Stage 2" 的 2
+        for f in glob.glob(str(Path(td) / "defects" / "defect-*.md")):
+            os.remove(f)
+        r = run(td)
+        assert r["details"]["claimed"] == 8, \
+            f"Stage 2 trap: claimed must be 8 (last number), got {r['details']['claimed']}"
     print("self-check OK")
 
 
