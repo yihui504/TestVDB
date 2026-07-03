@@ -166,6 +166,14 @@ echo "[TestVDB] PROJECT_ROOT=$PROJECT_ROOT"
 自行检查 Docker/Python/磁盘/网络：
 ```bash
 python scripts/preflight.py
+# 按 target 设容器版本 env（避免 compose 默认旧版本，如 chroma 0.6.3 导致 mine 1.5.9 时 server 版本不匹配 scripts API）
+# image tag 格式 per-target：chroma/weaviate 不带 v（1.5.9），milvus/qdrant 带 v（v2.4.0）
+case "$TARGET" in
+  chroma)    export CHROMA_VERSION="${VERSION#v}" ;;
+  milvus)    export MILVUS_VERSION="$VERSION" ;;
+  qdrant)    export QDRANT_VERSION="$VERSION" ;;
+  weaviate)  export WEAVIATE_VERSION="${VERSION#v}" ;;
+esac
 docker compose -f docker/crawl4ai.yml up -d --wait 2>/dev/null || true
 ```
 

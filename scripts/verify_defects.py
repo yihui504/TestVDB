@@ -20,7 +20,7 @@ import json
 import re
 import glob
 
-from _pipeline_utils import setup_encoding, read_json
+from _pipeline_utils import setup_encoding, read_json, find_logs
 
 setup_encoding()
 
@@ -130,42 +130,36 @@ def verify_session(session_dir, target="unknown"):
         rings = check_ring_completeness(content)
         missing_rings = [r for r, present in rings.items() if not present]
 
-        # 2. Script error check (look for associated log)
-        log_basename = None
-        log_match = re.search(r"output_([\w-]+)\.log", content)
-        if log_match:
-            log_basename = f"output_{log_match.group(1)}.log"
-        # Also check with _diag suffix
-        if log_basename is None:
-            diag_match = re.search(r"Log:\s*`?output_([a-z_0-9]+)\.log", content)
-            if diag_match:
-                log_basename = f"output_{diag_match.group(1)}.log"
-        # Derive from Source Script (debate_logs/{name}.py -> output_{name}.log)
-        # Handles reporter 输出引用 "Source Script" 而非直接 output_*.log 的情况
-        if log_basename is None:
-            script_match = re.search(r"debate_logs/([\w-]+)\.py", content)
-            if script_match:
-                log_basename = f"output_{script_match.group(1)}.log"
+        # 2. 定位关联 log — 统一提取 script_name，用 find_logs 精确匹配
+        # ponytail: 修复 reporter 引用名与实际 output_*.log 不匹配导致 5/5 误报 "No VERDICT line"（设计 §4.1）
+        script_name = None
+        for pat in (
+            r"output_([\w-]+)\.log",                                      # 直接 output_*.log 引用
+            r"Log:\s*`?output_([a-z_0-9]+)\.log",                         # "Log:" 字段
+            r"debate_logs/([\w-]+)\.py",                                  # debate_logs/{name}.py
+            r"(?:boundary_scripts|state_scripts|scripts)/([\w-]+)\.py",   # 其他脚本目录
+        ):
+            m = re.search(pat, content)
+            if m:
+                script_name = m.group(1)
+                break
 
         script_error = False
         log_verdicts = []
         log_path = None
-        if log_basename:
-            log_path = os.path.join(session_dir, log_basename)
-            log_path_done = log_path + ".done"
-            # 兼容 executor 的 output_*.log.done 命名（优先 .log，fallback .log.done）
-            if not os.path.exists(log_path) and os.path.exists(log_path_done):
-                log_path = log_path_done
-            script_error = extract_script_errors_from_log(log_path)
-            log_verdicts = extract_verdict_from_log(log_path)
+        if script_name:
+            # find_logs 精确匹配 output_*{script_name}*.log，空 list 才算找不到
+            candidates = find_logs(session_dir, script_name)
+            if candidates:
+                log_path = str(candidates[0])
+                # 兼容 executor 的 output_*.log.done 命名（文件不存在时看 .done）
+                if not os.path.exists(log_path) and os.path.exists(log_path + ".done"):
+                    log_path = log_path + ".done"
+            if log_path:
+                script_error = extract_script_errors_from_log(log_path)
+                log_verdicts = extract_verdict_from_log(log_path)
 
         # 2.5 方法论陷阱检测（pgvector v0.8.3 实战：defect-1/2/5 类假阳性根源）
-        script_name = None
-        sm = re.search(r"(boundary_scripts|state_scripts|scripts|debate_logs)/([\w-]+)\.py", content)
-        if sm:
-            script_name = sm.group(2)
-        elif log_basename and log_basename.startswith("output_"):
-            script_name = log_basename[len("output_"):-len(".log")]
         script_path = find_script(session_dir, script_name) if script_name else None
         # Task 4b fix: Handle None script_path safely
         script_content = safe_read(script_path) or "" if script_path else ""
@@ -252,6 +246,30 @@ def write_review_md(session_dir, verification_result, target):
     return review_path
 
 
+def write_review_json(session_dir, verification_result, target):
+    """落盘结构化 defect_review.json — 供 reporter retry 时按 defect 精确读取（设计 §3.2）。
+
+    每条 {id, file, status, reason}；reporter retry 只重写 status=NEEDS_IMPROVEMENT 的项，
+    不动 CONFIRMED；FALSE_POSITIVE 的项由调用方删除对应 defect-N.md。
+    """
+    results = verification_result.get("results", [])
+    entries = [
+        {
+            "id": r["file"].replace("defect-", "").replace(".md", ""),
+            "file": r["file"],
+            "status": r["status"],
+            "reason": r["reason"],
+        }
+        for r in results
+    ]
+    out = {"target": target, "total": len(results), "defects": entries}
+    path = os.path.join(session_dir, "defect_review.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+    print(f"defect_review.json written to {path}")
+    return path
+
+
 # ── CLI ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -271,7 +289,7 @@ if __name__ == "__main__":
 
     if not os.path.isdir(session_dir):
         print(f"ERROR: Session directory not found: {session_dir}")
-        sys.exit(2)
+        sys.exit(4)  # 4=启动错误（避开 exit 2=FALSE_POSITIVE 语义）
 
     result = verify_session(session_dir, target)
 
@@ -280,11 +298,19 @@ if __name__ == "__main__":
         sys.exit(3)  # No data to verify — caller should distinguish from PASS
 
     write_review_md(session_dir, result, target)
+    write_review_json(session_dir, result, target)
 
-    confirmed = sum(1 for r in result.get("results", []) if r["status"] == "CONFIRMED")
-    false_pos = sum(1 for r in result.get("results", []) if r["status"] == "FALSE_POSITIVE")
-    print(f"\nDone: {confirmed} CONFIRMED, {false_pos} FALSE_POSITIVE, "
-          f"{len(result['results']) - confirmed - false_pos} NEEDS_IMPROVEMENT")
+    statuses = [r["status"] for r in result.get("results", [])]
+    confirmed = sum(1 for s in statuses if s == "CONFIRMED")
+    false_pos = sum(1 for s in statuses if s == "FALSE_POSITIVE")
+    needs_imp = sum(1 for s in statuses if s == "NEEDS_IMPROVEMENT")
+    print(f"\nDone: {confirmed} CONFIRMED, {false_pos} FALSE_POSITIVE, {needs_imp} NEEDS_IMPROVEMENT")
 
-    # Exit 0 always — verification is advisory, not blocking
+    # Exit code 分级（设计 §3.2 / §4.2）：
+    #   0 = 全 CONFIRMED | 1 = 有 NEEDS_IMPROVEMENT | 2 = 有 FALSE_POSITIVE（优先于 1）
+    #   3 = 无数据 | 4 = session_dir 不存在
+    if false_pos > 0:
+        sys.exit(2)
+    if needs_imp > 0:
+        sys.exit(1)
     sys.exit(0)
