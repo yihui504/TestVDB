@@ -32,7 +32,7 @@ tools:
 
 ```
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_doc.json
-Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_aggregation.json（如有，获取 evidence 投票结果）
+Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_evidence.json（如有，获取 evidence 投票结果 — evidence 先完成有 .done；⛔ 勿读 stage2_aggregation.json，它在 severity 之后产生，读它会循环依赖导致 severity 产出空 {}）
 Turn 2-3: 逐个评估 severity（Top-5 候选，复杂缺陷可用至 5 turns）
 Turn 3-4: Write ${SESSION_DIR}/debate_logs/stage2_severity.json
 Turn 4: Bash  touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done

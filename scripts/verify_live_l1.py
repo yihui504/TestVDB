@@ -7,7 +7,7 @@ import json, os, re, sys
 from pathlib import Path
 from typing import Optional
 
-from _pipeline_utils import setup_encoding, read_json, write_json, debate_log_path, find_log
+from _pipeline_utils import setup_encoding, read_json, write_json, debate_log_path, find_logs
 from checks import Check, CheckContext, Verdict
 
 setup_encoding()
@@ -171,17 +171,91 @@ class ByDesignClampCheck:
         return None
 
 
-# ── Check registry (ADR-0006 — ordered by specificity) ────────────
+# ── Chroma / HTTP-layer checks (Phase 1a, 设计 §4.3) ───────────────
 
+class ExceptionSubclassCheck:
+    """契约声称 expected_exception，实抛 actual — 若 actual 是 expected 的子类，
+    catch(expected) 必捕获 actual，属合法精确化 → REFUTE（设计 §4.3）。
+    通用：_resolve_exception 从内建 + 常见 DB 库动态 import；host 未装的库返回 None。"""
+    def check(self, candidate: dict, log_path: str, ctx: CheckContext) -> Optional[Verdict]:
+        c = _content(log_path)
+        # actual: "Exception: TypeError: ..." / "TypeError: ..." / traceback
+        m = re.search(r"(?:exception|error)[:\s]\s*([A-Z]\w*(?:Error|Exception))[:\s]", c)
+        if not m:
+            return None
+        actual = m.group(1)
+        expected = candidate.get("expected_exception", "") if isinstance(candidate, dict) else ""
+        if not expected:
+            return None  # ponytail: 无 expected 契约信息，不臆测
+        a = _resolve_exception(actual)
+        e = _resolve_exception(expected)
+        if not (a and e):
+            return None  # host 未装目标库，无法 issubclass（Phase 1b 可接 docker exec）
+        if issubclass(a, e):
+            return Verdict("REFUTED",
+                f"{actual} is subclass of {expected} — catch({expected}) captures {actual}, legal refinement",
+                "exception_subclass")
+        return None  # 非子类 = 真契约偏差，留 L2 裁决
+
+
+# 通用异常解析：从内建 + 常见 DB 库动态 import。
+# ponytail: 新 DB 只需在 _DB_EXCEPTION_MODULES 加一行模块名，无需改 check 逻辑
+_DB_EXCEPTION_MODULES = (
+    "chromadb.errors", "pymilvus.exceptions",
+    "qdrant_client.http.models", "weaviate.exceptions",
+    "psycopg2.errors", "redis.exceptions",
+)
+
+
+def _resolve_exception(name: str):
+    """解析异常类。先内建，再常见 DB 库。失败返回 None。"""
+    import builtins
+    obj = getattr(builtins, name, None)
+    if isinstance(obj, type) and issubclass(obj, BaseException):
+        return obj
+    for mod in _DB_EXCEPTION_MODULES:
+        try:
+            m = __import__(mod, fromlist=[name])
+            obj = getattr(m, name, None)
+            if isinstance(obj, type) and issubclass(obj, BaseException):
+                return obj
+        except (ImportError, AttributeError):
+            continue
+    return None
+
+
+class HttpLayerConfusionCheck:
+    """log 含 HTTP 4xx + VERDICT DEFECT_FOUND → 脚本路由错（endpoint 不存在），
+    非 DB 行为缺陷（设计 §4.3）。target 无关，任何 HTTP API DB 都适用。"""
+    def check(self, candidate: dict, log_path: str, ctx: CheckContext) -> Optional[Verdict]:
+        c = _content(log_path)
+        if re.search(r"status[:\s]*40[0-9]", c) and "defect_found" in c:
+            return Verdict("REFUTED",
+                "HTTP 4xx + DEFECT_FOUND verdict — script hit wrong endpoint (routing bug), not DB behavior",
+                "http_layer_confusion")
+        return None
+
+
+# ── Check registry — 每个 check 自描述适用性（返回 None = 不适用）────────
+# ponytail: 通用性 — 不按 target 硬分组，新 DB 无需注册。
+# check 自身通过 log/contract 特征决定是否触发（找不到特征 → None，自动跳过）。
 ALL_CHECKS: list[Check] = [
-    PostgresAbortedCheck(),
+    # 异常契约类（任何抛异常的 DB）
+    ExceptionSubclassCheck(),
+    # HTTP API 层（任何 HTTP 接口 DB：chroma/qdrant/milvus/weaviate）
+    HttpLayerConfusionCheck(),
+    # SQL 语法/约束（SQL DB：pgvector/PostgreSQL；非 SQL DB 的 log 无这些特征 → None）
     SyntaxErrorCheck(),
     ConstraintSelfViolationCheck(),
-    TypeDimensionConfusionCheck(),
-    GucSetTimingCheck(),
-    ArithmeticVerificationCheck(),
-    CrossTypeCastCheck(),
     NoIndexCheck(),
+    # 向量类型（向量 DB 通用）
+    TypeDimensionConfusionCheck(),
+    CrossTypeCastCheck(),
+    # PostgreSQL 特征（自描述：log 含 'transaction is aborted' 才触发）
+    PostgresAbortedCheck(),
+    GucSetTimingCheck(),
+    # 方法论陷阱（通用：算术/浮点格式/排序非确定性）
+    ArithmeticVerificationCheck(),
     FloatFormatCheck(),
     SameDistanceOrderingCheck(),
     ByDesignClampCheck(),
@@ -190,8 +264,23 @@ ALL_CHECKS: list[Check] = [
 
 # ── main ────────────────────────────────────────────────────────────
 
+def _load_candidates(agg: dict) -> list[dict]:
+    """兼容两种 aggregation schema：
+    - pgvector: {confirmed_defects: [...]}（list，每项有 script 字段）
+    - chroma:   {confirmed: {defect_id: {...}}}（dict，无 script 字段）
+    ponytail: chroma 的 confirmed dict 转成 list，defect_id 注入每项。"""
+    cds = agg.get("confirmed_defects")
+    if isinstance(cds, list):
+        return cds
+    confirmed = agg.get("confirmed")
+    if isinstance(confirmed, dict):
+        return [{"defect_id": did, **v} for did, v in confirmed.items()]
+    return []
+
+
 def verify_l1(session_dir, target="pgvector", db_url=None):
-    """Run all L1 mechanical checks against confirmed defects (ADR-0006 Check Protocol)."""
+    """Run L1 mechanical checks against confirmed defects (ADR-0006 Check Protocol).
+    通用：跑 ALL_CHECKS，每个 check 自描述适用性（返回 None = 不适用，新 DB 无需注册）。"""
     agg_path = debate_log_path(session_dir, "stage2_aggregation")
     if not agg_path.exists():
         return {"error": f"aggregation not found: {agg_path}"}
@@ -199,7 +288,7 @@ def verify_l1(session_dir, target="pgvector", db_url=None):
     agg = read_json(agg_path)
     if agg is None:
         return {"error": f"failed to read: {agg_path}"}
-    candidates = agg.get("confirmed_defects", [])
+    candidates = _load_candidates(agg)
 
     # load contract for constraint lookups
     contract = None
@@ -213,12 +302,18 @@ def verify_l1(session_dir, target="pgvector", db_url=None):
 
     ctx = CheckContext(contract=contract, target=target)
 
+    # 通用：跑所有 check，每个自描述适用性（不按 target 预过滤）
+    checks = ALL_CHECKS
+
     results = []
     for c in candidates:
-        log_path = find_log(session_dir, c.get("script", ""))
+        # find_logs 精确匹配（设计 §4.1 原则）：script 空 → 空 list → log_path=""
+        script = c.get("script", "")
+        log_candidates = find_logs(session_dir, script) if script else []
+        log_path = str(log_candidates[0]) if log_candidates else ""
         verdict, reasons = "UNCERTAIN", []
-        for check in ALL_CHECKS:
-            v = check.check(c, str(log_path) if log_path else "", ctx)
+        for check in checks:
+            v = check.check(c, log_path, ctx)
             if v is not None:
                 reasons.append(f"[{v.check_name}] {v.reason}")
                 if v.result == "REFUTED":
@@ -226,7 +321,7 @@ def verify_l1(session_dir, target="pgvector", db_url=None):
                     break  # first refutation is enough
         results.append({
             "defect_id": c.get("defect_id", "?"),
-            "script": c.get("script", ""),
+            "script": script,
             "verdict": verdict,
             "reasons": reasons,
             "original_confidence": c.get("confidence", 0),
@@ -237,7 +332,16 @@ def verify_l1(session_dir, target="pgvector", db_url=None):
         "refuted": sum(1 for r in results if r["verdict"] == "REFUTED"),
         "uncertain": sum(1 for r in results if r["verdict"] == "UNCERTAIN"),
     }
-    output = {"version": 2, "summary": summary, "results": results}
+    output: dict = {"version": 2, "summary": summary, "results": results}
+
+    # 覆盖率 warning（通用，决策 C=warn）：candidates>0 但 L1 一个都没 REFUTE → 可能覆盖率不足
+    # ponytail: 不再按 check 数比例（check 都跑，比例恒 100%）；改用"无命中"信号
+    if candidates and summary["refuted"] == 0:
+        output["coverage_warning"] = (
+            f"target={target}: {len(candidates)} candidates, 0 REFUTED — "
+            f"L1 未拦截任何候选，check 可能不覆盖此 target 的失效模式，依赖 L2 兜底"
+        )
+
     write_json(Path(session_dir) / "verify_live_l1.json", output)
     return output
 

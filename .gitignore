@@ -88,3 +88,4 @@ scripts/build_contract_qdrant.py
 *.tgz
 .session.env
 logs/
+.venv-verify/
