@@ -143,6 +143,39 @@ def check_docker_hub_token():
         print("[TestVDB] Docker Hub Token: WARNING - not set. Docker CLI commands (pull/manifest) work without token. Only Docker Hub REST API queries for tag listing may be rate-limited.")
 
 
+# DB 客户端检查（mine 时 host 跑 attack scripts 需要目标客户端；distroless 容器无 python）
+# ponytail: importlib.util.find_spec 不实际 import（无副作用），stdlib 即够
+_DB_CLIENTS = {
+    "chroma": ("chromadb", "chromadb"),
+    "milvus": ("pymilvus", "pymilvus"),
+    "qdrant": ("qdrant_client", "qdrant-client"),
+    "weaviate": ("weaviate", "weaviate-client"),
+    "pgvector": ("psycopg2", "psycopg2-binary"),
+    "meilisearch": ("meilisearch", "meilisearch"),
+}
+
+
+def check_db_clients():
+    """检查 host 是否装了支持 target 的 DB 客户端（mine 时 host 跑 scripts 需要）。
+
+    docker-executor 实战教训：distroless 镜像（chromadb/chroma:1.5.9 等）无 python，
+    必须用 host py + 客户端连容器 DB。缺客户端 → docker-executor agent 失败。
+    提前在 preflight 告知，而非跑到 docker-executor 才报错。
+    """
+    import importlib.util
+    print("[TestVDB] DB clients (host must have for mine):")
+    missing = []
+    for target, (module, pip) in _DB_CLIENTS.items():
+        ok = importlib.util.find_spec(module) is not None
+        status = "OK" if ok else f"MISSING (pip install {pip})"
+        print(f"[TestVDB]   {target}: {status}")
+        if not ok:
+            missing.append(target)
+    if missing:
+        joined = ", ".join(missing)
+        print(f"[TestVDB] DB clients: WARNING — {joined} missing; mine <target> fails at docker-executor until installed")
+
+
 def check_network():
     # Cross-platform network check using Python urllib (avoids curl dependency on Windows)
     try:
@@ -196,6 +229,7 @@ def main():
     check_disk()
     check_github_token()
     check_docker_hub_token()
+    check_db_clients()
     check_network()
     check_settings_schema()
     print("[TestVDB] Checks done. Python<3.9 is fatal per Orchestrator spec.")
