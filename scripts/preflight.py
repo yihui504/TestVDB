@@ -176,6 +176,37 @@ def check_db_clients():
         print(f"[TestVDB] DB clients: WARNING — {joined} missing; mine <target> fails at docker-executor until installed")
 
 
+def check_docker_executor_python():
+    """docker-executor scripts 需 Python 3.10+（str|None 等 3.10 语法），检测 host 是否有。
+
+    实战教训：host python 默认 3.8（sqlite<3.35）→ chromadb import 失败 +
+    scripts 含 str|None 语法 3.8 不支持 → cryptic SyntaxError。
+    docker-executor.md Step 2 已检测（policy），此处 mechanism 提前告警。
+    """
+    import shutil
+    # docker-executor.md Step 2 优先序
+    candidates = ["py -3.12", "python3.12", "py -3.11", "python3.11", "py -3.10", "python3.10"]
+    found = None
+    for cmd in candidates:
+        parts = cmd.split()
+        if not shutil.which(parts[0]):
+            continue
+        try:
+            r = subprocess.run(parts + ["--version"], capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                ver = _parse_python_version(r.stdout + r.stderr)
+                if ver and ver >= (3, 10, 0):
+                    found = f"{cmd} ({ver[0]}.{ver[1]}.{ver[2]})"
+                    break
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+    if found:
+        print(f"[TestVDB] Docker-executor Python 3.10+: OK ({found})")
+    else:
+        print("[TestVDB] Docker-executor Python 3.10+: FATAL — none found")
+        print("[TestVDB]   scripts use `str | None` syntax (3.10+); install Python 3.10+ or `py -3.10` launcher")
+
+
 def check_network():
     # Cross-platform network check using Python urllib (avoids curl dependency on Windows)
     try:
@@ -225,6 +256,7 @@ def main():
     print("[TestVDB] Pre-flight checks...")
     check_docker()
     check_python()
+    check_docker_executor_python()
     check_session_env()
     check_disk()
     check_github_token()
