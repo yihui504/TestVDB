@@ -119,6 +119,13 @@ cd "${SESSION_DIR:-.}" 2>/dev/null
 [ -f .executor.env ] || { echo "FATAL: .executor.env missing (run Step 0 first)"; exit 1; }
 source .executor.env
 
+# 按 target 设容器版本 env（同 mine Step 2；避免 compose 默认旧版本，如 chroma 默认 0.6.3）
+case "$TARGET" in
+  chroma)    export CHROMA_VERSION="${VERSION#v}" ;;
+  milvus)    export MILVUS_VERSION="$VERSION" ;;
+  qdrant)    export QDRANT_VERSION="$VERSION" ;;
+  weaviate)  export WEAVIATE_VERSION="${VERSION#v}" ;;
+esac
 # 如果容器未运行则启动
 docker ps --filter "name=testvdb-$TARGET" --format "{{.Names}}" | grep -q . || {
   echo "Starting $TARGET container..."
@@ -143,6 +150,10 @@ done
 ### Step 2 (Turn 2): 批量执行所有脚本
 
 > ⛔ 这是一条命令。不做任何修改。不检查。不分析。不预先 ls 或 find。
+
+> **执行模型（CRITICAL — 实战教训 2026-07-03）**：**host** PYTHON 跑 scripts（host 装目标 DB 客户端如 chromadb），连**容器** DB via `TESTVDB_DB_URL`（如 `http://localhost:8000`）。
+> ⛔ **禁止** `docker exec container python script.py` —— 目标 DB 镜像（如 `chromadb/chroma:1.5.9`）多为 distroless，**无 python/python3**，docker exec 必败（exit 127 "py: executable file not found"）。
+> host 缺目标客户端 → 报错（提示 `pip install <client>==<version>`），**不** fallback 到容器内跑。
 
 ```bash
 cd "${SESSION_DIR:-.}" 2>/dev/null
