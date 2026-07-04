@@ -31,6 +31,10 @@ setup_encoding()
 
 TRIVIAL_LEVELS = {"trivial", "none", "info", "negligible"}
 
+# stage2_severity 顶层 metadata 键（非 defect_id 条目）— _severity_levels / _severity_defect_types 共用
+# ponytail: 提取为模块常量避免 DRY 漂移（两 helper 同 schema 范式）
+_SEV_META_KEYS = frozenset({"judge", "timestamp", "target", "version", "session_dir"})
+
 
 def _evidence_votes(ev: dict) -> dict:
     """返回 {defect_id: vote}。通用：兼容 {votes:[...]} 各种 schema。"""
@@ -47,7 +51,9 @@ def _extract_level(v) -> str | None:
     if isinstance(v, str):
         return v.lower()
     if isinstance(v, dict):
-        for k in ("level", "vote", "severity", "rating"):
+        # P3-22: 移除 "vote" — stage2_severity entry 的 vote 是 "is_defect"（判断）非级别，
+        # 先命中会返回 "is_defect" 而非 severity 真值，导致全投票被误判 trivial/missing
+        for k in ("level", "severity", "rating"):
             val = v.get(k)
             if val:
                 return str(val).lower()
@@ -58,14 +64,38 @@ def _severity_levels(sev: dict) -> dict:
     """返回 {defect_id: level}。通用：兼容 {votes:[...]} / 顶层 {defect_id: {...|level}} / 空。"""
     if not sev or not isinstance(sev, dict):
         return {}
-    _META_KEYS = {"judge", "timestamp", "target", "version", "session_dir"}
     votes = sev.get("votes")
     if isinstance(votes, list):
         return {v.get("defect_id"): _extract_level(v)
                 for v in votes if isinstance(v, dict) and v.get("defect_id")}
     if votes is None:
         return {k: _extract_level(v) for k, v in sev.items()
-                if k not in _META_KEYS and isinstance(v, (dict, str))}
+                if k not in _SEV_META_KEYS and isinstance(v, (dict, str))}
+    return {}
+
+
+def _severity_defect_types(sev: dict) -> dict:
+    """{defect_id: defect_type} — P3-18a+: 从 stage2_severity 提取 Type 分类。
+
+    实测 qdrant session judge-severity vote entry schema =
+    {vote: "is_defect", severity: "High", defect_type: "Type1_IllegalSuccess", ...}。
+    Type 分类（Type1_IllegalSuccess/Type2_PoorDiagnostics/Type3_RuntimeFailure/Type4_StateLogic）
+    比 attack_type 分类（boundary/semantic/state，来自 stage2_doc category）对 novelty_gate
+    consumer_layer_check 更直接对应缺陷语义。缺 defect_type → 不入 dict（run() fallback doc/unknown）。
+
+    ponytail: 与 _severity_levels 同 schema 兼容范式（{votes:[...]} / 顶层 dict / 空）。
+    """
+    if not sev or not isinstance(sev, dict):
+        return {}
+    votes = sev.get("votes")
+    if isinstance(votes, list):
+        return {v.get("defect_id"): v.get("defect_type")
+                for v in votes
+                if isinstance(v, dict) and v.get("defect_id") and v.get("defect_type")}
+    if votes is None:
+        return {k: v.get("defect_type")
+                for k, v in sev.items()
+                if k not in _SEV_META_KEYS and isinstance(v, dict) and v.get("defect_type")}
     return {}
 
 
@@ -140,7 +170,8 @@ def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
     sev_levels = _severity_levels(sev or {})
     nv_votes = _novelty_votes(nv or {})
     doc_results = _doc_results(doc or {})
-    doc_categories = _doc_categories(doc or {})  # P3-18a: defect_type 来源
+    doc_categories = _doc_categories(doc or {})  # P3-18a: defect_type 来源 (fallback)
+    sev_defect_types = _severity_defect_types(sev or {})  # P3-18a+: Type 分类优先
 
     confirmed, rejected = {}, {}
     for did, vote in ev_votes.items():
@@ -170,10 +201,10 @@ def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
             rejected[did] = {"reason": f"severity trivial{suffix}", "confirmed": False}
             continue
         # 规则 5: already_reported → 保留 + related_issue_numbers（不 kill，传给 Novelty Gate）
-        # P3-18a: 丰富 entry 字段 — defect_type (stage2_doc category) + script ({defect_id}.py)
+        # P3-18a+: defect_type 优先级 — severity.defect_type (Type 分类) > doc.category (attack 分类) > "unknown"
         # 让 novelty_gate.run_novelty_gate (L446-449) 能读到非 unknown/"" 值
         entry = {"defect_id": did, "severity_level": level, "confirmed": True,
-                 "defect_type": doc_categories.get(did, "unknown"),
+                 "defect_type": sev_defect_types.get(did) or doc_categories.get(did, "unknown"),
                  "script": f"{did}.py"}
         if nv_info.get("rating") == "already_reported":
             entry["related_issue_numbers"] = nv_info.get("related_issues", [])
@@ -278,6 +309,49 @@ def _self_check() -> None:
             f"P3-18a: 缺 stage2_doc 应 fallback 'unknown', got {entry.get('defect_type')}"
         assert entry["script"] == "a.py", \
             f"P3-18a: script 不依赖 stage2_doc, got {entry.get('script')}"
+
+        # 场景 9 (P3-22): severity entry 含 vote + severity → _extract_level 返回 severity 真值
+        # 原 bug: 键顺序 ("level","vote",...) 先命中 vote → 返回 "is_defect" 误作 severity_level
+        (bdir / "stage2_evidence.json").write_text(json.dumps({"votes": [
+            {"defect_id": "a", "vote": "is_defect"}]}), encoding="utf-8")
+        (bdir / "stage2_severity.json").write_text(json.dumps({"votes": [
+            {"defect_id": "a", "vote": "is_defect", "severity": "High"}]}), encoding="utf-8")
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert entry["severity_level"] == "high", \
+            f"P3-22: severity_level 应 'high'（非 'is_defect'）, got {entry.get('severity_level')}"
+
+        # 场景 10 (P3-18a+): defect_type 优先级 —
+        #   severity.defect_type (Type 分类) > doc.category (attack 分类) > "unknown"
+        # (a) severity 含 Type1 + doc 含 boundary → Type1_IllegalSuccess（severity 优先）
+        (bdir / "stage2_severity.json").write_text(json.dumps({"votes": [
+            {"defect_id": "a", "level": "high", "defect_type": "Type1_IllegalSuccess"}]}), encoding="utf-8")
+        (bdir / "stage2_doc.json").write_text(json.dumps({"results": [
+            {"defect_id": "a", "doc_verification_result": "DOC_VERIFIED", "category": "boundary"}]}), encoding="utf-8")
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert entry["defect_type"] == "Type1_IllegalSuccess", \
+            f"P3-18a+(a): severity 含 Type1 应优先, got {entry.get('defect_type')}"
+
+        # (b) severity 缺 defect_type + doc 含 category → fallback doc category
+        (bdir / "stage2_severity.json").write_text(json.dumps({"votes": [
+            {"defect_id": "a", "level": "high"}]}), encoding="utf-8")
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert entry["defect_type"] == "boundary", \
+            f"P3-18a+(b): severity 缺 defect_type 应 fallback doc category, got {entry.get('defect_type')}"
+
+        # (c) 两者都缺 → "unknown"
+        (bdir / "stage2_doc.json").write_text(json.dumps({"results": [
+            {"defect_id": "a", "doc_verification_result": "DOC_VERIFIED"}]}), encoding="utf-8")  # 无 category
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert entry["defect_type"] == "unknown", \
+            f"P3-18a+(c): 两者都缺应 'unknown', got {entry.get('defect_type')}"
     print("self-check OK")
 
 
