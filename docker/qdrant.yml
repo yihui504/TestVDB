@@ -1,6 +1,7 @@
 # TestVDB Docker Compose - Qdrant Standalone
 # Template uses ${QDRANT_VERSION:-v1.13.0} for user-customizable version
 # Port uses ${QDRANT_PORT:-6333} for user-customizable port
+# healthcheck 用 bash /dev/tcp（qdrant/qdrant:v1.13.0 镜像无 curl/wget，但有 bash；P2-8 同类修复）
 
 services:
   qdrant:
@@ -12,10 +13,11 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
 volumes:
   qdrant_data:

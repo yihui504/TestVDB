@@ -128,3 +128,26 @@ def is_done(path: str | Path) -> bool:
 def touch_done(path: str | Path) -> None:
     """Create a .done marker for the given file."""
     Path(str(path) + ".done").touch()
+
+
+# ── Schema helpers ────────────────────────────────────────────
+
+def extract_confirmed(agg: dict) -> list:
+    """Extract confirmed defects from stage2_aggregation.json (ADR-0005 dual-schema).
+
+    Handles both code-aggregated (`confirmed` dict) and legacy
+    (`confirmed_defects` list) schemas. Returns [] for empty/invalid input.
+    The deprecated `defects` key is intentionally rejected to prevent
+    silent regression of the P0-11 dedup bug.
+
+    Consumers: dedup_defects.dedup_defects / novelty_gate.run_novelty_gate.
+    """
+    if not isinstance(agg, dict):
+        return []
+    cds = agg.get("confirmed_defects")
+    if isinstance(cds, list):
+        return cds
+    confirmed = agg.get("confirmed")
+    if isinstance(confirmed, dict):
+        return [{"defect_id": did, **v} for did, v in confirmed.items()]
+    return []

@@ -101,6 +101,22 @@ def _doc_results(doc: dict) -> dict:
             for r in results if isinstance(r, dict) and r.get("defect_id")}
 
 
+def _doc_categories(doc: dict) -> dict:
+    """{defect_id: category} — P3-18a: 从 stage2_doc 提取 defect_type 来源。
+
+    judge-doc results[i] 含 category 字段（实测 qdrant session：boundary/semantic/state），
+    作为 novelty_gate grade_candidate 的 defect_type 输入。缺 category → "unknown"。
+    ponytail: 与 _doc_results 并列（不合并），保留 _doc_results 纯 str 返回契约。
+    """
+    if not isinstance(doc, dict):
+        return {}
+    results = doc.get("results", [])
+    if not isinstance(results, list):
+        return {}
+    return {r.get("defect_id"): r.get("category", "unknown")
+            for r in results if isinstance(r, dict) and r.get("defect_id")}
+
+
 _SEVERITY_LADDER = ["trivial", "low", "medium", "high", "critical"]
 
 
@@ -124,6 +140,7 @@ def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
     sev_levels = _severity_levels(sev or {})
     nv_votes = _novelty_votes(nv or {})
     doc_results = _doc_results(doc or {})
+    doc_categories = _doc_categories(doc or {})  # P3-18a: defect_type 来源
 
     confirmed, rejected = {}, {}
     for did, vote in ev_votes.items():
@@ -153,7 +170,11 @@ def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
             rejected[did] = {"reason": f"severity trivial{suffix}", "confirmed": False}
             continue
         # 规则 5: already_reported → 保留 + related_issue_numbers（不 kill，传给 Novelty Gate）
-        entry = {"defect_id": did, "severity_level": level, "confirmed": True}
+        # P3-18a: 丰富 entry 字段 — defect_type (stage2_doc category) + script ({defect_id}.py)
+        # 让 novelty_gate.run_novelty_gate (L446-449) 能读到非 unknown/"" 值
+        entry = {"defect_id": did, "severity_level": level, "confirmed": True,
+                 "defect_type": doc_categories.get(did, "unknown"),
+                 "script": f"{did}.py"}
         if nv_info.get("rating") == "already_reported":
             entry["related_issue_numbers"] = nv_info.get("related_issues", [])
             entry["note"] = "already_reported: 保留，related_issues 传给 Novelty Gate"
@@ -232,6 +253,31 @@ def _self_check() -> None:
             {"defect_id": "a", "doc_verification_result": "DOC_MISMATCH"}]}), encoding="utf-8")
         r = run(td)
         assert r["details"]["confirmed"] == 0, "DOC_MISMATCH low→trivial → rejected"
+
+        # 场景 7 (P3-18a): confirmed entry 含 defect_type (stage2_doc category) + script ({defect_id}.py)
+        (bdir / "stage2_evidence.json").write_text(json.dumps({"votes": [
+            {"defect_id": "a", "vote": "is_defect"}]}), encoding="utf-8")
+        (bdir / "stage2_severity.json").write_text(json.dumps({"votes": [
+            {"defect_id": "a", "level": "high"}]}), encoding="utf-8")
+        (bdir / "stage2_doc.json").write_text(json.dumps({"results": [
+            {"defect_id": "a", "doc_verification_result": "DOC_VERIFIED", "category": "boundary"}]}), encoding="utf-8")
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert entry["defect_type"] == "boundary", \
+            f"P3-18a: defect_type 应从 stage2_doc category 合并, got {entry.get('defect_type')}"
+        assert entry["script"] == "a.py", \
+            f"P3-18a: script 应为 f'{{defect_id}}.py', got {entry.get('script')}"
+
+        # 场景 8 (P3-18a): 缺 stage2_doc → defect_type="unknown"（fallback）；script 不依赖 stage2_doc
+        (bdir / "stage2_doc.json").unlink()
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert entry["defect_type"] == "unknown", \
+            f"P3-18a: 缺 stage2_doc 应 fallback 'unknown', got {entry.get('defect_type')}"
+        assert entry["script"] == "a.py", \
+            f"P3-18a: script 不依赖 stage2_doc, got {entry.get('script')}"
     print("self-check OK")
 
 

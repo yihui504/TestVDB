@@ -75,7 +75,16 @@ def check_m2_fabricated_urls(session_dir: str, defect_id: str) -> dict:
     """
     M2: 编造文档引用（幻觉 URL）
     使用 urllib 验证 source_url 可达性（跨平台，无 curl 依赖）
+
+    ponytail: TESTVDB_OFFLINE=1 时早退 — offline 环境所有 URL 不可达，
+    全 unreachable 误报为 hallucinated URLs 会 reject 合法 defect。
+    仅 M2 跳过（网络依赖）；M3-M7 是本地检查（defect.md vs output log），
+    offline 环境仍正确工作，不跳过。
     """
+    if os.environ.get("TESTVDB_OFFLINE") == "1":
+        return {"mode": "M2", "passed": True,
+                "detail": "Offline mode (TESTVDB_OFFLINE=1) — URL reachability skipped"}
+
     defect_path = os.path.join(session_dir, "defects", f"{defect_id}.md")
     content = load_file(defect_path)
     if not content:
@@ -287,9 +296,12 @@ def check_m5_script_bug_as_defect(session_dir: str, defect_id: str) -> dict:
     elif "Type4" in defect_type:
         # Type4 should show 2xx (operation succeeded) + unexpected state change
         has_2xx = re.search(r'HTTP Response["\s:]*["\s]*2\d{2}', content)
+        # ponytail: 剥离 Type 行再做 state_desc 检查，避免 "Type4_StateLogic"
+        # 中的 "State" 假匹配（self-check 发现的 latent bug）
+        content_no_type_line = re.sub(r'^Type:.*$', '', content, flags=re.MULTILINE)
         has_state_desc = re.search(
             r'(?:state|State|unexpected|unusual|incorrect|wrong|mismatch|inconsistent)',
-            content
+            content_no_type_line
         )
         if not has_2xx:
             return {
@@ -375,7 +387,185 @@ def check_m7_stale_loop(session_dir: str) -> dict:
     }
 
 
+def _decide_overall(checks: list) -> str:
+    """7-mode 优先级决策：REWIND(M1/M5) > REJECT-as-FAIL(M2/M3/M6) > HALT(M4/M7) > FAIL(any) > PASS.
+
+    反直觉但与文档一致：M1/M5 (script confusion) 最高 — rewind 重检；
+    M2/M3/M6 (hallucination) 次之 — reject defect；M4/M7 (pipeline issue) 第三 — halt。
+    """
+    reject_modes = {"M2", "M3", "M6"}
+    halt_modes = {"M4", "M7"}
+    rewind_modes = {"M1", "M5"}
+
+    has_rewind = any(not c["passed"] and c["mode"] in rewind_modes for c in checks)
+    has_reject = any(not c["passed"] and c["mode"] in reject_modes for c in checks)
+    has_halt = any(not c["passed"] and c["mode"] in halt_modes for c in checks)
+    has_fail = any(not c["passed"] for c in checks)
+
+    if has_rewind:
+        return "REWIND"
+    if has_reject:
+        return "FAIL"
+    if has_halt:
+        return "HALT"
+    if has_fail:
+        return "FAIL"
+    return "PASS"
+
+
+def _exit_code_for(overall: str) -> int:
+    """overall verdict → process exit code."""
+    return {"REWIND": 3, "HALT": 2, "FAIL": 1, "PASS": 0}.get(overall, 1)
+
+
+def _self_check() -> int:
+    """Self-check: 7-mode priority chain + Type1/2/3/4 校验 + exit code mapping.
+
+    不测 check_m2（需网络）；覆盖核心纯逻辑/regex 路径。
+    """
+    import tempfile
+
+    failures = []
+
+    def expect(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    ALL_MODES = ["M1", "M2", "M3", "M4", "M5", "M6", "M7"]
+
+    def chk(mode, passed):
+        return {"mode": mode, "passed": passed, "detail": ""}
+
+    # ── _decide_overall 单 mode ──
+    expect(_decide_overall([chk("M1", False)]) == "REWIND", "M1 alone → REWIND")
+    expect(_decide_overall([chk("M5", False)]) == "REWIND", "M5 alone → REWIND")
+    expect(_decide_overall([chk("M2", False)]) == "FAIL", "M2 alone → FAIL")
+    expect(_decide_overall([chk("M3", False)]) == "FAIL", "M3 alone → FAIL")
+    expect(_decide_overall([chk("M6", False)]) == "FAIL", "M6 alone → FAIL")
+    expect(_decide_overall([chk("M4", False)]) == "HALT", "M4 alone → HALT")
+    expect(_decide_overall([chk("M7", False)]) == "HALT", "M7 alone → HALT")
+    expect(_decide_overall([chk(m, True) for m in ALL_MODES]) == "PASS", "all pass → PASS")
+
+    # ── 优先级链（多级同时触发）──
+    expect(_decide_overall([chk("M1", False), chk("M2", False)]) == "REWIND",
+           "REWIND > REJECT")
+    expect(_decide_overall([chk("M2", False), chk("M4", False)]) == "FAIL",
+           "REJECT > HALT")
+    expect(_decide_overall([chk("M5", False), chk("M7", False)]) == "REWIND",
+           "REWIND > HALT")
+    expect(_decide_overall([chk("M1", False), chk("M2", False), chk("M4", False)]) == "REWIND",
+           "REWIND > REJECT > HALT")
+    expect(_decide_overall([chk("M2", False), chk("M3", False), chk("M6", False)]) == "FAIL",
+           "multi-REJECT → FAIL")
+
+    # ── _exit_code_for ──
+    expect(_exit_code_for("REWIND") == 3, "exit REWIND=3")
+    expect(_exit_code_for("HALT") == 2, "exit HALT=2")
+    expect(_exit_code_for("FAIL") == 1, "exit FAIL=1")
+    expect(_exit_code_for("PASS") == 0, "exit PASS=0")
+    expect(_exit_code_for("UNKNOWN") == 1, "exit unknown default=1")
+
+    # ── check_m5 Type1/2/3/4 校验 ──
+    with tempfile.TemporaryDirectory() as td:
+        defects_dir = os.path.join(td, "defects")
+        os.makedirs(defects_dir)
+
+        def write_defect(content):
+            with open(os.path.join(defects_dir, "defect-1.md"), "w", encoding="utf-8") as f:
+                f.write(content)
+
+        # Type1: 需 2xx
+        write_defect("Type: Type1_IllegalSuccess\nfoo")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is False,
+               "Type1 no 2xx → fail")
+        write_defect("Type: Type1_IllegalSuccess\nHTTP Response: 200 OK")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "Type1 with 2xx → pass")
+
+        # Type2: 需 error/message 引用
+        write_defect("Type: Type2_PoorDiagnostics\nfoo")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is False,
+               "Type2 no msg → fail")
+        write_defect('Type: Type2_PoorDiagnostics\nerror: "ambiguous msg"')
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "Type2 with msg → pass")
+
+        # Type3: 需 5xx / traceback / crash
+        write_defect("Type: Type3_RuntimeFailure\nfoo")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is False,
+               "Type3 no crash → fail")
+        write_defect("Type: Type3_RuntimeFailure\nHTTP Response: 500 Internal")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "Type3 with 5xx → pass")
+        write_defect("Type: Type3_RuntimeFailure\nTraceback (most recent call last)")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "Type3 with traceback → pass")
+
+        # Type4: 需 2xx + state description
+        write_defect("Type: Type4_StateLogic\nfoo")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is False,
+               "Type4 no 2xx → fail")
+        write_defect("Type: Type4_StateLogic\nHTTP Response: 200 OK")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is False,
+               "Type4 no state desc → fail")
+        write_defect("Type: Type4_StateLogic\nHTTP Response: 200 OK\nunexpected state mismatch")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "Type4 with both → pass")
+
+        # 无 Type → 默认 pass
+        write_defect("no type field here")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "no type → pass")
+
+        # ── check_m4 .done pipeline 检测 ──
+        # 无 pipeline trace → pass（nothing to check）
+        empty = os.path.join(td, "empty_session")
+        os.makedirs(empty)
+        expect(check_m4_shortcut_pipeline(empty)["passed"] is True,
+               "M4 no trace → pass")
+
+        # 有 debate_logs 但缺 .done → fail
+        debate_dir = os.path.join(empty, "debate_logs")
+        os.makedirs(debate_dir)
+        expect(check_m4_shortcut_pipeline(empty)["passed"] is False,
+               "M4 debate_logs missing .done → fail")
+
+        # 全部 .done 存在 → pass
+        for f in ["stage1.json", "stage2_doc.json", "stage2_evidence.json",
+                  "stage2_novelty.json", "stage2_severity.json"]:
+            (open(os.path.join(debate_dir, f + ".done"), "w").close())
+        expect(check_m4_shortcut_pipeline(empty)["passed"] is True,
+               "M4 all .done → pass")
+
+        # ── check_m2 offline 模式（TESTVDB_OFFLINE=1 早退，P3-21）──
+        with open(os.path.join(defects_dir, "defect-2.md"), "w", encoding="utf-8") as f:
+            f.write('source_url: "http://definitely-not-real-example-xyz.invalid/page"\n')
+        old = os.environ.get("TESTVDB_OFFLINE")
+        os.environ["TESTVDB_OFFLINE"] = "1"
+        try:
+            r = check_m2_fabricated_urls(td, "defect-2")
+            expect(r["passed"] is True,
+                   f"offline mode should skip M2 (passed=True), got {r}")
+            expect("skipped" in r["detail"].lower(),
+                   f"offline detail should mention skip, got {r['detail']}")
+        finally:
+            if old is None:
+                os.environ.pop("TESTVDB_OFFLINE", None)
+            else:
+                os.environ["TESTVDB_OFFLINE"] = old
+
+    if failures:
+        print("self-check FAIL:", file=sys.stderr)
+        for f in failures:
+            print(f"  - {f}", file=sys.stderr)
+        return 1
+    print("self-check OK")
+    return 0
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--self-check":
+        sys.exit(_self_check())
     if len(sys.argv) < 3:
         print("Usage: python scripts/ai_failure_check.py <session_dir> <defect_id>")
         print(json.dumps({"checklist": [], "overall": "FAIL",
@@ -398,29 +588,7 @@ def main():
         check_m7_stale_loop(session_dir),
     ]
 
-    reject_modes = {"M2", "M3", "M6"}
-    halt_modes = {"M4", "M7"}
-    rewind_modes = {"M1", "M5"}
-
-    has_rewind = any(not c["passed"] and c["mode"] in rewind_modes for c in checks)
-    has_reject = any(not c["passed"] and c["mode"] in reject_modes for c in checks)
-    has_halt = any(not c["passed"] and c["mode"] in halt_modes for c in checks)
-    has_fail = any(not c["passed"] for c in checks)
-
-    # Priority: REWIND > REJECT > HALT > PASS
-    # M1/M5 indicate possible script confusion — rewind for re-check
-    # M2/M3/M6 indicate likely LLM hallucination — reject the defect
-    # M4/M7 indicate pipeline issues — halt for intervention
-    if has_rewind:
-        overall = "REWIND"
-    elif has_reject:
-        overall = "FAIL"
-    elif has_halt:
-        overall = "HALT"
-    elif has_fail:
-        overall = "FAIL"
-    else:
-        overall = "PASS"
+    overall = _decide_overall(checks)
 
     result = {
         "checklist": checks,
@@ -431,14 +599,7 @@ def main():
 
     print(json.dumps(result, indent=2, ensure_ascii=False))
 
-    if overall == "REWIND":
-        sys.exit(3)
-    elif overall == "HALT":
-        sys.exit(2)
-    elif overall == "FAIL":
-        sys.exit(1)
-    else:
-        sys.exit(0)
+    sys.exit(_exit_code_for(overall))
 
 
 if __name__ == "__main__":

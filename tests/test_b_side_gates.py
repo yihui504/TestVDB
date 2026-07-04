@@ -194,7 +194,7 @@ class TestB7WriteLocationCheck:
         return subprocess.run(
             [sys.executable, str(SCRIPTS_DIR / "write_location_check.py")],
             input=json.dumps({"tool_input": {"file_path": file_path}}),
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, encoding="utf-8", timeout=10,
             env={**os.environ, "TESTVDB_PLUGIN_ROOT": str(plugin_root)},
         )
 
@@ -250,8 +250,9 @@ class TestB9DedupDefects:
     def _write_agg(self, session: Path, defects: list):
         debate = session / "debate_logs"
         debate.mkdir(parents=True)
+        # confirmed_defects = legacy list schema（dedup_defects._confirmed_defects 双兼容路径之一）
         (debate / "stage2_aggregation.json").write_text(
-            json.dumps({"defects": defects}), encoding="utf-8")
+            json.dumps({"confirmed_defects": defects}), encoding="utf-8")
 
     def test_dedup_same_id(self, tmp_path):
         """两 defect 同 defect_id → 去重到 1。"""

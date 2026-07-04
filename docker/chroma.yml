@@ -4,7 +4,8 @@
 # Chroma API: v2 tenant/database/collection 模型；v1 兼容 (/api/v1/collections).
 #   向量：collection.add({ids, embeddings, documents}) → collection.query({query_embeddings}).
 #
-# healthcheck 用 python（chromadb/chroma 基于 python-slim，未必含 curl/wget）；
+# healthcheck 用 bash /dev/tcp（chromadb/chroma:1.5.9 distroless 无 python/curl/wget，
+# 但镜像内含 bash；/dev/tcp 是 bash 内建，无外部依赖）。
 # docker-executor Step 1 另用主机 curl 轮询 /api/v2/heartbeat 兜底。
 
 services:
@@ -20,10 +21,11 @@ services:
     volumes:
       - chroma_data:/chroma/chroma
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat')\" || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8000' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
 
 volumes:
   chroma_data:

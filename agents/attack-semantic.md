@@ -41,7 +41,7 @@ tools:
 1. **每轮必须产出 ≥ 3 个 Python 脚本**。先写脚本，再补充分析。
 2. **Round 2+ 策略**：聚焦 error message quality (Type2) 和 search semantic correctness (Type4)。跳过边界攻击已覆盖的端点。
 3. 如果只剩 3 turns，立即停止生成，Write 已完成的脚本。
-4. 脚本写入 `${session_dir}/scripts/`。
+4. 脚本写入 `${session_dir}/debate_logs/`（规范目录 — 下游 gate 只扫此目录，写别处脚本变不可见）。
 
 参考原 `semantic_gen.rs` + `metamorphic_gen.rs` 生成器策略，但不受其代码限制。
 

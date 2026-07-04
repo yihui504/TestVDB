@@ -1,19 +1,5 @@
 #!/usr/bin/env python3
-"""
-TestVDB Novelty Gate — Pre-submission credibility governance (v1 two-layer)
-
-Consumes:
-- Layer 1 (Consumer): Precise match against threat_model.json + local corpora
-- Layer 2 (Corrector): GitHub Search API + by-design heuristics
-
-Outputs:
-- novelty_gate.json: Per-candidate grading + evidence + endorsement
-- final_verdict.json: Aggregated 4-Judge + Gate + endorsement (ADR-0002)
-
-Exit codes:
-- 0 = At least one NOVEL endorsement
-- 1 = All rejected
-- 2 = Has UNVERIFIED (fail-closed signal)
+"""TestVDB Novelty Gate — Pre-submission credibility governance.
 
 Usage:
     python scripts/novelty_gate.py --session-dir <path> [--github-token <token>]
@@ -31,16 +17,14 @@ import time
 from pathlib import Path
 from typing import Any, Optional, Dict, List
 
-# Add scripts directory to path for imports
 SCRIPTS_DIR = Path(__file__).parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
-from _pipeline_utils import setup_encoding
+from _pipeline_utils import setup_encoding, extract_confirmed
 
 try:
     from github_search import REPO_MAP, _cache_path, _read_cache, _write_cache
 except ImportError:
-    # Fallback definitions if github_search.py not available
     REPO_MAP = {
         "milvus": "milvus-io/milvus",
         "qdrant": "qdrant/qdrant",
@@ -71,8 +55,6 @@ except ImportError:
 
 
 # ── Constants ───────────────────────────────────────────────
-
-# By-design heuristic patterns (ADR-0001 v1)
 BY_DESIGN_PATTERNS = [
     r"sentinel",
     r"by\s*\.?\s*design",
@@ -88,7 +70,6 @@ GITHUB_API = "https://api.github.com/search/issues"
 # ── Helpers ──────────────────────────────────────────────────
 
 def safe_read(filepath: Path) -> Optional[Any]:
-    """Read JSON file safely."""
     try:
         with open(filepath, encoding="utf-8") as f:
             return json.load(f)
@@ -97,7 +78,6 @@ def safe_read(filepath: Path) -> Optional[Any]:
 
 
 def safe_read_text(filepath: Path) -> Optional[str]:
-    """Read text file safely."""
     try:
         with open(filepath, encoding="utf-8") as f:
             return f.read()
@@ -106,13 +86,7 @@ def safe_read_text(filepath: Path) -> Optional[str]:
 
 
 def extract_param_name(param: Optional[str]) -> Optional[str]:
-    """Extract the leading param identifier from a stage2 aggregation `param` field.
-
-    'ef=0' -> 'ef', 'dynamicEfMin(512)>dynamicEfMax(8)' -> 'dynamicEfMin',
-    'vectorCacheMaxObjects=-1' -> 'vectorCacheMaxObjects',
-    'pq.centroids=0' -> 'pq.centroids'. The dotted form is preserved on purpose so
-    'pq.centroids' does not over-match a corpus title/body that only has 'centroids'.
-    """
+    """Extract the leading param identifier from a stage2 aggregation `param` field."""
     if not param:
         return None
     m = re.match(r"[A-Za-z][\w.]*", param)
@@ -120,12 +94,7 @@ def extract_param_name(param: Optional[str]) -> Optional[str]:
 
 
 def param_in(param_name: Optional[str], text: Optional[str]) -> bool:
-    """Word-boundary param match (case-insensitive).
-
-    'ef' matches '"ef": -1' / ' ef ' but NOT 'default' / 'before'. The lookarounds
-    treat [A-Za-z0-9_] as word chars so 'pq.centroids' matches literally while
-    'centroids' alone (in a JSON schema dump) does not over-match for 'pq.centroids'.
-    """
+    """Word-boundary param match (case-insensitive)."""
     if not param_name or not text:
         return False
     return re.search(
@@ -136,7 +105,6 @@ def param_in(param_name: Optional[str], text: Optional[str]) -> bool:
 
 
 def extract_endpoint(defect_id: str) -> str:
-    """Extract endpoint from defect_id."""
     parts = defect_id.split("_")
     if len(parts) >= 2:
         return parts[1]
@@ -144,28 +112,24 @@ def extract_endpoint(defect_id: str) -> str:
 
 
 def is_boundary_defect(defect_id: str) -> bool:
-    """Check if defect_id contains 'boundary'."""
     return "boundary" in defect_id.lower()
 
 
 def precision_level(defect_id: str) -> str:
-    """Determine precision level from defect_id."""
     if "boundary" in defect_id.lower():
-        return "HIGH"  # boundary + param = precise match
-    return "LOW"  # state/semantic = low precision
+        return "HIGH"
+    return "LOW"
 
 
 # ── Layer 1: Consumer ─────────────────────────────────────────
 
 def load_consumer_data(session_dir: Path, target: str) -> Dict:
-    """Load threat_model.json and local corpora for consumer layer."""
     intelligence_dir = Path("intelligence") / target
 
     threat_model = safe_read(intelligence_dir / "threat_model.json")
     issue_corpus = safe_read(intelligence_dir / "issue_corpus.json")
     commit_corpus = safe_read(intelligence_dir / "commit_corpus.json")
 
-    # issue_corpus / commit_corpus are {_meta, issues|merged_prs: [...]} dicts
     return {
         "threat_model": threat_model or {},
         "issue_corpus": (issue_corpus or {}).get("issues", []),
@@ -181,16 +145,12 @@ def consumer_layer_check(
     defect_type: str,
     consumer_data: Dict,
 ) -> Optional[Dict]:
-    """Layer 1: Precise match against threat_model.json + local corpora."""
     threat_model = consumer_data["threat_model"]
     if not param_name:
         return None
     repo = consumer_data.get("repo", "")
 
     novelty_ctx = threat_model.get("judge_enhancements", {}).get("novelty_context", {})
-
-    # known_ongoing_issues is a list of issue NUMBERS (ints) — it cannot be matched
-    # against a param name; it is bridged via the issue_corpus title search below.
 
     # recently_fixed_patterns: [{pattern, fix_pr}] -> COVERED_BY_PR (only if a fix PR exists)
     for fix in novelty_ctx.get("recently_fixed_patterns", []):
@@ -249,7 +209,6 @@ def search_github_api(
     token: Optional[str],
     repo: str,
 ) -> tuple[List[Dict], bool, Any]:
-    """Search GitHub API with caching."""
     import requests
 
     headers = {"Accept": "application/vnd.github.v3+json"}
@@ -257,7 +216,6 @@ def search_github_api(
         headers["Authorization"] = f"Bearer {token}"
 
     try:
-        # Extended query: is:issue+is:pr, open+closed
         full_query = f"repo:{repo} {query} is:issue is:pr"
         resp = requests.get(
             GITHUB_API,
@@ -284,10 +242,7 @@ def search_github_api(
 
 
 def check_by_design_heuristic(title: str, body: str, param_name: Optional[str]) -> bool:
-    """Check if PR/issue shows by-design behavior."""
     text = f"{title} {body}".lower()
-
-    # Check if any by-design pattern matches
     for pattern in BY_DESIGN_PATTERNS:
         if re.search(pattern, text, re.IGNORECASE):
             # If param_name provided, check it's mentioned
@@ -308,12 +263,10 @@ def corrector_layer_check(
     target: str,
     github_token: Optional[str],
 ) -> Optional[Dict]:
-    """Layer 2: GitHub Search API + by-design heuristics."""
     repo = REPO_MAP.get(target, "")
     if not repo:
         return None
 
-    # Build search query
     query_parts = []
     if param_name:
         query_parts.append(param_name)
@@ -323,25 +276,16 @@ def corrector_layer_check(
     query = " ".join(query_parts) if query_parts else ""
     if not query:
         return None
-
-    # Search GitHub
     items, from_cache, remaining = search_github_api(query, github_token, repo)
 
     if not param_name:
         return None
-
-    # Check results. A param that appears in title OR body of a returned issue/PR is
-    # prior art (reject). Title match is precise; body match additionally catches PRs
-    # whose title is generic (e.g. #11439 "validate hnsw numeric ranges") but whose
-    # body lists the param. Closed issues count too (known, possibly fixed).
     for item in items:
         title = item.get("title", "") or ""
         body = item.get("body", "") or ""
         url = item.get("html_url", "") or ""
         text = f"{title} {body}".lower()
         is_pr = bool(item.get("pull_request"))
-
-        # by-design heuristic (semi-auto reject)
         if check_by_design_heuristic(title, body, param_name):
             return {
                 "layer": "corrector",
@@ -377,9 +321,7 @@ def grade_candidate(
     target: str,
     github_token: Optional[str],
 ) -> Dict:
-    """Grade a candidate defect through both layers."""
 
-    # Try Layer 1 (Consumer) first
     consumer_result = consumer_layer_check(
         defect_id, endpoint, param_name, defect_type, consumer_data
     )
@@ -387,7 +329,6 @@ def grade_candidate(
     if consumer_result:
         return consumer_result
 
-    # Try Layer 2 (Corrector)
     try:
         corrector_result = corrector_layer_check(
             defect_id, endpoint, param_name, defect_type, target, github_token
@@ -396,7 +337,6 @@ def grade_candidate(
         if corrector_result:
             return corrector_result
     except Exception as e:
-        # Query failed - mark UNVERIFIED
         return {
             "layer": "corrector",
             "grade": "UNVERIFIED",
@@ -406,7 +346,15 @@ def grade_candidate(
             "error": str(e),
         }
 
-    # No hits - NOVEL
+    if not param_name:
+        return {
+            "layer": "gate",
+            "grade": "UNVERIFIED",
+            "evidence_url": "",
+            "match_type": "no_param_identifier",
+            "confidence": "LOW",
+            "reason": "param 不可用 — 无法对照 threat_model/corpus/github 验证（代码版 aggregation schema）",
+        }
     return {
         "layer": "gate",
         "grade": "NOVEL",
@@ -417,18 +365,15 @@ def grade_candidate(
 
 
 def apply_precision_grading(result: Dict, defect_id: str) -> Dict:
-    """Apply precision-based grading (ADR-0001)."""
     grade = result["grade"]
     precision = precision_level(defect_id)
 
-    # High precision (boundary + param) → direct rejection
     if precision == "HIGH":
         if grade in ["KNOWN_OPEN", "COVERED_BY_PR", "BY_DESIGN"]:
             result["endorsement"] = False
             result["endorsement_reason"] = f"High-precision {grade} match"
             return result
 
-    # Low precision (state/semantic) → downgrade to UNVERIFIED
     if precision == "LOW":
         if grade in ["KNOWN_OPEN", "COVERED_BY_PR"]:
             result["original_grade"] = grade
@@ -437,18 +382,15 @@ def apply_precision_grading(result: Dict, defect_id: str) -> Dict:
             result["endorsement_reason"] = f"Low-precision {grade} downgraded to UNVERIFIED"
             return result
 
-    # BY_DESIGN_SUSPECTED stays as-is (semi-auto)
     if grade == "BY_DESIGN_SUSPECTED":
         result["endorsement"] = False
         result["endorsement_reason"] = "BY_DESIGN suspected (manual review needed)"
         return result
 
-    # NOVEL gets endorsement
     if grade == "NOVEL":
         result["endorsement"] = True
         result["endorsement_reason"] = "No known hits"
 
-    # UNVERIFIED gets no endorsement
     if grade == "UNVERIFIED":
         result["endorsement"] = False
         result["endorsement_reason"] = "Query failed or evidence incomplete"
@@ -459,10 +401,7 @@ def apply_precision_grading(result: Dict, defect_id: str) -> Dict:
 # ── Main Execution ───────────────────────────────────────────
 
 def load_stage2_aggregation(session_dir: Path) -> Optional[Dict]:
-    """Load the latest stage2_aggregation*.json file."""
     debate_logs_dir = session_dir / "debate_logs"
-
-    # Find all stage2_aggregation files
     aggregation_files = sorted(
         debate_logs_dir.glob("stage2_aggregation*.json"),
         key=lambda p: p.stat().st_mtime,
@@ -472,22 +411,10 @@ def load_stage2_aggregation(session_dir: Path) -> Optional[Dict]:
     if not aggregation_files:
         return None
 
-    # Use the most recent one
     return safe_read(aggregation_files[0])
 
 
-def extract_confirmed_defects(aggregation: Dict) -> List[Dict]:
-    """Extract confirmed defects from stage2_aggregation.json."""
-    confirmed = aggregation.get("confirmed_defects", [])
-    return confirmed if isinstance(confirmed, list) else []
-
-
 def run_novelty_gate(session_dir: Path, github_token: Optional[str]) -> Dict:
-    """Run the full novelty gate pipeline."""
-
-    # Load stage2 aggregation first — it is the authoritative target source. The
-    # contract file is not always present in the session dir; without this fallback
-    # target becomes "unknown", which empties both gate layers and endorses everything.
     aggregation = load_stage2_aggregation(session_dir)
     if not aggregation:
         return {"error": "No stage2_aggregation*.json found"}
@@ -495,19 +422,13 @@ def run_novelty_gate(session_dir: Path, github_token: Optional[str]) -> Dict:
     contract = safe_read(session_dir / "structured_contract.json") or {}
     target = (aggregation.get("target") or contract.get("target") or "unknown").lower()
 
-    # Extract confirmed defects
-    confirmed_defects = extract_confirmed_defects(aggregation)
+    confirmed_defects = extract_confirmed(aggregation)
 
     if not confirmed_defects:
         return {"error": "No confirmed defects found"}
 
-    # Load consumer data
     consumer_data = load_consumer_data(session_dir, target)
 
-    # Grade each candidate. Stage2 aggregation entries are param-level and share a
-    # single defect_id ("defect-2"); that collapses all 7 into one bucket and must
-    # not be used as the key. Key by `script` (unique per candidate) and derive
-    # param_name from the `param` field.
     results = {}
     for defect in confirmed_defects:
         script = defect.get("script", "") or defect.get("candidate", "")
@@ -520,10 +441,8 @@ def run_novelty_gate(session_dir: Path, github_token: Optional[str]) -> Dict:
             identifier, "", param_name, defect_type, consumer_data, target, github_token
         )
 
-        # Apply precision-based grading
         final_result = apply_precision_grading(grade_result, identifier)
 
-        # Add defect metadata
         final_result.update({
             "defect_id": defect.get("defect_id", ""),
             "script": script,
@@ -543,7 +462,6 @@ def generate_final_verdict(
     gate_results: Dict,
     aggregation: Dict,
 ) -> Dict:
-    """Generate final_verdict.json (ADR-0002)."""
     verdict = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "session_dir": str(session_dir),
@@ -552,16 +470,14 @@ def generate_final_verdict(
     }
 
     for key, gate_result in gate_results.items():
-        # Locate the aggregation entry by `script`/`candidate` (defect_id collapses
-        # to a single bucket and cannot identify a candidate).
+        all_defects = extract_confirmed(aggregation)
         defect_data = next(
-            (d for d in aggregation.get("confirmed_defects", [])
-             if d.get("script") == key or d.get("candidate") == key),
+            (d for d in all_defects
+             if d.get("script") == key or d.get("candidate") == key
+             or d.get("defect_id") == key),
             {},
         )
 
-        # Judge fields are FLAT strings in the aggregation (doc/evidence/novelty/
-        # severity), not nested {verdict: ...} dicts.
         judge_novelty = defect_data.get("novelty", "UNKNOWN")
         verdict_entry = {
             "defect_id": defect_data.get("defect_id", gate_result.get("defect_id", "")),
@@ -578,10 +494,6 @@ def generate_final_verdict(
             "gate_evidence_url": gate_result.get("evidence_url", ""),
             "endorsement": gate_result.get("endorsement", False),
             "endorsement_reason": gate_result.get("endorsement_reason", ""),
-            # discrepancy = Triage leaned novel (new/new_similar) but the Gate rejected
-            # (the Gate's value-add over the recall-biased Triage).
-            # v2.3: Triage ratings are new/new_similar/already_reported/known_wontfix/unknown.
-            # Legacy data may use "NOVEL" / "NOVEL_SIMILAR" — also handled.
             "judge_discrepancy": (
                 str(judge_novelty).lower() in ("new", "new_similar", "novel", "novel_similar")
                 and gate_result.get("grade") not in ("NOVEL",)
@@ -593,7 +505,77 @@ def generate_final_verdict(
     return verdict
 
 
+def _self_check() -> None:
+    """Test schema compatibility, param handling, and precision grading."""
+    import tempfile
+
+    failures = []
+
+    def expect(cond, msg):
+        failures.append(msg) if not cond else None
+
+    expect(extract_confirmed({"confirmed": {"d1": {"severity_level": "high"}}}) ==
+           [{"defect_id": "d1", "severity_level": "high"}], "dict schema → list with defect_id injected")
+    expect(extract_confirmed({"confirmed_defects": [{"defect_id": "x"}]}) ==
+           [{"defect_id": "x"}], "legacy list passthrough")
+    expect(extract_confirmed({"defects": [{"defect_id": "y"}]}) == [],
+           "BUG 回归：`defects` key 不是合法 schema → 空")
+    expect(extract_confirmed({}) == [], "空 aggregation → 空")
+    expect(extract_confirmed(None) == [], "None → 空")
+
+    # 2. grade_candidate：param_name=None → UNVERIFIED（保守治理，不 endorse 未验证）
+    # Monkeypatch 两个 layer 为 no-op，隔离 GitHub API
+    orig_consumer = consumer_layer_check
+    orig_corrector = corrector_layer_check
+    novelty_gate_module = sys.modules[__name__]
+    novelty_gate_module.consumer_layer_check = lambda *a, **k: None
+    novelty_gate_module.corrector_layer_check = lambda *a, **k: None
+    try:
+        # param_name=None（代码版 schema，无 param 字段）
+        r = grade_candidate("d1", "", None, "unknown", {"threat_model": {}, "repo": ""}, "chroma", None)
+        expect(r["grade"] == "UNVERIFIED", f"param 缺失 → UNVERIFIED（非 NOVEL），实际 {r['grade']}")
+        expect(r["confidence"] == "LOW", "UNVERIFIED 保守 confidence=LOW")
+        # param_name 有值 + 两 layer 都 None → 真正搜过 → NOVEL
+        r2 = grade_candidate("d1", "", "ef", "unknown", {"threat_model": {}, "repo": ""}, "chroma", None)
+        expect(r2["grade"] == "NOVEL", f"有 param + 无 hit → NOVEL，实际 {r2['grade']}")
+    finally:
+        novelty_gate_module.consumer_layer_check = orig_consumer
+        novelty_gate_module.corrector_layer_check = orig_corrector
+
+    # 3. apply_precision_grading：boundary KNOWN_OPEN → reject；NOVEL → endorse
+    res_known = apply_precision_grading(
+        {"grade": "KNOWN_OPEN", "layer": "consumer"}, "qdrant_boundary_01_x")
+    expect(res_known.get("endorsement") is False, "boundary HIGH precision KNOWN_OPEN → reject")
+    res_novel = apply_precision_grading(
+        {"grade": "NOVEL", "layer": "gate"}, "qdrant_boundary_01_x")
+    expect(res_novel.get("endorsement") is True, "NOVEL → endorse")
+
+    # 4. generate_final_verdict：defect_id 匹配（不只 script/candidate）
+    with tempfile.TemporaryDirectory() as td:
+        sd = Path(td)
+        (sd / "debate_logs").mkdir()
+        agg = {"confirmed": {"qdrant_boundary_01_x": {"defect_id": "qdrant_boundary_01_x", "severity_level": "high"}}}
+        gate_results = {"qdrant_boundary_01_x": {"grade": "NOVEL", "layer": "gate",
+                                                  "evidence_url": "", "param_name": None,
+                                                  "defect_type": "unknown", "endorsement": True,
+                                                  "endorsement_reason": "test"}}
+        v = generate_final_verdict(sd, gate_results, agg)
+        expect(v["total_defects"] == 1, "final_verdict total=1")
+        expect(v["defects"][0]["defect_id"] == "qdrant_boundary_01_x",
+               f"final_verdict defect_id 匹配（dict schema），实际 {v['defects'][0]['defect_id']}")
+
+    if failures:
+        print("self-check FAIL:", file=sys.stderr)
+        for f in failures:
+            print(f"  - {f}", file=sys.stderr)
+        sys.exit(1)
+    print("self-check OK")
+
+
 def main():
+    if "--self-check" in sys.argv or "-s" in sys.argv:
+        _self_check()
+        return
     parser = argparse.ArgumentParser(
         description="TestVDB Novelty Gate — Pre-submission credibility governance"
     )

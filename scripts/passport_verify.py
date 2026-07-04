@@ -93,9 +93,89 @@ def verify_passport(contract_path: str) -> dict:
     return result
 
 
+def _self_check() -> int:
+    """Self-check: compute_hash 纯函数 + --compute-hash CLI 子命令.
+
+    覆盖 test_b_side_gates.py 没测的 gap：
+    - compute_hash 排除 _passport（含/不含应同 hash）+ sort_keys 稳定性 + hash 格式
+    - --compute-hash CLI 子命令（contract-formalizer.md L456 承诺 generator 调用，
+      原本未实现 — 本次补上 + self-check 守住接口契约）
+    """
+    import tempfile
+    import subprocess
+    failures = []
+
+    def expect(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    # compute_hash 排除 _passport 字段
+    base = {"target": "qdrant", "version": "1.13.0", "endpoints": []}
+    with_passport = dict(base)
+    with_passport["_passport"] = {"contract_hash": "precomputed", "schema_version": "2.0"}
+    expect(compute_hash(base) == compute_hash(with_passport),
+           "compute_hash 应排除 _passport 字段（含/不含应同 hash）")
+
+    # canonical_json sort_keys 稳定性（key 顺序无关）
+    expect(compute_hash({"b": 1, "a": 2}) == compute_hash({"a": 2, "b": 1}),
+           "compute_hash 应 sort_keys（key 顺序无关应同 hash）")
+
+    # hash 格式（sha256: + 64 hex）
+    h = compute_hash(base)
+    expect(h.startswith("sha256:"), f"hash 应 sha256: 前缀, got {h}")
+    expect(len(h.split(":")[1]) == 64,
+           f"sha256 hex 应 64 字符, got {len(h.split(':')[1])}")
+
+    # --compute-hash CLI 子命令（contract-formalizer.md L456 承诺的接口）
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "contract.json")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(base, f)
+        r = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--compute-hash", p],
+            capture_output=True, text=True, timeout=10,
+        )
+        expect(r.returncode == 0,
+               f"--compute-hash 应 exit 0, got {r.returncode}, stderr={r.stderr}")
+        expect(r.stdout.strip() == compute_hash(base),
+               f"--compute-hash 输出应 == compute_hash(), got {r.stdout.strip()!r}")
+
+        # 不存在文件 → exit 3
+        r2 = subprocess.run(
+            [sys.executable, os.path.abspath(__file__), "--compute-hash",
+             os.path.join(td, "nope.json")],
+            capture_output=True, text=True, timeout=10,
+        )
+        expect(r2.returncode == 3,
+               f"--compute-hash 不存在文件应 exit 3, got {r2.returncode}")
+
+    if failures:
+        print("self-check FAIL:", file=sys.stderr)
+        for m in failures:
+            print(f"  - {m}", file=sys.stderr)
+        return 1
+    print("self-check OK")
+    return 0
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--self-check":
+        sys.exit(_self_check())
+    if len(sys.argv) >= 3 and sys.argv[1] == "--compute-hash":
+        # contract-formalizer.md L456 承诺的接口：输出 hash 字符串供 generator 填入 _passport.contract_hash
+        contract_path = sys.argv[2]
+        try:
+            with open(contract_path, "r", encoding="utf-8") as f:
+                contract = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(3)
+        print(compute_hash(contract))
+        sys.exit(0)
     if len(sys.argv) < 2:
         print("Usage: python scripts/passport_verify.py <path/to/structured_contract.json>")
+        print("       python scripts/passport_verify.py --compute-hash <path>")
+        print("       python scripts/passport_verify.py --self-check")
         sys.exit(3)
 
     contract_path = sys.argv[1]

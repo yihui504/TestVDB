@@ -101,7 +101,7 @@ def main():
     ps_path = find_latest_pipeline_state()
     ps = read_json(ps_path) if ps_path else None
 
-    if ps and ps.get("version", 0) >= 3:
+    if _is_v3_state(ps):
         # v3 schema — precise phase recovery
         session_id = ps.get("session_id", "?")
         target = ps.get("target", "?")
@@ -132,10 +132,9 @@ def main():
         print(f"[TestVDB] Turn type: {turn_type}")
         print(f"[TestVDB] State file: {ps_path}")
 
-        if phases_completed:
-            print(f"[TestVDB] Recovery: 从 {phase} 阶段继续（跳过已完成的: {completed_str}）。")
-        else:
-            print(f"[TestVDB] Recovery: 从 {phase} 阶段开始执行。")
+        level, rmsg = _recovery_message(phase, phases_completed)
+        prefix = "[TestVDB] Recovery:" if level == "OK" else "[TestVDB] WARNING:"
+        print(f"{prefix} {rmsg}")
 
         # If loop turn, remind about reconstruct_context.py
         if turn_type == "loop":
@@ -179,5 +178,77 @@ def main():
     print("[TestVDB] PostCompact: Recovery instructions printed.")
 
 
+def _is_v3_state(ps):
+    """v3 schema 判断（main 原用 `ps and ps.get("version", 0) >= 3`）。
+
+    抽出为纯函数以便 self-check 守护（version 判断错误会导致走 legacy 分支丢失 v3 信息）。
+    """
+    return bool(ps) and ps.get("version", 0) >= 3
+
+
+def _recovery_message(phase, phases_completed):
+    """决定 PostCompact 恢复指令（设计附录 A CRITICAL：phase 不应在 phases_completed）。
+
+    返回 (level, msg)：
+    - level="WARNING"：phase 在 phases_completed 中 → 不一致（rollback 未正确移除），
+      恢复时不应跳过 phase（否则 retry 被跳过）
+    - level="OK"：phase 不在 → 正常继续/开始指令
+    """
+    if phase in phases_completed:
+        return ("WARNING",
+                f"phase={phase} 在 phases_completed 中 — 不一致（rollback 可能未正确移除），"
+                f"恢复时不应跳过 {phase}")
+    completed_str = ", ".join(phases_completed) if phases_completed else "无"
+    if phases_completed:
+        return ("OK", f"从 {phase} 阶段继续（跳过已完成的: {completed_str}）。")
+    return ("OK", f"从 {phase} 阶段开始执行。")
+
+
+def _self_check():
+    """守护 v3 schema 判断 + 恢复指令决策（设计附录 A CRITICAL 路径）。
+
+    覆盖：_is_v3_state 5 case（v3/legacy/空/None/新版）、_recovery_message 3 case
+   （phase 不在 → OK 继续跳过；phase 在 → WARNING 不一致；phases_completed 空 → OK 开始）。
+    纯函数测试，不读真实 state 文件。
+    """
+    failures = []
+
+    def expect(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    # _is_v3_state — version 判断
+    expect(_is_v3_state({"version": 3}) is True, "v3: version=3 应 True")
+    expect(_is_v3_state({"version": 5}) is True, "v3: version=5 应 True")
+    expect(_is_v3_state({"version": 2}) is False, "v3: version=2 应 False（legacy）")
+    expect(_is_v3_state({}) is False, "v3: 缺 version 字段应 False")
+    expect(_is_v3_state(None) is False, "v3: None 应 False")
+
+    # _recovery_message — 恢复指令 + 一致性 WARNING
+    lvl_ok, msg_ok = _recovery_message("REPORTING", ["ATTACK_GEN", "EXECUTION"])
+    expect(lvl_ok == "OK", f"phase 不在 phases_completed → OK，实际 {lvl_ok}")
+    expect("REPORTING" in msg_ok and "ATTACK_GEN" in msg_ok,
+           f"OK msg 应含 phase 和 completed，实际 {msg_ok}")
+
+    lvl_warn, msg_warn = _recovery_message("REPORTING", ["ATTACK_GEN", "REPORTING"])
+    expect(lvl_warn == "WARNING",
+           f"phase 在 phases_completed → WARNING 不一致，实际 {lvl_warn}")
+    expect("不一致" in msg_warn, f"WARNING msg 应含 '不一致'，实际 {msg_warn}")
+
+    lvl_empty, msg_empty = _recovery_message("ATTACK_GEN", [])
+    expect(lvl_empty == "OK", f"空 phases_completed → OK 开始，实际 {lvl_empty}")
+    expect("开始执行" in msg_empty, f"空 phases msg 应含 '开始执行'，实际 {msg_empty}")
+
+    if failures:
+        for m in failures:
+            print(f"  FAIL: {m}", file=sys.stderr)
+        print(f"self-check FAILED: {len(failures)} assertion(s)", file=sys.stderr)
+        sys.exit(1)
+    print("self-check OK")
+
+
 if __name__ == "__main__":
-    main()
+    if "--self-check" in sys.argv:
+        _self_check()
+    else:
+        main()

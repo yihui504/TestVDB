@@ -270,9 +270,160 @@ def write_review_json(session_dir, verification_result, target):
     return path
 
 
+# ── self-check ──────────────────────────────────────────
+
+def _self_check():
+    """守护非平凡逻辑（ponytail: parser + classifier + exit router 必须留 check）。
+
+    覆盖：VERDICT 行解析、SCRIPT_ERROR marker 检测、Ring regex、find_script、
+    分类决策矩阵 6 分支（verify_session）、exit code 映射（FP 优先于 NI）、
+    write_review_json id 提取（reporter retry 按此 id 精确读取）。
+    合成 fixture，不依赖真实 session。
+    """
+    import tempfile, shutil
+    failures = []
+
+    def expect(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    tmp = tempfile.mkdtemp(prefix="vd_selfcheck_")
+    try:
+        # 1. extract_verdict_from_log — VERDICT 行解析
+        log = os.path.join(tmp, "v.log")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("VERDICT: DEFECT_FOUND\nx\nVERDICT: NO_DEFECT\n")
+        v = extract_verdict_from_log(log)
+        expect(len(v) == 2, f"extract_verdict_from_log 应解析 2 VERDICT 行，实际 {len(v)}")
+        expect(extract_verdict_from_log(os.path.join(tmp, "missing.log")) == [],
+               "extract_verdict_from_log 缺失文件应返回 []")
+
+        # 2. extract_script_errors_from_log — markers 检测
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("x\nTypeError: boom\n")
+        expect(extract_script_errors_from_log(log) is True,
+               "extract_script_errors_from_log 应检测 TypeError:")
+        with open(log, "w", encoding="utf-8") as f:
+            f.write("clean\nVERDICT: DEFECT_FOUND\n")
+        expect(extract_script_errors_from_log(log) is False,
+               "extract_script_errors_from_log 干净 log 应 False")
+
+        # 3. check_ring_completeness — Ring 1/2/3 regex
+        full = ("Ring 1 Contract Clause Ring 2 Document Reference source_url "
+                "Ring 3 Actual Behavior HTTP Response")
+        expect(all(check_ring_completeness(full).values()),
+               "check_ring_completeness 完整 content 应全 True")
+        expect(not any(check_ring_completeness("nothing relevant").values()),
+               "check_ring_completeness 空 content 应全 False")
+
+        # 4. find_script — 目录查找
+        os.makedirs(os.path.join(tmp, "debate_logs"))
+        with open(os.path.join(tmp, "debate_logs", "foo.py"), "w", encoding="utf-8") as f:
+            f.write("# t")
+        expect(find_script(tmp, "foo") is not None, "find_script 应找到 debate_logs/foo.py")
+        expect(find_script(tmp, "missing") is None, "find_script 缺失应 None")
+        expect(find_script(tmp, "") is None, "find_script 空名应 None")
+
+        # 5. 分类决策矩阵 6 分支 — 构造 fixture session 跑 verify_session
+        ddir = os.path.join(tmp, "defects")
+        os.makedirs(ddir)
+        full_rings = ("Ring 1 Contract Clause\n"
+                      "Ring 2 Document Reference source_url\n"
+                      "Ring 3 Actual Behavior HTTP Response\n")
+
+        def wdef(name, body):
+            with open(os.path.join(ddir, name), "w", encoding="utf-8") as f:
+                f.write(body)
+
+        def wlog(name, body):
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as f:
+                f.write(body)
+
+        # A: script_error → NEEDS_IMPROVEMENT
+        wdef("defect-1.md", full_rings + "Log: output_a.log\n")
+        wlog("output_a.log", "TypeError: boom\n")
+        # B: methodology → FALSE_POSITIVE（脚本测索引但无 CREATE INDEX）
+        wdef("defect-2.md", full_rings + "Log: output_b.log\n")
+        wlog("output_b.log", "VERDICT: DEFECT_FOUND\n")
+        os.makedirs(os.path.join(tmp, "scripts"))
+        with open(os.path.join(tmp, "scripts", "b.py"), "w", encoding="utf-8") as f:
+            f.write("SELECT * FROM t ORDER BY x LIMIT 1; -- index scan\n")
+        # C: missing_rings → NEEDS_IMPROVEMENT
+        wdef("defect-3.md", "Log: output_c.log\n")
+        wlog("output_c.log", "VERDICT: DEFECT_FOUND\n")
+        # D: NO_DEFECT verdict → FALSE_POSITIVE
+        wdef("defect-4.md", full_rings + "Log: output_d.log\n")
+        wlog("output_d.log", "VERDICT: NO_DEFECT\n")
+        # E: no verdict → NEEDS_IMPROVEMENT
+        wdef("defect-5.md", full_rings + "Log: output_e.log\n")
+        wlog("output_e.log", "some log without verdict line\n")
+        # F: 干净 + DEFECT_FOUND + 完整 rings → CONFIRMED
+        wdef("defect-6.md", full_rings + "Log: output_f.log\n")
+        wlog("output_f.log", "VERDICT: DEFECT_FOUND\n")
+
+        res = verify_session(tmp, "testdb")
+        by_file = {r["file"]: r["status"] for r in res.get("results", [])}
+        expect(by_file.get("defect-1.md") == "NEEDS_IMPROVEMENT",
+               f"A script_error → NEEDS_IMPROVEMENT，实际 {by_file.get('defect-1.md')}")
+        expect(by_file.get("defect-2.md") == "FALSE_POSITIVE",
+               f"B methodology → FALSE_POSITIVE，实际 {by_file.get('defect-2.md')}")
+        expect(by_file.get("defect-3.md") == "NEEDS_IMPROVEMENT",
+               f"C missing_rings → NEEDS_IMPROVEMENT，实际 {by_file.get('defect-3.md')}")
+        expect(by_file.get("defect-4.md") == "FALSE_POSITIVE",
+               f"D NO_DEFECT verdict → FALSE_POSITIVE，实际 {by_file.get('defect-4.md')}")
+        expect(by_file.get("defect-5.md") == "NEEDS_IMPROVEMENT",
+               f"E no verdict → NEEDS_IMPROVEMENT，实际 {by_file.get('defect-5.md')}")
+        expect(by_file.get("defect-6.md") == "CONFIRMED",
+               f"F 干净+DEFECT_FOUND → CONFIRMED，实际 {by_file.get('defect-6.md')}")
+
+        # 6. exit code 映射（CLI 末尾语义：FP>0→2 优先于 NI>0→1，再 else→0）
+        def exit_for(fp, ni):
+            if fp > 0:
+                return 2
+            if ni > 0:
+                return 1
+            return 0
+        expect(exit_for(0, 0) == 0, "exit: 全 CONFIRMED → 0")
+        expect(exit_for(0, 1) == 1, "exit: NI → 1")
+        expect(exit_for(1, 0) == 2, "exit: FP → 2")
+        expect(exit_for(1, 1) == 2, "exit: FP+NI → 2（FP 优先于 NI）")
+
+        # 7. write_review_json id 提取（reporter retry 按 id 精确读取）
+        import contextlib, io
+        review = {"results": [{"file": "defect-7.md", "status": "CONFIRMED", "reason": "x"}]}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            out_path = write_review_json(tmp, review, "testdb")
+        with open(out_path, encoding="utf-8") as f:
+            rj = json.load(f)
+        expect(rj["defects"][0]["id"] == "7",
+               f"write_review_json id 提取 defect-7.md → '7'，实际 {rj['defects'][0].get('id')}")
+
+        # 8. subprocess 跑真实 CLI — 验证 exit code 与 CLI 末尾逻辑一致
+        # ponytail: exit_for 内部测语义；subprocess 测真实 CLI（防 FP/NI exit code 被交换）
+        # fixture: FP=2 (B,D), NI=3 (A,C,E), CONFIRMED=1 (F) → FP>0 优先 → exit 2
+        import subprocess as _sp
+        proc = _sp.run([sys.executable, os.path.abspath(__file__), tmp, "--target", "testdb"],
+                       capture_output=True, text=True)
+        expect(proc.returncode == 2,
+               f"subprocess CLI exit 应=2（FP 优先于 NI），实际 {proc.returncode}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    if failures:
+        for m in failures:
+            print(f"  FAIL: {m}", file=sys.stderr)
+        print(f"self-check FAILED: {len(failures)} assertion(s)", file=sys.stderr)
+        sys.exit(1)
+    print("self-check OK")
+
+
 # ── CLI ──────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    if "--self-check" in sys.argv:
+        _self_check()
+        sys.exit(0)
     if len(sys.argv) < 2:
         print("Usage: python scripts/verify_defects.py <session_dir> [--target qdrant]")
         sys.exit(1)
