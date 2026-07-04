@@ -252,6 +252,23 @@ def check_settings_schema():
         print(f"[TestVDB] Settings schema: WARNING - {e}")
 
 
+def check_glm_proxy():
+    """检测 glm proxy 环境（P3-20: env 标志机制，提前触发 fallback 避免 Stop hook 重试 N 次才降级）。
+
+    现状（无 env 标志）：glm proxy 下 knowledge-extractor/verify-live-l2 agent 频繁 HTTP 400，
+    Stop hook 重试 N 次后才降级（mine.md L315 knowledge 复用 + L619 direct-probe）。
+    env 标志 TESTVDB_PROXY=glm 让 pipeline 启动时就知道走 fallback，省去重试成本。
+    ponytail: env 标志（用户手动设）是最小机制；自动 probe（dispatch 微探针 agent 检测 HTTP 400 模式）scope 大留下轮。
+    """
+    proxy = os.environ.get("TESTVDB_PROXY", "").lower()
+    if proxy == "glm":
+        print("[TestVDB] Proxy: GLM mode (knowledge-extractor -> Task 4a fallback, verify-live-l2 -> direct-probe)")
+    elif proxy:
+        print(f"[TestVDB] Proxy: {proxy} (unknown value; set TESTVDB_PROXY=glm for glm proxy fallback)")
+    else:
+        print("[TestVDB] Proxy: standard (no TESTVDB_PROXY env; set =glm for glm proxy fallback)")
+
+
 def main():
     print("[TestVDB] Pre-flight checks...")
     check_docker()
@@ -263,6 +280,7 @@ def main():
     check_docker_hub_token()
     check_db_clients()
     check_network()
+    check_glm_proxy()
     check_settings_schema()
     print("[TestVDB] Checks done. Python<3.9 is fatal per Orchestrator spec.")
 

@@ -306,6 +306,8 @@ print(json.dumps({
 
 ### Step 4: 派 Knowledge Extractor（Task 4a：失败时复用+标记）
 
+> **P3-20 glm proxy 模式（env 标志提前触发）**：preflight `check_glm_proxy` 检测 `TESTVDB_PROXY=glm` env 标志后，pipeline 启动时即知 glm proxy 环境 → knowledge-extractor 直接走 Task 4a fallback（省去 Stop hook 重试 N 次才降级）。标准代理环境仍按"agent 失败后"路径触发。glm proxy 环境用户在 SessionStart 前设 `TESTVDB_PROXY=glm`。
+
 ```
 # 先检查是否有旧版本 knowledge 可复用
 OLD_VERSION=$(find results/{target} -maxdepth 2 -name "raw_knowledge.md" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d" " -f2- | sed 's|/raw_knowledge.md||')
