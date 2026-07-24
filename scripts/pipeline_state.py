@@ -349,14 +349,39 @@ def _make_session_id(target: str, version: str) -> str:
 
 # ── Transition gates (设计 §3.4 — 挂 CLI 层) ──────────────────
 
+def _strict_enabled(session_dir: str) -> bool:
+    """strict 模式跨 turn 持久化（ADR: session_dir/.enforce_strict marker 文件）。
+
+    优先级：env TESTVDB_ENFORCE_STRICT 显式 "1" → True（并落盘 marker）；
+    env 显式 "0" → False（并清 marker）；env 缺失 → 读 marker 文件存在性。
+    这样跨 turn（Stop hook 新 bash 丢失 env）仍保持 strict — P2-9。
+    """
+    env = os.environ.get("TESTVDB_ENFORCE_STRICT")
+    marker = Path(session_dir) / ".enforce_strict"
+    if env == "1":
+        try:
+            marker.write_text("1", encoding="utf-8")
+        except OSError:
+            pass  # 落盘失败不阻塞 gate（仍返回 True 本次生效）
+        return True
+    if env == "0":
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    return marker.exists()
+
+
 def _run_transition_gates(from_phase: str, to_phase: str, session_dir: str, target: str) -> list[dict]:
     """跑 transition 前置 gate 脚本，返回每 gate 结果。
     ponytail: subprocess 隔离跑独立 gate（复用 §3.3 CLI 契约）。
-    TESTVDB_ENFORCE_STRICT=1 时 fail 抛 InvalidTransition；否则 advisory warn 继续。"""
+    TESTVDB_ENFORCE_STRICT=1 时 fail 抛 InvalidTransition；否则 advisory warn 继续。
+    strict 来源见 _strict_enabled（跨 turn 持久化，P2-9）。"""
     gates = TRANSITION_GATES.get((from_phase, to_phase), [])
     if not gates:
         return []
-    strict = os.environ.get("TESTVDB_ENFORCE_STRICT") == "1"
+    strict = _strict_enabled(session_dir)
     scripts_dir = Path(__file__).parent
     results = []
     for g in gates:
@@ -395,6 +420,24 @@ def _run_transition_gates(from_phase: str, to_phase: str, session_dir: str, targ
 
 # ── Defect review routing（设计 §3.2 retry 状态机）─────────────
 
+def _log_advisory_failure(session_dir: str, gate: str, exc: BaseException) -> None:
+    """Log subprocess/gate failure to gate_logs/{gate}_error.json (best-effort).
+
+    ponytail: advisory 模式不阻塞 pipeline，但 silent 会让故障不可见。
+    日志写入失败本身静默 — 不能让日志机制阻塞 advisory advance。
+    """
+    try:
+        log_path = Path(session_dir) / "gate_logs" / f"{gate}_error.json"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "w", encoding="utf-8") as f:
+            json.dump({
+                "error": f"{gate} subprocess failed: {type(exc).__name__}: {exc}",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+
+
 def _handle_defect_review(state: "PipelineState", session_dir: str, target: str) -> str:
     """跑 verify_defects，按 exit code 三态路由。返回 'advance' 或 'rollback'。
 
@@ -410,8 +453,9 @@ def _handle_defect_review(state: "PipelineState", session_dir: str, target: str)
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace")
         rc = proc.returncode
-    except Exception:
-        return "advance"  # subprocess 故障 — 不阻塞
+    except Exception as exc:
+        _log_advisory_failure(session_dir, "verify_defects", exc)
+        return "advance"  # subprocess 故障 — 不阻塞（advisory，已 log）
 
     # rc 3/4 = 启动错误（无数据/session_dir 不存在）— verify_defects 已警告
     if rc in (3, 4):
@@ -614,6 +658,41 @@ def _self_check() -> None:
             assert False, "非法回退应抛 InvalidTransition"
         except InvalidTransition:
             pass
+
+        # P2-9: strict 跨 turn 持久化（marker 文件落盘）
+        sd3 = str(sd) + "3"
+        PipelineState.create(
+            target="t", version="v1", max_rounds=1, min_defects=0, session_dir=sd3)
+        marker3 = Path(sd3) / ".enforce_strict"
+        # env 缺失 + 无 marker → advisory
+        os.environ.pop("TESTVDB_ENFORCE_STRICT", None)
+        assert not _strict_enabled(sd3), "env 缺失 + 无 marker 应 advisory"
+        # env=1 → 落盘 marker
+        os.environ["TESTVDB_ENFORCE_STRICT"] = "1"
+        assert _strict_enabled(sd3), "env=1 应 strict"
+        assert marker3.exists(), "env=1 应落盘 marker"
+        # 跨 turn：env 丢失，marker 仍在 → 仍 strict
+        os.environ.pop("TESTVDB_ENFORCE_STRICT", None)
+        assert _strict_enabled(sd3), "跨 turn env 丢失 + marker 存在应仍 strict"
+        # env=0 → 清除 marker
+        os.environ["TESTVDB_ENFORCE_STRICT"] = "0"
+        assert not _strict_enabled(sd3), "env=0 应 advisory"
+        assert not marker3.exists(), "env=0 应清 marker"
+        os.environ.pop("TESTVDB_ENFORCE_STRICT", None)
+
+        # P3-19: subprocess 故障写 advisory log（不阻塞，但可观测）
+        sd4 = str(sd) + "4"
+        _log_advisory_failure(sd4, "verify_defects", RuntimeError("boom"))
+        log_file = Path(sd4) / "gate_logs" / "verify_defects_error.json"
+        assert log_file.exists(), "advisory failure 应写 gate_logs/{gate}_error.json"
+        data = json.loads(log_file.read_text(encoding="utf-8"))
+        assert "verify_defects subprocess failed" in data["error"], \
+            f"error 应含 gate 名, got {data['error']}"
+        assert "RuntimeError" in data["error"], \
+            f"error 应含异常类型, got {data['error']}"
+        assert "boom" in data["error"], \
+            f"error 应含异常消息, got {data['error']}"
+        assert "timestamp" in data, "应有 ISO8601 timestamp"
     print("self-check OK")
 
 

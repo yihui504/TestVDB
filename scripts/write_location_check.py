@@ -15,7 +15,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _pipeline_utils import setup_encoding  # noqa: E402
 from _session_utils import _plugin_root  # noqa: E402
+
+setup_encoding()  # stderr UTF-8 — 中文警告在 Windows cp1252 默认下会 UnicodeEncodeError
 
 # Sanctioned top-level entries; anything else sitting directly at the root is suspect.
 LEGAL_TOPLEVEL = {

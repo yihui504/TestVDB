@@ -33,13 +33,13 @@ tools:
 ```
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_doc.json
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_evidence.json（如有，获取 evidence 投票结果 — evidence 先完成有 .done；⛔ 勿读 stage2_aggregation.json，它在 severity 之后产生，读它会循环依赖导致 severity 产出空 {}）
-Turn 2-3: 逐个评估 severity（Top-5 候选，复杂缺陷可用至 5 turns）
-Turn 3-4: Write ${SESSION_DIR}/debate_logs/stage2_severity.json
-Turn 4: Bash  touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done
+Turn 2-N: 逐个评估 severity（**全部 DOC_VERIFIED 候选** — 禁止 top-N 截断，否则 aggregate_votes 会把缺票 candidate 当 rejected，人为压低 debate_confirmed）
+Turn N+1: Write ${SESSION_DIR}/debate_logs/stage2_severity.json
+Turn N+1: Bash  touch ${SESSION_DIR}/debate_logs/stage2_severity.json.done
 ```
 
-**只评估 stage2_doc.json 中的 Top-5 候选（按 severity 排序）。
-Turn 4 之前必须完成。如果涉及 v2.1 校准规则或多端点交叉影响评估，可用至 5 turns。
+**⛔ 必须评估 stage2_doc.json 中全部 DOC_VERIFIED 候选（非子集，非 top-N）。
+votes 数组长度必须 == stage2_doc.json 的 DOC_VERIFIED 计数。复杂缺陷可多用 turns（maxTurns=300 充足）。
 不要读日志，不要 WebSearch。写完 JSON 后必须立即 touch .done 文件。**
 
 ---

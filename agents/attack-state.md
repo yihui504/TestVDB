@@ -45,7 +45,7 @@ tools:
 1. **每轮必须产出 ≥ 5 个 Python 攻击脚本**。Round 1 也必须产出，不允许以"需要初始化"为理由跳过。
 2. **优先写入脚本文件，再补充分析**。你的 first action 应该是 Write 一个脚本文件。
 3. **如果只剩 3 个 turns，立即停止分析，用剩余的 turns 写入所有脚本**。
-4. 脚本统一写入 `${session_dir}/state_scripts/` 目录。
+4. 脚本统一写入 `${session_dir}/debate_logs/` 目录（规范目录 — 下游 gate 只扫此目录，写别处脚本变不可见）。
 
 ---
 

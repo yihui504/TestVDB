@@ -306,6 +306,8 @@ print(json.dumps({
 
 ### Step 4: 派 Knowledge Extractor（Task 4a：失败时复用+标记）
 
+> **P3-20 glm proxy 模式（env 标志提前触发）**：preflight `check_glm_proxy` 检测 `TESTVDB_PROXY=glm` env 标志后，pipeline 启动时即知 glm proxy 环境 → knowledge-extractor 直接走 Task 4a fallback（省去 Stop hook 重试 N 次才降级）。标准代理环境仍按"agent 失败后"路径触发。glm proxy 环境用户在 SessionStart 前设 `TESTVDB_PROXY=glm`。
+
 ```
 # 先检查是否有旧版本 knowledge 可复用
 OLD_VERSION=$(find results/{target} -maxdepth 2 -name "raw_knowledge.md" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d" " -f2- | sed 's|/raw_knowledge.md||')
@@ -613,6 +615,26 @@ python scripts/verify_live_l1.py "results/{target}/{version}/{timestamp}" --targ
 Agent(subagent_type="testvdb:verify-live-l2", description="L2 语义闸门 {target}",
   prompt="按照 agents/verify-live-l2.md 规范，对 verify_live_l1.json 中 UNCERTAIN 候选执行 Docker 实测验证。session_dir=results/{target}/{version}/{timestamp}, target={target}。")
 ```
+
+**超时/无产出 fallback（P2-12）**：若 L2 agent 在 maxTurns 内未产出 `verify_live_l2.json`（卡死/超时），主进程有两条降级路径（按此顺序尝试）：
+
+**路径 A — orchestrator-side direct-probe（P0-9 遗留，推荐优先）**：
+主进程直接 curl 实测 UNCERTAIN candidates（非默认全 REFUTED）。比"全 UNCERTAIN→REFUTED"更精确，且不依赖 agent（glm proxy 下 agent 可能不可靠）。
+```bash
+cd "results/{target}/{version}/{timestamp}" && source ./.executor.env
+# 逐 UNCERTAIN candidate: 读脚本核心攻击向量 → curl 实测 → 记录实际 HTTP status + body
+# 例 qdrant: curl -s -X POST "$TESTVDB_DB_URL/collections/<col>/points/search" -H 'Content-Type: application/json' -d '<attack-body>'
+```
+- 实测后写 `verify_live_l2.json`，`generated_by: "orchestrator-direct-probe"`，每 candidate 记 verdict (CONFIRMED/REFUTED/UNCERTAIN) + 实际 HTTP 响应证据
+- HTTP 4xx + 清晰错误诊断 → REFUTED（target 正确拒绝，非 defect）
+- HTTP 2xx 但契约要求拒绝 → CONFIRMED（真 positive）
+- 模棱两可（状态污染/隔离不足）→ UNCERTAIN
+- 见 `agents/verify-live-l2.md` 的 direct-probe 交叉引用
+
+**路径 B — 兜底 UNCERTAIN→REFUTED（保守最后手段）**：
+若 direct-probe 也无法执行（如非 HTTP target、容器不可达），UNCERTAIN 候选视为 REFUTED（保守移除，不进 reporter — 避免未经验证的误报；与 L1 REFUTED 同处理）
+- 升级路径：检查 `.executor.env` 是否 source（P1-8）、Docker 容器是否 healthy（P2-8）、counter-query 是否过复杂
+- L2 是按需闸门（覆盖 ~10% 语义情况），超时降级**不阻塞**流水线
 
 **更新 pipeline_state**: `phase` = `"REPORTING"`, `phases_completed` 追加 `"VERIFY_LIVE"`
 

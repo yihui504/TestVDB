@@ -40,7 +40,7 @@ tools:
 
 1. **每轮必须产出 ≥ 5 个 Python 脚本**。先写脚本，再补充分析。
 2. **Round 2+ 策略**：跳过 reflection_context 中已覆盖的端点，聚焦 top-5 高价值新端点。如果只剩 3 turns，立即停止生成，Write 已完成的脚本。
-3. 脚本写入 `${session_dir}/boundary_scripts/`。
+3. 脚本写入 `${session_dir}/debate_logs/`（规范目录 — 下游 gate 只扫此目录，写别处脚本变不可见）。
 
 参考原 `boundary_gen.rs` 生成器策略，但不受其代码限制。
 

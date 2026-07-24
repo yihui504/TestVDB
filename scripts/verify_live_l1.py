@@ -346,7 +346,7 @@ def verify_l1(session_dir, target="pgvector", db_url=None):
     return output
 
 
-# ── self-check / cli ────────────────────────────────────────────────
+# ── cli demo ────────────────────────────────────────────────────
 
 def _demo():
     if len(sys.argv) < 2:
@@ -377,5 +377,114 @@ def _demo():
             print(f"       {reason}")
 
 
+# ── self-check ────────────────────────────────────────────────
+
+def _self_check():
+    """守护非平凡逻辑（ponytail: 11 checks + parser + schema 兼容必须留 check）。
+
+    覆盖：_resolve_exception（内建/不存在）、_load_candidates（list/dict/空 schema）、
+    _match、_content、ALL_CHECKS 自描述（check 方法存在）、HttpLayerConfusionCheck
+    （404+DEFECT_FOUND→REFUTED，干净→None）、PostgresAbortedCheck
+    （transaction aborted→REFUTED）。合成 fixture，不依赖真实 session/docker。
+    """
+    import tempfile, os
+    failures = []
+
+    def expect(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    # 1. _resolve_exception — 内建异常解析
+    expect(_resolve_exception("ValueError") is ValueError,
+           "_resolve_exception('ValueError') 应返回 ValueError")
+    expect(_resolve_exception("TypeError") is TypeError,
+           "_resolve_exception('TypeError') 应返回 TypeError")
+    expect(_resolve_exception("KeyError") is KeyError,
+           "_resolve_exception('KeyError') 应返回 KeyError")
+    expect(_resolve_exception("NonExistentExceptionXYZ") is None,
+           "_resolve_exception 不存在异常应 None")
+    expect(_resolve_exception("") is None,
+           "_resolve_exception 空字符串应 None")
+
+    # 2. _load_candidates — list/dict/空 schema 兼容
+    list_cands = _load_candidates({"confirmed_defects": [{"defect_id": "1", "script": "foo"}]})
+    expect(len(list_cands) == 1 and list_cands[0].get("script") == "foo",
+           f"list schema 应解析 1 项含 script，实际 {list_cands}")
+
+    dict_cands = _load_candidates({"confirmed": {"d1": {"sev": "High"}, "d2": {"sev": "Low"}}})
+    expect(len(dict_cands) == 2 and dict_cands[0].get("defect_id") == "d1",
+           f"dict schema 应解析 2 项含 defect_id，实际 {dict_cands}")
+
+    expect(_load_candidates({}) == [], "空 agg 应 []")
+    expect(_load_candidates({"confirmed_defects": "not a list"}) == [],
+           "非 list confirmed_defects 应 fallback 到 confirmed → []")
+
+    # 3. _match — 正则（IGNORECASE）
+    expect(_match(r"status[:\s]*40[0-9]", "Status: 400 Bad") is True,
+           "_match 应 IGNORECASE 匹配 status 400")
+    expect(_match(r"status[:\s]*40[0-9]", "OK 200") is False,
+           "_match 不匹配 200")
+
+    # 4. _content — 文件读 + lower
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8")
+    tmp.write("Status: 404 Not Found\n")
+    tmp.close()
+    try:
+        c = _content(tmp.name)
+        expect("status: 404" in c, f"_content 应读+lower，实际 '{c[:50]}'")
+        expect(_content("/nonexistent/xyz") == "", "_content 不存在应 ''")
+        expect(_content("") == "", "_content 空路径应 ''")
+    finally:
+        os.unlink(tmp.name)
+
+    # 5. ALL_CHECKS — 每个 check 自描述（有 check 方法）
+    expect(len(ALL_CHECKS) >= 10, f"ALL_CHECKS 应 >=10 个，实际 {len(ALL_CHECKS)}")
+    for chk in ALL_CHECKS:
+        expect(hasattr(chk, "check"), f"{type(chk).__name__} 缺 check 方法")
+
+    # 6. HttpLayerConfusionCheck — 404+DEFECT_FOUND → REFUTED（不依赖 ctx）
+    h = HttpLayerConfusionCheck()
+    tmp2 = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8")
+    tmp2.write("HTTP Status: 404 Not Found\nVERDICT: DEFECT_FOUND\n")
+    tmp2.close()
+    try:
+        v = h.check({}, tmp2.name, CheckContext())
+        expect(v is not None and v.result == "REFUTED",
+               f"404+DEFECT_FOUND 应 REFUTED，实际 {v}")
+    finally:
+        os.unlink(tmp2.name)
+    # 干净 log → None
+    tmp2b = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8")
+    tmp2b.write("VERDICT: NO_DEFECT\n")
+    tmp2b.close()
+    try:
+        v2 = h.check({}, tmp2b.name, CheckContext())
+        expect(v2 is None, f"干净 log 应 None，实际 {v2}")
+    finally:
+        os.unlink(tmp2b.name)
+
+    # 7. PostgresAbortedCheck — 'transaction is aborted' → REFUTED
+    p = PostgresAbortedCheck()
+    tmp3 = tempfile.NamedTemporaryFile(mode="w", suffix=".log", delete=False, encoding="utf-8")
+    tmp3.write("ERROR: current transaction is aborted\n")
+    tmp3.close()
+    try:
+        v = p.check({}, tmp3.name, CheckContext())
+        expect(v is not None and v.result == "REFUTED",
+               f"transaction aborted 应 REFUTED，实际 {v}")
+    finally:
+        os.unlink(tmp3.name)
+
+    if failures:
+        for m in failures:
+            print(f"  FAIL: {m}", file=sys.stderr)
+        print(f"self-check FAILED: {len(failures)} assertion(s)", file=sys.stderr)
+        sys.exit(1)
+    print("self-check OK")
+
+
 if __name__ == "__main__":
-    _demo()
+    if "--self-check" in sys.argv:
+        _self_check()
+    else:
+        _demo()

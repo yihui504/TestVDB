@@ -22,7 +22,7 @@ def validate_scripts(session_dir: str) -> list[dict]:
     """Scan all .py files in session_dir for API call format violations."""
     findings = []
     for f in sorted(glob.glob(os.path.join(session_dir, "**/*.py"), recursive=True)):
-        if "/mre/" in f:
+        if "/mre/" in f.replace("\\", "/"):
             continue
         with open(f, encoding="utf-8", errors="replace") as fh:
             try:
@@ -65,7 +65,104 @@ def validate_scripts(session_dir: str) -> list[dict]:
     return findings
 
 
+def _self_check():
+    """守护 AST parser 的 safe harbor 陷阱（ponytail: parser 必须留 check）。
+
+    覆盖 5 case：(a) safe_request 体外 bare .json() 被检测；(b) 体内 .json() 排除；
+    (c) json.dumps/loads 不被误判（attr=dumps/loads ≠ json）；(d) safe_request
+    定义但未调用 → WARN；(e) 全 safe_request 调用 → clean（无 issue）。
+    合成 .py fixture，不依赖真实 session。
+    """
+    import tempfile, shutil
+    failures = []
+
+    def expect(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    tmp = tempfile.mkdtemp(prefix="vaf_selfcheck_")
+    try:
+        # Case 1: bare .json() outside safe_request → detected
+        with open(os.path.join(tmp, "bad.py"), "w", encoding="utf-8") as f:
+            f.write("import requests\n"
+                    "def attack(s):\n"
+                    "    r = requests.post(s)\n"
+                    "    return r.json()\n")
+        # Case 2: .json() inside safe_request body → excluded (safe harbor)
+        with open(os.path.join(tmp, "safe.py"), "w", encoding="utf-8") as f:
+            f.write("import requests\n"
+                    "def safe_request(url, **kw):\n"
+                    "    r = requests.post(url, **kw)\n"
+                    "    return r.json()\n"
+                    "def attack(s):\n"
+                    "    return safe_request(s)\n")
+        # Case 3: json.dumps/loads → not flagged (attr=dumps/loads)
+        with open(os.path.join(tmp, "dumps.py"), "w", encoding="utf-8") as f:
+            f.write("import json\n"
+                    "def attack(s):\n"
+                    "    data = json.dumps({'a': 1})\n"
+                    "    return json.loads(data)\n")
+        # Case 4: safe_request defined but never called → WARN
+        with open(os.path.join(tmp, "unused.py"), "w", encoding="utf-8") as f:
+            f.write("import requests\n"
+                    "def safe_request(url, **kw):\n"
+                    "    return requests.post(url, **kw)\n"
+                    "def attack(s):\n"
+                    "    return requests.get(s)\n")
+        # Case 5: clean — safe_request defined and used, no bare .json()
+        with open(os.path.join(tmp, "clean.py"), "w", encoding="utf-8") as f:
+            f.write("import requests\n"
+                    "def safe_request(url, **kw):\n"
+                    "    return requests.post(url, **kw).json()\n"
+                    "def attack(s):\n"
+                    "    return safe_request(s)\n")
+
+        findings = validate_scripts(tmp)
+        by_file = {f["file"]: f["issues"] for f in findings}
+
+        bad = by_file.get("bad.py", [])
+        expect(any("bare .json()" in i for i in bad),
+               f"bad.py bare .json() 应被检测，实际 issues={bad}")
+
+        safe = by_file.get("safe.py", [])
+        expect(not any("bare .json()" in i for i in safe),
+               f"safe.py safe_request 内 .json() 应排除（safe harbor），实际 issues={safe}")
+
+        dumps = by_file.get("dumps.py", [])
+        expect(not any("bare .json()" in i for i in dumps),
+               f"dumps.py json.dumps/loads 不应被误判，实际 issues={dumps}")
+
+        unused = by_file.get("unused.py", [])
+        expect(any("safe_request defined but never called" in i for i in unused),
+               f"unused.py safe_request 未调用应 WARN，实际 issues={unused}")
+
+        expect("clean.py" not in by_file,
+               f"clean.py 全 safe_request 应无 issue（不在 findings），实际 {by_file.get('clean.py')}")
+
+        # mre/ skip (Windows path root cause 完整化，与 detect_risky L39 同范式)
+        mre_dir = os.path.join(tmp, "mre")
+        os.makedirs(mre_dir, exist_ok=True)
+        with open(os.path.join(mre_dir, "should_skip.py"), "w", encoding="utf-8") as f:
+            f.write("import requests\nrequests.get('x').json()\n")  # bare .json() in mre/
+        findings_with_mre = validate_scripts(tmp)
+        mre_flagged = any("should_skip" in f["file"] for f in findings_with_mre)
+        expect(not mre_flagged,
+               f"mre/should_skip.py 应被跳过（Windows path 完整化），findings={[f['file'] for f in findings_with_mre]}")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    if failures:
+        for m in failures:
+            print(f"  FAIL: {m}", file=sys.stderr)
+        print(f"self-check FAILED: {len(failures)} assertion(s)", file=sys.stderr)
+        sys.exit(1)
+    print("self-check OK")
+
+
 def main():
+    if "--self-check" in sys.argv:
+        _self_check()
+        sys.exit(0)
     if len(sys.argv) < 2:
         print("Usage: python scripts/validate_api_format.py <session_dir>", file=sys.stderr)
         sys.exit(1)

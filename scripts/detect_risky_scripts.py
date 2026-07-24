@@ -36,7 +36,7 @@ def detect_risky_scripts(session_dir: str) -> list[dict]:
     """
     risky = []
     for f in sorted(glob.glob(os.path.join(session_dir, "**/*.py"), recursive=True)):
-        if "/mre/" in f:
+        if "/mre/" in f.replace("\\", "/"):
             continue
         try:
             with open(f, encoding="utf-8", errors="replace") as fh:
@@ -60,7 +60,73 @@ def detect_risky_scripts(session_dir: str) -> list[dict]:
     return risky
 
 
+def _self_check() -> int:
+    """Self-check: safe_request/try: 排除 + mre/ 跳过 + break 单 script 单 flag + pattern 成员守卫."""
+    import tempfile
+    from pathlib import Path
+
+    failures = []
+
+    def expect(cond, msg):
+        if not cond:
+            failures.append(msg)
+
+    with tempfile.TemporaryDirectory() as td:
+        # risky: TypeError 无 safe_request/try
+        (Path(td) / "risky1.py").write_text("raise TypeError('x')\n", encoding="utf-8")
+        # robust: TypeError + try
+        (Path(td) / "robust_try.py").write_text(
+            "try:\n    raise TypeError()\nexcept Exception:\n    pass\n", encoding="utf-8")
+        # robust: TypeError + safe_request
+        (Path(td) / "robust_safe.py").write_text(
+            "def safe_request():\n    pass\nsafe_request()\n# TypeError mentioned\n", encoding="utf-8")
+        # clean: 无 risky pattern
+        (Path(td) / "clean.py").write_text("print('hello')\n", encoding="utf-8")
+        # mre/ 应跳过（Windows 路径 \mre\ 也要正确跳过）
+        mre_dir = Path(td) / "sub" / "mre"
+        mre_dir.mkdir(parents=True)
+        (mre_dir / "should_skip.py").write_text("raise TypeError('x')\n", encoding="utf-8")
+
+        findings = detect_risky_scripts(td)
+        rel_files = {f["file"].replace("\\", "/") for f in findings}
+
+        expect("risky1.py" in rel_files, f"risky1 should be flagged: {rel_files}")
+        expect("robust_try.py" not in rel_files, f"robust_try should be skipped (try:): {rel_files}")
+        expect("robust_safe.py" not in rel_files, f"robust_safe should be skipped (safe_request): {rel_files}")
+        expect("clean.py" not in rel_files, f"clean should not be flagged: {rel_files}")
+        mre_flagged = any("/mre/" in f for f in rel_files)
+        expect(not mre_flagged, f"mre/ should be skipped (Windows-safe): {rel_files}")
+
+        # break 单 script 单 flag
+        risky1_findings = [f for f in findings if "risky1" in f["file"]]
+        expect(len(risky1_findings) == 1, f"risky1 single flag (break): got {len(risky1_findings)}")
+
+        # case-insensitive
+        (Path(td) / "lower.py").write_text("got typeerror from server\n", encoding="utf-8")
+        findings2 = detect_risky_scripts(td)
+        expect(any("lower.py" in f["file"] for f in findings2), "case-insensitive TypeError detection")
+
+        # ERROR_PATTERNS 当前成员守卫（防意外 drift）
+        expected = [
+            "'str' object has no attribute 'get'",
+            "TypeError", "AttributeError",
+            "json.decoder.JSONDecodeError",
+            "KeyError:", "IndexError:",
+        ]
+        expect(ERROR_PATTERNS == expected, f"ERROR_PATTERNS drift: {ERROR_PATTERNS}")
+
+    if failures:
+        print("self-check FAIL:", file=sys.stderr)
+        for f in failures:
+            print(f"  - {f}", file=sys.stderr)
+        return 1
+    print("self-check OK")
+    return 0
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--self-check":
+        sys.exit(_self_check())
     if len(sys.argv) < 2:
         print("Usage: python scripts/detect_risky_scripts.py <session_dir>", file=sys.stderr)
         sys.exit(1)

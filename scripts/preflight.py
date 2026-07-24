@@ -143,6 +143,70 @@ def check_docker_hub_token():
         print("[TestVDB] Docker Hub Token: WARNING - not set. Docker CLI commands (pull/manifest) work without token. Only Docker Hub REST API queries for tag listing may be rate-limited.")
 
 
+# DB 客户端检查（mine 时 host 跑 attack scripts 需要目标客户端；distroless 容器无 python）
+# ponytail: importlib.util.find_spec 不实际 import（无副作用），stdlib 即够
+_DB_CLIENTS = {
+    "chroma": ("chromadb", "chromadb"),
+    "milvus": ("pymilvus", "pymilvus"),
+    "qdrant": ("qdrant_client", "qdrant-client"),
+    "weaviate": ("weaviate", "weaviate-client"),
+    "pgvector": ("psycopg2", "psycopg2-binary"),
+    "meilisearch": ("meilisearch", "meilisearch"),
+}
+
+
+def check_db_clients():
+    """检查 host 是否装了支持 target 的 DB 客户端（mine 时 host 跑 scripts 需要）。
+
+    docker-executor 实战教训：distroless 镜像（chromadb/chroma:1.5.9 等）无 python，
+    必须用 host py + 客户端连容器 DB。缺客户端 → docker-executor agent 失败。
+    提前在 preflight 告知，而非跑到 docker-executor 才报错。
+    """
+    import importlib.util
+    print("[TestVDB] DB clients (host must have for mine):")
+    missing = []
+    for target, (module, pip) in _DB_CLIENTS.items():
+        ok = importlib.util.find_spec(module) is not None
+        status = "OK" if ok else f"MISSING (pip install {pip})"
+        print(f"[TestVDB]   {target}: {status}")
+        if not ok:
+            missing.append(target)
+    if missing:
+        joined = ", ".join(missing)
+        print(f"[TestVDB] DB clients: WARNING — {joined} missing; mine <target> fails at docker-executor until installed")
+
+
+def check_docker_executor_python():
+    """docker-executor scripts 需 Python 3.10+（str|None 等 3.10 语法），检测 host 是否有。
+
+    实战教训：host python 默认 3.8（sqlite<3.35）→ chromadb import 失败 +
+    scripts 含 str|None 语法 3.8 不支持 → cryptic SyntaxError。
+    docker-executor.md Step 2 已检测（policy），此处 mechanism 提前告警。
+    """
+    import shutil
+    # docker-executor.md Step 2 优先序
+    candidates = ["py -3.12", "python3.12", "py -3.11", "python3.11", "py -3.10", "python3.10"]
+    found = None
+    for cmd in candidates:
+        parts = cmd.split()
+        if not shutil.which(parts[0]):
+            continue
+        try:
+            r = subprocess.run(parts + ["--version"], capture_output=True, text=True, timeout=5)
+            if r.returncode == 0:
+                ver = _parse_python_version(r.stdout + r.stderr)
+                if ver and ver >= (3, 10, 0):
+                    found = f"{cmd} ({ver[0]}.{ver[1]}.{ver[2]})"
+                    break
+        except (subprocess.TimeoutExpired, OSError):
+            continue
+    if found:
+        print(f"[TestVDB] Docker-executor Python 3.10+: OK ({found})")
+    else:
+        print("[TestVDB] Docker-executor Python 3.10+: FATAL — none found")
+        print("[TestVDB]   scripts use `str | None` syntax (3.10+); install Python 3.10+ or `py -3.10` launcher")
+
+
 def check_network():
     # Cross-platform network check using Python urllib (avoids curl dependency on Windows)
     try:
@@ -188,15 +252,35 @@ def check_settings_schema():
         print(f"[TestVDB] Settings schema: WARNING - {e}")
 
 
+def check_glm_proxy():
+    """检测 glm proxy 环境（P3-20: env 标志机制，提前触发 fallback 避免 Stop hook 重试 N 次才降级）。
+
+    现状（无 env 标志）：glm proxy 下 knowledge-extractor/verify-live-l2 agent 频繁 HTTP 400，
+    Stop hook 重试 N 次后才降级（mine.md L315 knowledge 复用 + L619 direct-probe）。
+    env 标志 TESTVDB_PROXY=glm 让 pipeline 启动时就知道走 fallback，省去重试成本。
+    ponytail: env 标志（用户手动设）是最小机制；自动 probe（dispatch 微探针 agent 检测 HTTP 400 模式）scope 大留下轮。
+    """
+    proxy = os.environ.get("TESTVDB_PROXY", "").lower()
+    if proxy == "glm":
+        print("[TestVDB] Proxy: GLM mode (knowledge-extractor -> Task 4a fallback, verify-live-l2 -> direct-probe)")
+    elif proxy:
+        print(f"[TestVDB] Proxy: {proxy} (unknown value; set TESTVDB_PROXY=glm for glm proxy fallback)")
+    else:
+        print("[TestVDB] Proxy: standard (no TESTVDB_PROXY env; set =glm for glm proxy fallback)")
+
+
 def main():
     print("[TestVDB] Pre-flight checks...")
     check_docker()
     check_python()
+    check_docker_executor_python()
     check_session_env()
     check_disk()
     check_github_token()
     check_docker_hub_token()
+    check_db_clients()
     check_network()
+    check_glm_proxy()
     check_settings_schema()
     print("[TestVDB] Checks done. Python<3.9 is fatal per Orchestrator spec.")
 

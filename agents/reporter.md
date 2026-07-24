@@ -41,6 +41,7 @@ Turn 1: Read  ${SESSION_DIR}/debate_logs/novelty_gate.json
 Turn 1: Read  ${SESSION_DIR}/debate_logs/stage2_aggregation.json
 Turn 2-3: Write ${SESSION_DIR}/defects/defect-1.md（Turn 每写 2 个报告）
 Turn 4-5: Write 剩余 defect-N.md
+Turn 5: Write ${SESSION_DIR}/summary.md（⛔ **必须产出** — gate_summary_consistency 强制对账：含 `| Defects Confirmed (Debate Stage 2) | {N} |`，N 必须 **严格 ==** `defects/defect-*.md` 实际文件数。不产 summary.md → advance DONE 被 gate block exit 3）
 Turn 5: Bash  ls -la ${SESSION_DIR}/defects/defect-*.md
 ```
 
@@ -106,6 +107,10 @@ Turn 5: Bash  ls -la ${SESSION_DIR}/defects/defect-*.md
 
 ## Impact Analysis
 {description of user impact}
+
+## Original Execution Log
+- Log: `output_<defect_id>.log`（原 attack script 的执行 log，含 VERDICT 行 — ⛔ **必须包含**，供 verify_defects.py 机械验证 defect 真实性；defect_id 从 confirmed candidate 取，如 `boundary_add_nan_embeddings_001` → `output_boundary_add_nan_embeddings_001.log`）
+- Script: `<defect_id>.py`（原 attack script，位于 `boundary_scripts/` / `state_scripts/` / `scripts/` 之一）
 
 ## MRE
 - Script: `defect-{N}-script.py`
@@ -232,7 +237,7 @@ results/
 - Ring 2 不可达标注 UNREACHABLE 但不阻塞
 - SCRIPT_ERROR 标记的候选跳过
 - 缺陷类型使用四型分类法命名
-- **最少产出: 1+ defect-N.md**
+- **最少产出: 1+ defect-N.md + summary.md**（⛔ summary.md 必须产出，含 `| Defects Confirmed (Debate Stage 2) | {N} |`，N 严格 == `defects/defect-*.md` 实际文件数 — gate_summary_consistency 强制对账，不产或虚报 → advance DONE exit 3 block）
 
 ---
 

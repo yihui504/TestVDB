@@ -112,7 +112,126 @@ def _parse_ttl(argv, default_ttl):
     return default_ttl
 
 
+def _self_check() -> int:
+    """Self-check: 5-status decision matrix + spec decision-4 ordering + ttl parsing."""
+    import tempfile
+    from pathlib import Path
+
+    failures: list[str] = []
+
+    def expect(cond: bool, msg: str) -> None:
+        if not cond:
+            failures.append(msg)
+
+    with tempfile.TemporaryDirectory() as td:
+        # ── intel path ──
+        intel_dir = Path(td) / "intel" / "chroma"
+        intel_dir.mkdir(parents=True)
+        tm_path = intel_dir / "threat_model.json"
+        tm_path.write_text(
+            json.dumps({"cognitive_blindspots": ["x"], "attack_surface": ["y"]}),
+            encoding="utf-8",
+        )
+
+        # USABLE
+        r = check_intel_cache(str(intel_dir), "chroma")
+        expect(r.status == CacheStatus.USABLE, f"intel USABLE: got {r.status}")
+
+        # MISSING
+        r = check_intel_cache(str(intel_dir / "nope"), "chroma")
+        expect(r.status == CacheStatus.MISSING, f"intel MISSING: got {r.status}")
+
+        # STALE (mtime > ttl)
+        old = time.time() - 720 * 3600 - 1
+        os.utime(tm_path, (old, old))
+        r = check_intel_cache(str(intel_dir), "chroma", ttl_hours=720)
+        expect(r.status == CacheStatus.STALE, f"intel STALE: got {r.status}")
+        os.utime(tm_path, (time.time(), time.time()))
+
+        # INVALID (missing field)
+        tm_path.write_text(
+            json.dumps({"cognitive_blindspots": ["x"]}),  # no attack_surface
+            encoding="utf-8",
+        )
+        r = check_intel_cache(str(intel_dir), "chroma")
+        expect(r.status == CacheStatus.INVALID, f"intel INVALID: got {r.status}")
+
+        # INVALID (bad JSON)
+        tm_path.write_text("not json", encoding="utf-8")
+        r = check_intel_cache(str(intel_dir), "chroma")
+        expect(r.status == CacheStatus.INVALID, f"intel INVALID JSON: got {r.status}")
+
+        # ── contract path ──
+        version_dir = Path(td) / "results" / "chroma" / "1.5.9"
+        version_dir.mkdir(parents=True)
+        c_path = version_dir / "structured_contract.json"
+        full_contract = {
+            "target": "chroma",
+            "version": "1.5.9",
+            "api_endpoints": ["POST /api/v1"],
+            "data_types": ["Collection"],
+        }
+        c_path.write_text(json.dumps(full_contract), encoding="utf-8")
+
+        # USABLE
+        r = check_contract_cache(str(version_dir), "chroma", "1.5.9")
+        expect(r.status == CacheStatus.USABLE, f"contract USABLE: got {r.status}")
+
+        # spec order: STALE 优先 INVALID（过期 + 字段缺 → STALE）
+        # 注意：write_text 会重置 mtime，必须先写内容再设 mtime
+        c_path.write_text(
+            json.dumps({"target": "chroma", "version": "1.5.9"}),  # 缺 api_endpoints
+            encoding="utf-8",
+        )
+        old = time.time() - 168 * 3600 - 1
+        os.utime(c_path, (old, old))
+        r = check_contract_cache(str(version_dir), "chroma", "1.5.9", ttl_hours=168)
+        expect(r.status == CacheStatus.STALE, f"contract STALE before INVALID: got {r.status}")
+        os.utime(c_path, (time.time(), time.time()))
+
+        # spec order: INVALID 优先 MISMATCH（未过期 + 字段缺 + target 不匹配 → INVALID）
+        c_path.write_text(
+            json.dumps({"target": "qdrant", "version": "1.5.9"}),  # 缺 api_endpoints
+            encoding="utf-8",
+        )
+        r = check_contract_cache(str(version_dir), "chroma", "1.5.9")
+        expect(r.status == CacheStatus.INVALID, f"contract INVALID before MISMATCH: got {r.status}")
+
+        # MISMATCH (target)
+        c_path.write_text(
+            json.dumps({**full_contract, "target": "qdrant"}),
+            encoding="utf-8",
+        )
+        r = check_contract_cache(str(version_dir), "chroma", "1.5.9")
+        expect(r.status == CacheStatus.MISMATCH, f"contract MISMATCH target: got {r.status}")
+
+        # MISMATCH (version)
+        c_path.write_text(
+            json.dumps({**full_contract, "version": "1.13.0"}),
+            encoding="utf-8",
+        )
+        r = check_contract_cache(str(version_dir), "chroma", "1.5.9")
+        expect(r.status == CacheStatus.MISMATCH, f"contract MISMATCH version: got {r.status}")
+
+        # ── _parse_ttl ──
+        expect(_parse_ttl(["p", "--ttl", "100"], 720) == 100, "_parse_ttl 100")
+        expect(_parse_ttl(["p"], 720) == 720, "_parse_ttl default")
+        expect(_parse_ttl(["p", "--ttl", "abc"], 720) == 720, "_parse_ttl ValueError fallback")
+        expect(_parse_ttl(["p", "intel", "dir"], 720) == 720, "_parse_ttl no --ttl")
+        expect(_parse_ttl(["p", "--ttl"], 720) == 720, "_parse_ttl --ttl no value")
+
+    if failures:
+        print("self-check FAIL:", file=sys.stderr)
+        for f in failures:
+            print(f"  - {f}", file=sys.stderr)
+        return 1
+    print("self-check OK")
+    return 0
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--self-check":
+        return _self_check()
     if len(sys.argv) < 4:
         print("Usage: check_cache.py {intel|contract} <dir> <target> [version] [--ttl HOURS]",
               file=sys.stderr)
