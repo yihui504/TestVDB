@@ -221,6 +221,8 @@ TTL 从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取（默认 168h）�
 
 **每轮开始前**：如果是第一轮，创建 `results/{target}/{version}/{timestamp}/` 目录结构。
 
+**源码 clone（dev-reviewer 源码接地用，仅第一轮）**：执行 `bash scripts/ensure_source_clone.sh`（读 `TESTVDB_TARGET`/`TESTVDB_VERSION`/`TESTVDB_PLUGIN_ROOT`；幂等，命中 `.sourcedeps/` 缓存则秒返）。成功 → 把 stdout 末行的路径写入 `${SESSION_DIR}/.srcdir`（单行文件）并 `export TESTVDB_SRC_DIR=<path>`；dev-reviewer 派发时优先读此 env，回退读 `.srcdir` 文件。失败（未知 target / tag 不存在 / 网络）→ 记 `error_log` 并继续——dev-reviewer 自动回退到 WebFetch/curl `source_url` 的浅核对路径，**不阻塞流水线**。`.sourcedeps/` 已 gitignore。
+
 #### 8a. 注入 reflection_context + threat_model + cognitive_blindspots
 
 第一轮：无 reflection_context，Attack Agents 自由探索。

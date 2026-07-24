@@ -89,3 +89,6 @@ scripts/build_contract_qdrant.py
 .session.env
 logs/
 .venv-verify/
+
+# Target DB source clones for dev-reviewer source-grounding (ensure_source_clone.sh)
+.sourcedeps/
