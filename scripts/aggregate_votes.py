@@ -147,6 +147,37 @@ def _doc_categories(doc: dict) -> dict:
             for r in results if isinstance(r, dict) and r.get("defect_id")}
 
 
+def _load_meta(session_dir: str) -> dict:
+    """{defect_id: {param, endpoint, ...}} — P3-18b: 从 debate_logs/*.meta.json 读。
+
+    attack agent SOP（P3-18b）要求产 {defect_id}.meta.json（schema: defect_id/endpoint/
+    param/expected_defect_type/strategy）。aggregate_votes 合并 param/endpoint 到 confirmed
+    entry，让 novelty_gate grade_candidate 能用 param_name 做真 GitHub/corpus 搜索（产出
+    NOVEL/KNOWN 判决，非全 UNVERIFIED）。
+
+    缺 meta.json / 解析失败 / param=None → 该字段不入 dict（run() 时 entry 不出现对应字段，
+    与现状一致，向后兼容）。坏文件 silent skip（不阻塞聚合 — meta 是 enrich，非关键路径）。
+    ponytail: pathlib glob + json.loads，无新依赖。
+    """
+    out: dict[str, dict] = {}
+    meta_dir = Path(session_dir) / "debate_logs"
+    if not meta_dir.is_dir():
+        return out
+    for meta_path in meta_dir.glob("*.meta.json"):
+        try:
+            m = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(m, dict) and m.get("defect_id"):
+            out[m["defect_id"]] = {
+                "param": m.get("param"),
+                "endpoint": m.get("endpoint"),
+                "expected_defect_type": m.get("expected_defect_type"),
+                "strategy": m.get("strategy"),
+            }
+    return out
+
+
 _SEVERITY_LADDER = ["trivial", "low", "medium", "high", "critical"]
 
 
@@ -172,6 +203,7 @@ def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
     doc_results = _doc_results(doc or {})
     doc_categories = _doc_categories(doc or {})  # P3-18a: defect_type 来源 (fallback)
     sev_defect_types = _severity_defect_types(sev or {})  # P3-18a+: Type 分类优先
+    meta_info = _load_meta(session_dir)  # P3-18b: param/endpoint 来源（meta.json 缺时 {}）
 
     confirmed, rejected = {}, {}
     for did, vote in ev_votes.items():
@@ -209,6 +241,13 @@ def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
         if nv_info.get("rating") == "already_reported":
             entry["related_issue_numbers"] = nv_info.get("related_issues", [])
             entry["note"] = "already_reported: 保留，related_issues 传给 Novelty Gate"
+        # P3-18b: 合并 param/endpoint（从 debate_logs/{did}.meta.json 读；缺 meta 时字段不出现，向后兼容）
+        # 让 novelty_gate grade_candidate 能用 param_name 做真 GitHub/corpus 搜索（非全 UNVERIFIED）
+        m_info = meta_info.get(did, {})
+        if m_info.get("param"):
+            entry["param"] = m_info["param"]
+        if m_info.get("endpoint"):
+            entry["endpoint"] = m_info["endpoint"]
         confirmed[did] = entry
 
     agg_out = {
@@ -352,6 +391,41 @@ def _self_check() -> None:
         entry = agg["confirmed"]["a"]
         assert entry["defect_type"] == "unknown", \
             f"P3-18a+(c): 两者都缺应 'unknown', got {entry.get('defect_type')}"
+
+        # 场景 11 (P3-18b): debate_logs/{did}.meta.json → confirmed entry 合并 param/endpoint
+        # (a) meta.json param=vector_dim endpoint=search+points → entry 含两字段
+        (bdir / "a.meta.json").write_text(json.dumps({
+            "defect_id": "a", "endpoint": "search+points", "param": "vector_dim",
+            "expected_defect_type": "Type1_IllegalSuccess", "strategy": "boundary"}), encoding="utf-8")
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert entry.get("param") == "vector_dim", \
+            f"P3-18b(a): meta.json param 应合并到 entry, got {entry.get('param')}"
+        assert entry.get("endpoint") == "search+points", \
+            f"P3-18b(a): meta.json endpoint 应合并到 entry, got {entry.get('endpoint')}"
+
+        # (b) 删 meta.json → entry 不含 param/endpoint（向后兼容回归，无 meta 时字段消失）
+        (bdir / "a.meta.json").unlink()
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert "param" not in entry, \
+            f"P3-18b(b): 无 meta.json 时 param 字段应不出现（向后兼容）, got {entry}"
+        assert "endpoint" not in entry, \
+            f"P3-18b(b): 无 meta.json 时 endpoint 字段应不出现, got {entry}"
+
+        # (c) meta.json param=null → entry 不含 param（null 等价缺字段）；endpoint 独立合并
+        (bdir / "a.meta.json").write_text(json.dumps({
+            "defect_id": "a", "endpoint": "search+points", "param": None,
+            "expected_defect_type": "Type2_PoorDiagnostics", "strategy": "diagnosis_quality"}), encoding="utf-8")
+        run(td)
+        agg = json.loads((bdir / "stage2_aggregation.json").read_text(encoding="utf-8"))
+        entry = agg["confirmed"]["a"]
+        assert "param" not in entry, \
+            f"P3-18b(c): meta param=null 应等价无 param 字段, got {entry}"
+        assert entry.get("endpoint") == "search+points", \
+            f"P3-18b(c): endpoint 与 param 独立合并, got {entry.get('endpoint')}"
     print("self-check OK")
 
 

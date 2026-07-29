@@ -14,7 +14,7 @@ _Avoid_: spec, rule, schema
 当与 Contract 或 Threat Model 冲突时以此为准，后者被反标错误。
 _Avoid_: ground truth, fact
 
-> **真相源层级**：Source of Truth（真相层）> Contract + Threat Model（断言层）。Novelty Gate 纠错层的本质 = 用真相层核验断言层；v1 由纠错层标记 by-design 嫌疑，v2 回流层再持久反标 Contract 错误（`CONTRACT_STALE`，需 overlay 防 Phase 0 重新生成覆盖）。
+> **真相源层级**：Source of Truth（真相层）> Contract + Threat Model（断言层）。Novelty Gate 纠错层的本质 = 用真相层核验断言层。"contract 反标"以 Dev-Reviewer 的 `root_cause` 分类（contract_misread / hallucination / approximate_by_design）落地，回写 `experience_handoff.json.rejection_patterns` 指导下轮 attack 改进。**直接反标 `structured_contract.json`**（标 stale / patch 修正）作为 future work——见 [ADR-0001](docs/adr/0001-novelty-gate-over-judge-recall.md)（原计划用 `CONTRACT_STALE` 标记 + 回流 threat_model，但因 Phase 0 重生成覆盖 + 无实证需求而暂缓）。
 
 ## 缺陷生命周期
 

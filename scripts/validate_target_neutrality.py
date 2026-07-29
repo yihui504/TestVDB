@@ -41,7 +41,10 @@ SIGNATURES: dict[str, dict[str, list[str]]] = {
         "ports": [r":8080\b", r"\b8080/"],
         "paths": [r"/v1/objects", r"/v1/schema", r'"/objects"', r'"/schema"'],
         "filter_keys": [r'"where"\s*:', r'"operator"\s*:'],
-        "resp_keys": [r'\[\s*"data"\s*\]', r'\.get\(\s*"data"'],
+        # ponytail: resp_keys 清空——`["data"]`/`.get("data")` 非 Weaviate 独有
+        # （Milvus v2.x 响应封装即 {"code":0,"data":{...}}，见 raw_knowledge；Weaviate GraphQL 才有 data.Get 嵌套）
+        # Weaviate 靠 ports(8080)/paths(/v1/objects,/v1/schema)/filter_keys(where/operator) 强信号检测。
+        "resp_keys": [],
     },
     "milvus": {
         "ports": [r":19530\b", r"\b19530/"],

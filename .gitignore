@@ -92,3 +92,7 @@ logs/
 
 # Target DB source clones for dev-reviewer source-grounding (ensure_source_clone.sh)
 .sourcedeps/
+
+# secrets (do not commit)
+*apikey*.txt
+.env.testvdb*

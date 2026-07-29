@@ -43,7 +43,7 @@
     "session_id": ""
   },
   "evolution": {
-    "enabled": true,
+    "enabled": false,
     "strategy_registry_dir": "strategy_registry",
     "max_strategies_per_injection": 10,
     "min_confidence_for_injection": 0.6,
@@ -70,7 +70,7 @@
     "_time_window_months_comment": "回溯时间窗口（月）。从当前日期向前回溯 N 个月来采集 Issue 和 Commit。",
     "max_issues": 500,
     "max_commits": 200,
-    "inject_to_attack_agents": true,
+    "inject_to_attack_agents": false,
     "_inject_to_attack_agents_comment": "是否将 threat_model.json 的 attack_priority_map 注入到 Attack Agent 的 prompt。",
     "inject_to_judge_agents": true,
     "_inject_to_judge_agents_comment": "是否将 threat_model.json 的 judge_enhancements 注入到 Judge Agent 的 prompt。"

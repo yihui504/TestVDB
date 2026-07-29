@@ -81,7 +81,8 @@ def verify_passport(contract_path: str) -> dict:
     result["details"]["schema_version"] = passport.get("schema_version", "unknown")
     result["details"]["generated_at"] = passport.get("generation", {}).get("generated_at", "unknown")
 
-    if actual_hash == expected_hash:
+    # ponytail: 归一化前缀（compute_hash 返回 "sha256:hex"，passport 存裸 hex）；canonical = 裸 hexdigest
+    if actual_hash.split(":", 1)[-1] == expected_hash.split(":", 1)[-1]:
         result["status"] = "PASS"
     else:
         result["status"] = "TAMPERED"

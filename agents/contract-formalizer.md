@@ -168,7 +168,8 @@ tools:
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
               "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
-              "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" }
+              "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" },
+              "source_verified": { "type": "boolean", "description": "source_url 是否经 get_file_contents/WebFetch 二次核对真包含对应 constraint 文本。默认 false。agent 核对通过才能设 true。" }
             }
           }
         },
@@ -186,7 +187,8 @@ tools:
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
               "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
-              "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" }
+              "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" },
+              "source_verified": { "type": "boolean", "description": "source_url 是否经 get_file_contents/WebFetch 二次核对真包含对应 constraint 文本。默认 false。agent 核对通过才能设 true。" }
             }
           }
         },
@@ -204,7 +206,8 @@ tools:
               "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
               "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
-              "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" }
+              "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" },
+              "source_verified": { "type": "boolean", "description": "source_url 是否经 get_file_contents/WebFetch 二次核对真包含对应 constraint 文本。默认 false。agent 核对通过才能设 true。" }
             }
           }
         }
@@ -224,7 +227,8 @@ tools:
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
           "defect_type_if_violated": { "type": "string", "enum": ["Type1_IllegalSuccess", "Type2_PoorDiagnostics", "Type3_RuntimeFailure", "Type4_StateLogicViolation"] },
-          "source_url": { "type": "string", "description": "该断言来源的文档 URL" },
+          "source_verified": { "type": "boolean", "description": "source_url 是否经二次核对真包含对应 assertion 文本。默认 false。" },
+              "source_url": { "type": "string", "description": "该断言来源的文档 URL" },
           "doc_version": { "type": "string", "description": "该断言来源的文档版本" }
         }
       }
@@ -511,3 +515,30 @@ tools:
   ]
 }
 ```
+
+
+---
+
+## ⛔ Source Verification Protocol（强制，反幻觉）
+
+> **背景**：contract-formalizer 曾出现系统性 source_url 幻觉——编造 constraint_id + assertion，source_url 指向真实文件但文件不含对应内容，还标 confidence=1.0 / evidence_tier=explicit / source_status=reachable。导致下游 mining 基于虚构契约产出一串假 defect（见 milvus v2.6.19 R1 post-DONE 审查）。
+
+### 强制步骤（每个 constraint / assertion 生成后必须执行）
+
+1. **生成候选 constraint** 后，**必须**用 `mcp__plugin_testvdb_github__get_file_contents`（GitHub source）或 `WebFetch`（网页 source）实际获取 `source_url` 内容
+2. **文本核对**：检查 source 内容是否真包含对应 constraint 的关键文本（如 assertion 的关键词、数值、字段名）
+3. **设置 `source_verified` 字段**：
+   - `true`：source 真包含对应内容（核对通过）
+   - `false`（默认）：未核对 / 核对失败 / source 不可达
+4. **核对失败的处置**：
+   - source 不含对应内容 → **不得**标 evidence_tier="explicit"；改为 "inferred_from_behavior" 或 "convention"，confidence <= 0.3
+   - source 不可达 → source_status="unreachable"，confidence <= 0.2
+   - 编造的 constraint（找不到任何 source 支持）→ **剔除**，不写入 contract
+
+### 禁止
+- ❌ 禁止仅凭 source_url 可达（source_status="reachable"）就标 confidence=1.0 / explicit
+- ❌ 禁止跳过 get_file_contents / WebFetch 核对步骤
+- ❌ 禁止 confidence=1.0 且 source_verified=false 同时成立（必须先核对再高 confidence）
+
+### 输出
+每个 constraint 必须含 `source_verified` 字段（boolean）。`scripts/verify_contract_sources.py` 会在 contract 生成后批量复核。

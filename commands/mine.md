@@ -512,7 +512,7 @@ THREAT_MODEL_JUDGE_NOVELTY=$(python scripts/threat_model_injector.py {target} --
 THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type evidence --text-only 2>/dev/null || echo "")
 ```
 
-### 8b. ATTACK_GEN — 并发出动 Attack Trio
+### 8b. ATTACK_GEN — 并发出动 Attack Trio + Explorer
 
 **⛔ 绝对禁止：主进程自己生成攻击脚本。必须通过 Agent 工具派发。**
 
@@ -525,14 +525,26 @@ Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v
 
 Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}",
   prompt="按照 agents/attack-semantic.md 规范...（同上格式）{THREAT_MODEL_ATTACK}")
+
+Agent(subagent_type="testvdb:threat-driven-explorer", description="threat-driven 探索 {target} v{version}",
+  prompt="按照 agents/threat-driven-explorer.md 规范，为 {target} v{version} 执行威胁驱动探索。target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}。读 intelligence/{target}/threat_model.json 的 defect_criteria 三表（confirmed_defect_patterns 主攻 + by_design_behaviors/wontfix_patterns 护栏），对每个 confirmed pattern 直接 curl 触发（DB URL 从 TESTVDB_DB_URL 环境变量读），写 results/{target}/{version}/{timestamp}/explorer/findings.md + explorer_summary.json。不生成 Python 脚本，不做自动真假判定，只采 SUSPECTED candidate 供下游复核。")
 ```
+
+> **threat-driven-explorer 是第 4 个 attack agent**（与 boundary/state/semantic 并存）：
+> - 输入差异：boundary/state/semantic 消费 structured_contract.json；explorer 消费 threat_model.json.defect_criteria
+> - 输出差异：老三套产 `debate_logs/*.py`（自动 VERDICT 判定）；explorer 产 `explorer/findings.md`（SUSPECTED candidate，人工复核）
+> - 不替代老三套，是互补 — explorer 用真实 issue 历史做"已知缺陷回归 + by_design 护栏验证"
 
 **验证产出**：
 ```bash
+# 老三套的脚本产出
 ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
+# explorer 的 candidate 产出
+ls results/{target}/{version}/{timestamp}/explorer/findings.md 2>/dev/null && \
+  cat results/{target}/{version}/{timestamp}/explorer/explorer_summary.json 2>/dev/null | python -c "import json,sys; d=json.load(sys.stdin); print(f'explorer: {d[\"patterns_covered\"]} covered, {d[\"candidates_count\"]} candidates, {d[\"skipped_count\"]} skipped')"
 ```
 
-**更新 pipeline_state**: `phase` = `"DEBATE_S1"`, `phases_completed` 追加 `"ATTACK_GEN"`, `phase_data.ATTACK_GEN` = `{scripts_generated: N, agents_completed: [...]}`
+**更新 pipeline_state**: `phase` = `"DEBATE_S1"`, `phases_completed` 追加 `"ATTACK_GEN"`, `phase_data.ATTACK_GEN` = `{scripts_generated: N, agents_completed: [...], explorer_candidates: M}`
 
 ### 8c. DEBATE_S1 — 辩论 Stage 1
 

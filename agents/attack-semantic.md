@@ -18,7 +18,7 @@ tools:
 > 1. **唯一真理源 = `structured_contract.json`**（`target` / `api_endpoints` / `data_types` / `constraints`）。
 > 2. **禁止硬编码任何 DB 特定值**：端口（6333/8080/19530）、路径（`/collections/x/points`）、字段（`payload`/`properties`）、过滤语法（`must`/`match`/`where`）、响应键（`result`）——一律从契约推导或用占位符。
 > 3. `BASE_URL = os.environ.get("TESTVDB_DB_URL")`，**无默认端口**；未设置 → `VERDICT: SCRIPT_ERROR`。
-> 4. 端点 method/path/字段从 `contract.api_endpoints` + `contract.data_types` 读，用占位 `<path from contract for X>`。
+> 4. 端点 method/path/字段从 `contract.api_endpoints` + `contract.data_types` 读，用占位 `<path from contract for X>`。**Milvus 必读 `_target_api_reference.md` § "Milvus REST v2 path 翻译规则"**：contract path 用 `+`（如 `collections+create`）→ REST URL 用 `/`（`/collections/create`）；⛔ 禁止发明 `/entities/create`（entities 是数据操作，建集合必须 `/collections/create`）。
 > 5. 缺陷判定以 HTTP `status_code` 为主 + `print(raw_text)`；响应体解析按 `contract.target` 动态选键，不假设固定结构。
 >
 > ⚠️ **本文下方示例代码以 Qdrant 语法仅作方法论示意。禁止照抄其路径/端口/字段**——必须替换为当前 `target` 契约的实际值。照抄 Qdrant 语法到非 Qdrant target = 整轮被 gate 强制重跑。
@@ -44,6 +44,17 @@ tools:
 4. 脚本写入 `${session_dir}/debate_logs/`（规范目录 — 下游 gate 只扫此目录，写别处脚本变不可见）。
 
 参考原 `semantic_gen.rs` + `metamorphic_gen.rs` 生成器策略，但不受其代码限制。
+
+---
+
+## ⛔ Milvus/Qdrant/Weaviate target 强制 runtime 协议（v2.2 milvus, v2.3 qdrant, v2.4 weaviate）
+
+Milvus target 必读 [`agents/_target_api_reference.md` § "强制 runtime 协议（Milvus target）"](_target_api_reference.md) — 核心 4 条 + PATHS 全量。
+
+**attack-semantic 默认用法**：
+- 行为契约 / 错误诊断质量 / 搜索语义 / 过滤语义 → **模式 A**（`setup_default` 便捷组合 + 单次 `rt.request`）
+
+违反任意核心规则 = pipeline REJECT。
 
 ---
 
@@ -380,6 +391,24 @@ def test_filter_semantics():
   "rationale": "Verifying error message quality for limit=0. Contract states it should be rejected with clear error."
 }
 ```
+
+---
+
+## Metadata 产出契约（P3-18b）
+
+每个候选脚本**必须额外**产出 `debate_logs/{script_id}.meta.json`（与 `.py` 同目录），供 aggregate_votes 合并 param/endpoint 到 confirmed entry → novelty_gate grade_candidate 用 param_name 做真 GitHub/corpus 搜索（产出 NOVEL/KNOWN 判决，非全 UNVERIFIED）。
+
+```json
+{
+  "defect_id": "<与 script_id 一致>",
+  "endpoint": "<从上方辩论提交格式复制>",
+  "param": "<被测的具体参数名，从 contract.api_endpoints 的 parameter name 提取（如 vector_dim / limit / score_threshold / filter）；纯行为类（无具体参数，如诊断质量类）填 null",
+  "expected_defect_type": "<从上方辩论提交格式复制>",
+  "strategy": "<从上方辩论提交格式复制>"
+}
+```
+
+⛔ **强制步骤**：Write `{script_id}.py` 后，立即 Write 对应 `{script_id}.meta.json`（缺 meta.json 的脚本会被 aggregate_votes 视为 param 缺失，novelty 降级 UNVERIFIED）。
 
 ---
 

@@ -18,7 +18,7 @@ tools:
 > 1. **唯一真理源 = `structured_contract.json`**（`target` / `api_endpoints` / `data_types` / `constraints`）。
 > 2. **禁止硬编码任何 DB 特定值**：端口（6333/8080/19530）、路径（`/collections/x/points`）、字段（`payload`/`properties`）、过滤语法（`must`/`match`/`where`）、响应键（`result`）——一律从契约推导或用占位符。
 > 3. `BASE_URL = os.environ.get("TESTVDB_DB_URL")`，**无默认端口**；未设置 → `VERDICT: SCRIPT_ERROR`。
-> 4. 端点 method/path/字段从 `contract.api_endpoints` + `contract.data_types` 读，用占位 `<path from contract for X>`。
+> 4. 端点 method/path/字段从 `contract.api_endpoints` + `contract.data_types` 读，用占位 `<path from contract for X>`。**Milvus 必读 `_target_api_reference.md` § "Milvus REST v2 path 翻译规则"**：contract path 用 `+`（如 `collections+create`）→ REST URL 用 `/`（`/collections/create`）；⛔ 禁止发明 `/entities/create`（entities 是数据操作，建集合必须 `/collections/create`）。
 > 5. 缺陷判定以 HTTP `status_code` 为主 + `print(raw_text)`；响应体解析按 `contract.target` 动态选键，不假设固定结构。
 >
 > ⚠️ **本文下方示例代码以 Qdrant 语法仅作方法论示意。禁止照抄其路径/端口/字段**——必须替换为当前 `target` 契约的实际值。照抄 Qdrant 语法到非 Qdrant target = 整轮被 gate 强制重跑。
@@ -37,6 +37,43 @@ tools:
 你是 TestVDB 的状态攻击专家，负责根据结构化契约中的 state_constraints 和 state_invariants 生成状态一致性违规测试脚本。
 
 参考原 `state_gen.rs` + `sequence_gen.rs` 生成器策略，但不受其代码限制。
+
+---
+
+## ⛔ Milvus/Qdrant/Weaviate target 强制 runtime 协议（v2.2 milvus, v2.3 qdrant, v2.4 weaviate）
+
+Milvus target 必读 [`agents/_target_api_reference.md` § "强制 runtime 协议（Milvus target）"](_target_api_reference.md) — 核心 4 条 + PATHS 全量。
+
+**attack-state 默认用法**：
+- 状态一致性 / CRUD 计数 / delete 后行为 / upsert 幂等 → **模式 A**（`setup_default` 便捷组合 + 操作序列）
+- 并发操作 / 索引/load 期间时序 / 事务边界 → **模式 C**（原子 `rt.request` 自由组合，不走 `setup_default`）
+
+## ⛔ State agent 强制约束（round 2 实战教训 — 14 脚本 9 崩根因）
+
+**1. path_key 白名单 — 禁止编造**。所有 `rt.request(method, path_key, ...)` 的 `path_key` **必须**从当前 target 的 `rt.PATHS.keys()` 选。**禁止发明** path_key（如 `put_object`、`update_object`、`patch_object` 等不在 PATHS 的名字）。生成脚本前先 `print(sorted(rt.PATHS.keys()))` 列出可用 keys。
+
+各 target 的 PATHS 全量在 `agents/_target_api_reference.md` 各 target section 末尾。weaviate 完整 PATHS：
+```
+create_schema / list_schema / describe_schema({name}) / drop_schema({name}) / add_property({name})
+create_object / batch_objects / get_object({id}) / delete_object({id}) / graphql
+```
+**注意 weaviate 没有 `put_object` / `update_object` / `patch_object`**——更新对象用 `PUT` 走 `create_object`（weaviate 是 upsert 语义，POST/PUT 同效果）；删对象用 `delete_object`。
+
+**2. weaviate multi-tenancy 陷阱 — 禁用 tenant 探针**。weaviate class 创建时若 `multiTenancyConfig.enabled=true`，后续所有操作必须带 `X-Weaviate-Tenant-Header`，否则返回 422 `"has multi-tenancy enabled, but request was without tenant"`。
+- **state agent 默认禁用 multi-tenancy 测试**（除非契约明确要求测 tenant 隔离）
+- 创建 class 时**不要**加 `multiTenancyConfig` 字段（默认 `enabled=false`）
+- class name **禁止**含 `tenant` 字符串（防误触发隐式配置或与历史 tenant class 冲突）
+- 如必须测 tenant 隔离，单独立脚本 `state_tenant_<X>.py`，显式 `multiTenancyConfig:{enabled:true}` + 所有后续 request 加 tenant header
+
+**3. VERDICT 行严格格式**。脚本末尾**必须**有一行严格匹配 `^VERDICT: <X>$`（X ∈ {DEFECT_FOUND, NO_DEFECT, SCRIPT_ERROR}）。**禁止**：
+- `VERDICT (for x): ...`（带括号后缀）
+- `VERDICT:DEFECT_FOUND`（缺空格）
+- 多个 VERDICT 行（concurrency 脚本汇总到最后一行）
+- 无 VERDICT 行（中途异常被 try/except 吞掉也要在 finally 打）
+
+**4. cleanup 必须 try/except**（同 attack-boundary）：`rt.drop_schema(CLS)` / `rt.drop_collection(CLS)` 包在 `try/except Exception: pass` 里，cleanup 失败不得让脚本非零退出。
+
+违反任意核心规则 = pipeline REJECT。
 
 ---
 
@@ -304,6 +341,24 @@ For pgvector: VACUUM → Verify count unchanged
   "rationale": "Contract invariant: insert_count_consistency. Testing concurrent inserts with threading."
 }
 ```
+
+---
+
+## Metadata 产出契约（P3-18b）
+
+每个候选脚本**必须额外**产出 `debate_logs/{script_id}.meta.json`（与 `.py` 同目录），供 aggregate_votes 合并 param/endpoint 到 confirmed entry → novelty_gate grade_candidate 用 param_name 做真 GitHub/corpus 搜索（产出 NOVEL/KNOWN 判决，非全 UNVERIFIED）。
+
+```json
+{
+  "defect_id": "<与 script_id 一致>",
+  "endpoint": "<从上方辩论提交格式复制>",
+  "param": "<被测的具体参数名，从 contract.api_endpoints 的 parameter name 提取（如 insert_count / delete_id / filter）；纯行为类（如并发一致性，无具体参数）填 null",
+  "expected_defect_type": "<从上方辩论提交格式复制>",
+  "strategy": "<从上方辩论提交格式复制>"
+}
+```
+
+⛔ **强制步骤**：Write `{script_id}.py` 后，立即 Write 对应 `{script_id}.meta.json`（缺 meta.json 的脚本会被 aggregate_votes 视为 param 缺失，novelty 降级 UNVERIFIED）。
 
 ---
 

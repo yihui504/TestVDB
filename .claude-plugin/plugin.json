@@ -38,6 +38,7 @@
     "./agents/attack-boundary.md",
     "./agents/attack-state.md",
     "./agents/attack-semantic.md",
+    "./agents/threat-driven-explorer.md",
     "./agents/docker-executor.md",
     "./agents/judge-evidence.md",
     "./agents/judge-novelty.md",
