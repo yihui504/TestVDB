@@ -6,6 +6,8 @@ services:
   weaviate:
     container_name: testvdb-weaviate-${TESTVDB_SESSION_ID:-standalone}
     image: semitechnologies/weaviate:${WEAVIATE_VERSION:-1.25.0}
+    # ponytail: mem_limit 防 attack-boundary 策略 6 资源极限测试 OOM 杀宿主
+    mem_limit: ${TESTVDB_DB_MEM_LIMIT:-2g}
     environment:
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
       DEFAULT_VECTORIZER_MODULE: none

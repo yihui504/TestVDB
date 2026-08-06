@@ -12,6 +12,8 @@ services:
   chroma:
     container_name: testvdb-chroma-${TESTVDB_SESSION_ID:-standalone}
     image: chromadb/chroma:${CHROMA_VERSION:-0.6.3}
+    # ponytail: mem_limit 防 attack-boundary 策略 6 资源极限测试 OOM 杀宿主
+    mem_limit: ${TESTVDB_DB_MEM_LIMIT:-2g}
     environment:
       - IS_PERSISTENT=TRUE
       - PERSIST_DIRECTORY=/chroma/chroma

@@ -230,6 +230,36 @@ curl -sf http://127.0.0.1:11235/health && echo "Crawl4AI OK" || echo "Crawl4AI D
 - **Document Metadata 中 version_match 不为 mismatched**（如果是，需在 Step 1 重新搜索）
 - **Document Sources 表格已填写，每个源都有 URL 和 Doc Version**
 
+### Step 6b: OpenAPI endpoint/field 覆盖率自检（v2.2 新增 — 反"固定 URL 列表漏新功能"）
+
+**背景**：文档站固定 URL 列表会系统性漏新功能页（如 qdrant strict_mode_config 在文档站无单独页，但在 OpenAPI spec 有定义）。用 OpenAPI spec 做 endpoint/field **发现**对照，补全遗漏。
+
+**执行**（仅 REST API 数据库：qdrant/milvus/weaviate，SQL 数据库 pgvector 跳过）：
+
+1. **定位 OpenAPI spec**：`.sourcedeps/{target}/{version}/docs/redoc/master/openapi.json`（如不存在，跳过本步并记录 `openapi_unavailable: true`）
+2. **解析端点 + 字段**：读 `/paths`（method + path）+ 主要 schema 字段（如 collection create body 的字段名）
+3. **对比 raw_knowledge.md**：
+   - 端点覆盖率 = `raw_knowledge 已覆盖端点数 / OpenAPI 端点总数`
+   - 缺失端点列表 = `OpenAPI 有 / raw_knowledge 无`
+   - 缺失字段列表 = `OpenAPI schema 有 / raw_knowledge 无`（如 strict_mode_config）
+4. **写报告到 raw_knowledge.md 末尾**：
+   ```markdown
+   ## Document Coverage (OpenAPI cross-check)
+   - doc_coverage_pct: {覆盖率百分比}
+   - openapi_version: {OpenAPI spec 版本/来源}
+   - Missing Endpoints: [{列表}]
+   - Missing Fields: [{列表，如 strict_mode_config}]
+   - source: openapi cross-check
+   ```
+5. **补全缺失项**（覆盖率 < 100% 时）：
+   - 优先补爬对应文档页（如果文档站有该页）
+   - **文档站无对应页时**（如 strict_mode_config 无单独文档页）→ 从 OpenAPI spec 的 `description` / schema 字段说明提取该字段的**语义**（标注 `source_url: openapi` + `source_note: OpenAPI cross-check fallback`），写入对应端点的 Parameters/Constraints。**注意**：仅提取"字段是什么、什么类型"（语义），**不提取"什么值合法/非法"（约束）**——约束仍从文档页提取（保持"文档为唯一契约源"原则）。
+6. **写 doc_coverage_pct 到 Document Metadata**
+
+**原则边界**（重要）：OpenAPI 是公开 API reference（发布在 api.qdrant.tech 等），非源码。**仅用于 endpoint/field 发现**（"有哪些"），**约束提取仍从文档页**（"什么合法/非法"）。不违反"文档为唯一契约源"原则。
+
+**默认排除路径**：`/internal/`、`/admin/`、`/telemetry/` 等运维/internal 端点（除非文档站明示公开）——可在 settings.json 配置 `doc_coverage_exclude_paths`。
+
 ---
 
 ## 错误处理

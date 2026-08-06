@@ -321,7 +321,10 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
           "blindspot_coverage": ["BS-01", "BS-04", "BS-05"],
           "historical_defect_count": 25,
           "contract_constraint_count": 12,
-          "cross_db_vulnerability_score": 0.85
+          "cross_db_vulnerability_score": 0.85,
+          "issue_state": "open",
+          "open_issue_count": 3,
+          "severity_boost": "P0"
         },
         "recommended_attack_order": [
           {"strategy": "boundary", "constraints": ["limit_range", "offset_range"], "blindspot": "BS-04"},
@@ -339,6 +342,18 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
   }
 }
 ```
+
+**⛔ OPEN issue 优先级提升规则（v2.2 新增 — 反 "closed-only 漏未修 bug"）：**
+
+任何 endpoint / 攻击向量，如果其关联的 issue（在 classified_issues.json 中）含 **state=open**（未修），必须：
+1. `overall_priority` 强制设为 `"high"`（不论 historical_defect_count 多少）
+2. `priority_factors.severity_boost` = `"P0"`
+3. `priority_factors.issue_state` = `"open"` + `open_issue_count` = 关联 open issue 数
+4. `recommended_attack_order` 置于其他同 endpoint 之前
+
+**理由**：open issue = 未修 = 对**当前目标版本**更可能仍可复现（closed issue 多半在某版本已修，对当前版本可能不适用）。这是 intel 驱动测试最重要的优先级信号——高于 blindspot 覆盖、高于历史缺陷计数。
+
+**注意**：open issue 噪声（feature/question 混入）由 bug-shape-extractor 的 `developer_stance` 分类前置过滤（只采纳 positive 类：maintainer 确认 / 有 repro / 有 fix PR 关联）。threat-modeler 信任 bug-shape 的 positive 标记，不二次判定真实性（真实性由后续 live test 实测验证）。
 
 ### Step 5: 生成 Judge 增强规则
 

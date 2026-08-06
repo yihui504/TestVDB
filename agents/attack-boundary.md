@@ -207,6 +207,38 @@ print(raw)
 - 是否说明正确的值范围/格式？
 - 是否能帮助开发者快速定位问题？
 
+### 策略 6: 资源极限/DoS 攻击（v2.2 新增 — Type3_RuntimeFailure，反"只测契约边界不测实现极限"）
+
+**与策略 1（边界值）的区别**：策略 1 测**契约约束边界**（文档说 limit>0 → 测 0/-1，预期 4xx）。策略 6 测**实现层资源极限**（文档通常不写上限，但极大值可能触发 OOM/panic/500 = DoS）。两类 defect 不同：策略 1 是契约违反，策略 6 是资源耗尽/DoS。
+
+**对每个数值参数**（limit / offset / batch_size / dimension / group_size / group_limit / hnsw_config.m / ef_construct / quantization 配置等），额外测以下极大值：
+
+| 参数类别 | 测试值 | 预期（非缺陷） | 缺陷信号 |
+|---------|--------|---------------|---------|
+| count/limit 类 | `1e6`, `1e8`, `INT_MAX` (2147483647) | 200（返回 ≤ limit 结果）或 400/422（明确拒） | **500 / OOM / panic / 连接重置 / 容器崩溃** |
+| batch_size 类 | `1e6`, `1e7` | 200 或 400/422 | 同上 |
+| dimension 类（如适用） | `1e5`, `1e6` | 400/422（建集合时拒） | 500 / OOM |
+| group_size × limit 组合 | 两者都 `1e6` | 200 或 400/422 | **hashbrown capacity overflow / OOM**（qdrant #8406 实例） |
+
+**断言逻辑**（Type3_RuntimeFailure，不是 Type1）：
+```python
+# 极大值测试 — 缺陷信号是"崩溃"而非"接受"
+status, raw = safe_request(...)
+if status in (500, 502, 503, 504) or any(k in raw.lower() for k in ["oom","out of memory","panic","capacity overflow","killed"]):
+    print(f"VERDICT: DEFECT_FOUND (Type3_RuntimeFailure) — {param}={value} 触发崩溃/DoS")
+elif status in (200, 201):
+    # 200 不是缺陷（返回 ≤ limit 合法），但记录用于 judge
+    print(f"VERDICT: NO_DEFECT — {param}={value} 接受（返回 {n} 结果）")
+elif status in (400, 422):
+    print(f"VERDICT: NO_DEFECT — {param}={value} 正确拒绝")
+```
+
+**关键**：200（接受大值）**不是缺陷**（limit 是 upper bound，返回少于 limit 合法）；**崩溃（500/OOM/panic）才是缺陷**。这与策略 1 的"接受非法值=Type1"相反——资源极限类不要求"拒绝"，要求"不崩溃"。
+
+**特别组合**：对 group search 端点（`/points/query/groups` 等），测 `limit × group_size` 同时极大值（两个都 1e6/1e8）——分配器可能基于 limit×group_size 预分配致 OOM（参考 qdrant #8406）。
+
+**容器隔离提示**：资源极限测试**可能崩容器**（#8406 实测 exit 137 OOM）。docker-executor 在每脚本前应 `docker restart` 隔离；docker-compose 配 `mem_limit` 防杀宿主。
+
 ---
 
 ## 输出格式

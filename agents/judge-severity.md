@@ -78,6 +78,22 @@ votes 数组长度必须 == stage2_doc.json 的 DOC_VERIFIED 计数。复杂缺�
 如果 stage2_doc.json 中 doc_verification_result = DOC_PARTIAL → -1 级。
 如果 doc_verification_result = DOC_MISMATCH → -2 级（上限 Low）。
 
+**⛔ 规则 4 例外：Type3_RuntimeFailure 崩溃不降级（v2.2 新增 — 反"无文档约束误杀崩溃缺陷"）**
+
+如果执行日志（output_{defect_id}.log）含**崩溃信号**（OOM / panic / capacity overflow / SIGSEGV / SIGKILL / 5xx HTTP status / 连接重置 / 容器 Killed），则：
+- severity 强制 **Critical，不应用规则 4 降级**（DOC_MISMATCH 不降）
+- 也不应用规则 5 的"单脚本 -1 级"
+- `crash_auto_confirmed: true` 标记
+
+**理由**：契约违反需文档支撑（回答"违反了什么约定"），但**崩溃现象本身即缺陷证据**（回答"服务器是否扛住了"——崩溃 = 没扛住）。崩溃不需文档背书。规则 4 的"DOC_MISMATCH 降级"是为过滤"无契约依据的契约违反 claim"，不应用于"客观崩溃"。
+
+**排除（by-design 崩溃不触发）**：日志含 jemalloc/aarch64/ARM64 等平台限制关键词 → 平台兼容问题非 server 缺陷，正常应用规则 4。
+
+**示例（v2.2）**：
+- Type3_RuntimeFailure + limit=1e8 → OOM → **Critical（crash_auto_confirmed）**，DOC_MISMATCH 不降级
+- Type3_RuntimeFailure + 并发 delete/recreate → 500 → **Critical（crash_auto_confirmed）**
+- Type3_RuntimeFailure + jemalloc ARM64 panic → by-design → 正常应用规则 4（非崩溃放行）
+
 **规则 5: 边界情况**
 
 - 端点类型无法识别 → 默认 Medium，confidence=0.5

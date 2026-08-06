@@ -12,6 +12,8 @@ services:
       - "${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    # ponytail: mem_limit 防 attack-boundary 策略 6 资源极限测试 OOM 杀宿主（#8406 group search limit=1e8 实测崩容器）
+    mem_limit: ${TESTVDB_DB_MEM_LIMIT:-2g}
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' || exit 1"]
       interval: 5s

@@ -188,6 +188,101 @@ def _demote_severity(level: str | None, steps: int) -> str | None:
     return _SEVERITY_LADDER[max(0, _SEVERITY_LADDER.index(level) - steps)]
 
 
+# ponytail: v2.2 崩溃放行 — Type3 崩溃是客观事实，无需文档契约支撑（反"无文档约束误杀崩溃缺陷"）
+# 精确模式避免误匹配（如 "500ms"/"status: 200"）
+_CRASH_PATTERNS = (
+    "out of memory", "oom", "oom-killer", "memory exhausted",
+    "panic occurred", "panic backtrace", "capacity overflow",
+    "hash table capacity overflow",
+    "sigsegv", "sigabrt", "sigkill",
+    "segmentation fault", "stack overflow",
+    "killed",  # OOM killer / entrypoint.sh: PID Killed
+    "thread panicked",
+)
+_CRASH_STATUS_5XX = (  # 精确 5xx 状态（避免 "500" 子串误匹配，全小写因匹配 low）
+    '"status":500', '"status": 500',
+    '"status":502', '"status": 502',
+    '"status":503', '"status": 503',
+    '"status":504', '"status": 504',
+    'status": 500', 'status": 502', 'status": 503',  # 带空格变体
+    "http/1.1 500", "http/1.1 502", "http/1.1 503", "http/1.1 504",
+    "http 500", "http 502", "http 503",
+    "status:500", "status: 500", "status=500", "status = 500",
+    "status:502", "status: 502", "status=502",
+    "status:503", "status: 503", "status=503",
+    " 500 internal", " 502 bad", " 503 service",
+)
+# by-design 崩溃白名单（平台/外部限制，非 server 缺陷）
+_BY_DESIGN_CRASH_KEYWORDS = (
+    "jemalloc", "aarch64", "arm64",  # jemalloc ARM64 对齐限制（qdrant #3831/#4298/#6512/#7246）
+    "address sizes",  # 平台地址空间限制
+    "libc", "musl",  # 特定 libc 兼容
+)
+
+
+def _read_defect_log(session_dir: str, defect_id: str) -> str:
+    """读 output_{defect_id}.log（执行日志），缺失返空串。"""
+    # 候选路径：output_{did}.log（主流）+ debate_logs/{did}.log（fallback）
+    for p in (Path(session_dir) / f"output_{defect_id}.log",
+              Path(session_dir) / "debate_logs" / f"{defect_id}.log"):
+        if p.exists():
+            try:
+                return p.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                return ""
+    return ""
+
+
+def _is_crash_signal(log_text: str) -> tuple[bool, str]:
+    """检测日志是否含崩溃信号。返回 (is_crash, matched_pattern)。
+
+    排除 by-design 崩溃（jemalloc ARM64 等平台限制）。
+    """
+    if not log_text:
+        return False, ""
+    low = log_text.lower()
+    # by-design 白名单优先（即使含 panic/oom，若是 jemalloc ARM64 = 平台限制非缺陷）
+    if any(kw in low for kw in _BY_DESIGN_CRASH_KEYWORDS):
+        return False, ""  # by-design，不触发崩溃放行
+    for pat in _CRASH_PATTERNS:
+        if pat in low:
+            return True, pat
+    for pat in _CRASH_STATUS_5XX:
+        if pat in low:
+            return True, pat
+    return False, ""
+
+
+def _load_threat_model_by_design(target: str) -> list[str]:
+    """从 intelligence/{target}/threat_model.json 读 by_design_behaviors 派生崩溃白名单关键词。
+
+    缺失/threat_model 无该字段 → 返回空列表（不阻塞，仅减少白名单覆盖）。
+    """
+    if not target:
+        return []
+    tm_path = Path("intelligence") / target / "threat_model.json"
+    if not tm_path.exists():
+        return []
+    try:
+        tm = json.loads(tm_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out = []
+    # by_design_behaviors 可能在 judge_enhancements 或 defect_criteria 下，结构多样
+    for section_key in ("defect_criteria", "judge_enhancements"):
+        section = tm.get(section_key) or {}
+        bds = section.get("by_design_behaviors") or []
+        if isinstance(bds, list):
+            for b in bds:
+                if isinstance(b, dict):
+                    # 取 name/behavior/rationale 字段的关键词
+                    for k in ("name", "behavior", "rationale", "pattern"):
+                        v = b.get(k)
+                        if isinstance(v, str) and len(v) < 80:
+                            out.append(v.lower())
+    return out
+
+
 def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
     ev = read_json(debate_log_path(session_dir, "stage2_evidence"))
     sev = read_json(debate_log_path(session_dir, "stage2_severity"))
@@ -206,7 +301,30 @@ def run(session_dir: str, target: str = "", strict: bool = False) -> dict:
     meta_info = _load_meta(session_dir)  # P3-18b: param/endpoint 来源（meta.json 缺时 {}）
 
     confirmed, rejected = {}, {}
+    # ponytail: v2.2 崩溃放行 — 读 threat_model by_design 派生额外白名单关键词
+    tm_by_design_kw = _load_threat_model_by_design(target)
     for did, vote in ev_votes.items():
+        # 规则 0: 崩溃现象自动确认（v2.2 — Type3 崩溃是客观事实，跳过 severity/doc/evidence 检查）
+        # 反"无文档约束误杀崩溃缺陷"（如 limit=1e8 OOM 被 DOC_MISMATCH 降级后 reject）
+        log_text = _read_defect_log(session_dir, did)
+        is_crash, crash_pat = _is_crash_signal(log_text)
+        # threat_model by_design 关键词补充检查（若日志含 by_design 描述 → 不触发）
+        if is_crash and tm_by_design_kw:
+            low_log = log_text.lower()
+            if any(kw in low_log for kw in tm_by_design_kw if kw):
+                is_crash = False
+        if is_crash:
+            confirmed[did] = {
+                "defect_id": did,
+                "severity_level": "critical",
+                "defect_type": "Type3_RuntimeFailure",
+                "script": f"{did}.py",
+                "confirmed": True,
+                "crash_auto_confirmed": True,
+                "crash_signal": crash_pat,
+                "note": "崩溃现象自动确认（v2.2）— Type3 崩溃无需文档契约支撑，DOC_MISMATCH 不降级",
+            }
+            continue
         nv_info = nv_votes.get(did, {})
         # 规则 4: novelty vote=not_defect（judge-novelty 唯一 not_defect 场景 = known_wontfix）→ rejected
         if nv_info.get("vote") == "not_defect":

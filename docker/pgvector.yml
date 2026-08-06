@@ -6,6 +6,8 @@ services:
   pgvector:
     container_name: testvdb-pgvector-${TESTVDB_SESSION_ID:-standalone}
     image: pgvector/pgvector:${PGVECTOR_VERSION:-pg17}
+    # ponytail: mem_limit 防 attack-boundary 策略 6 资源极限测试 OOM 杀宿主
+    mem_limit: ${TESTVDB_DB_MEM_LIMIT:-2g}
     environment:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: testvdb

@@ -9,6 +9,8 @@ services:
   meilisearch:
     container_name: testvdb-meilisearch-${TESTVDB_SESSION_ID:-standalone}
     image: getmeili/meilisearch:${MEILISEARCH_VERSION:-v1.12}
+    # ponytail: mem_limit 防 attack-boundary 策略 6 资源极限测试 OOM 杀宿主
+    mem_limit: ${TESTVDB_DB_MEM_LIMIT:-2g}
     # v1.12 向量 store 通过 HTTP /experimental-features 启用（无 CLI flag；
     # --experimental-vector-store 已在 v1.12 移除，传入会导致启动崩溃）。
     # wrapper: 启动 meilisearch 后台 → 等 /health → PATCH vectorStore=true → wait。

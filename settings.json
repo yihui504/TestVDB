@@ -73,6 +73,12 @@
     "inject_to_attack_agents": false,
     "_inject_to_attack_agents_comment": "是否将 threat_model.json 的 attack_priority_map 注入到 Attack Agent 的 prompt。",
     "inject_to_judge_agents": true,
-    "_inject_to_judge_agents_comment": "是否将 threat_model.json 的 judge_enhancements 注入到 Judge Agent 的 prompt。"
+    "_inject_to_judge_agents_comment": "是否将 threat_model.json 的 judge_enhancements 注入到 Judge Agent 的 prompt。",
+    "include_open_issues": true,
+    "_include_open_issues_comment": "v2.2: 是否采集 OPEN（未修）issues。open issue = 未修 = 对当前目标版本更可能仍可复现（closed 多半已修）。bug-shape-extractor 的 developer_stance 分类过滤噪声。设 false 退回 closed-only。",
+    "open_issue_priority": "P0",
+    "_open_issue_priority_comment": "v2.2: open issue 提炼的 bug_shape 在 attack_priority_map 的优先级（P0/P1/P2）。threat-modeler 据此设 severity_boost。",
+    "open_issue_keywords": ["panic", "crash", "wrong", "incorrect", "silent", "inconsistent", "regression", "data loss", "corruption"],
+    "_open_issue_keywords_comment": "v2.2: issue-miner 用这些关键词搜 open issue title（很多 crash issue 无 bug label）。"
   }
 }

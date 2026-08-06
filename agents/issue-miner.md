@@ -89,8 +89,14 @@ repo:{owner}/{repo} is:issue is:closed label:bug created:>={cutoff_date}
 # 搜索 2: 有修复 PR 关联的 issue（closed + 有关联 PR + 时间窗口内）
 repo:{owner}/{repo} is:issue is:closed linked:pr created:>={cutoff_date}
 
-# 搜索 3: 高互动 open issue（可能未被识别的重要 bug + 时间窗口内）
-repo:{owner}/{repo} is:issue is:open label:bug sort:comments-desc created:>={cutoff_date}
+# 搜索 3: OPEN issue（未修 bug —— 当前目标版本最可能仍可复现，按更新序广覆盖）
+# ponytail: open issue = 未修 = 对当前 version 更可能仍存在；放宽 label:bug 限制（很多 crash issue 无 bug label）
+repo:{owner}/{repo} is:issue is:open sort:updated-desc created:>={cutoff_date}
+
+# 搜索 3a/3b/3c: OPEN + 崩溃/错误信号 in:title（无 label 的 open crash/panic/wrong/regression）
+repo:{owner}/{repo} is:issue is:open panic OR crash in:title created:>={cutoff_date}
+repo:{owner}/{repo} is:issue is:open wrong OR incorrect OR silent in:title created:>={cutoff_date}
+repo:{owner}/{repo} is:issue is:open regression in:title created:>={cutoff_date}
 
 # 搜索 4: 开发团队标记的 regression（时间窗口内）
 repo:{owner}/{repo} is:issue label:regression created:>={cutoff_date}
@@ -98,8 +104,8 @@ repo:{owner}/{repo} is:issue label:regression created:>={cutoff_date}
 # 搜索 5: 安全相关 issue（时间窗口内）
 repo:{owner}/{repo} is:issue label:security created:>={cutoff_date}
 
-# 搜索 6: 数据一致性问题（时间窗口内）
-repo:{owner}/{repo} is:issue is:closed "data loss" OR "inconsistent" OR "corruption" created:>={cutoff_date}
+# 搜索 6: 数据一致性问题（时间窗口内，open + closed 都采 —— open 是未修 TP 金矿）
+repo:{owner}/{repo} is:issue "data loss" OR "inconsistent" OR "corruption" OR "silent" created:>={cutoff_date}
 ```
 
 每轮搜索获取前 50 条结果。使用 `mcp__github__search_issues` 工具。

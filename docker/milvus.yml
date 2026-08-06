@@ -45,6 +45,8 @@ services:
   milvus:
     container_name: testvdb-milvus-standalone-${TESTVDB_SESSION_ID:-standalone}
     image: milvusdb/milvus:${MILVUS_VERSION:-v2.4.0}
+    # ponytail: mem_limit 防 attack-boundary 策略 6 资源极限测试 OOM 杀宿主
+    mem_limit: ${TESTVDB_DB_MEM_LIMIT:-4g}
     command: ["milvus", "run", "standalone"]
     environment:
       ETCD_ENDPOINTS: etcd:2379

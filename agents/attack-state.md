@@ -281,6 +281,52 @@ assert cur.fetchone()[0] == 0, "ROLLBACK should not persist data"
 # 4. Verify no crashes or data corruption
 ```
 
+### 策略 7: 生命周期并发攻击（v2.2 新增 — 反"只测 point 级并发，漏 collection 级 lifecycle"）
+
+**与策略 4（并发操作）的区别**：策略 4 测**同一 collection 内 point 级并发**（upsert+upsert, delete+query）。策略 7 测**collection 级 lifecycle 与访问的并发**——collection 本身在 create/delete/recreate 时，并发查询/写入是否产生 500/不一致。这是部署/迁移/测试场景的真实负载模式。
+
+**通用模式**（对所有 collection lifecycle 端点 × 访问端点组合生效，非硬编码特定端点）：
+
+```python
+import threading, time
+
+# Thread A: collection lifecycle 循环（create → delete → recreate 同名）
+def lifecycle_thread():
+    for _ in range(N):
+        safe_request("DELETE", drop_path, path_params={"name": COLL})  # 幂等删
+        time.sleep(0.05)
+        safe_request("PUT", create_path, create_body, path_params={"name": COLL})
+        time.sleep(0.05)
+
+# Thread B: 并发访问（query / upsert / scroll / count）
+def access_thread():
+    errors = []
+    for _ in range(M):
+        s, raw = safe_request("POST", query_path, query_body, path_params={"name": COLL})
+        # 缺陷信号：500（内部错误，应为 404/503 集合暂不存在）
+        if s == 500:
+            errors.append((s, raw[:120]))
+        time.sleep(0.03)
+    return errors
+
+# 运行两线程 → 收集 access_thread 的 500
+```
+
+**断言逻辑**：
+- **Type3_RuntimeFailure**：access 端点返回 **500 / panic / 连接重置**（应为 404"集合不存在"或 503，而非 500 内部错误）。参考 qdrant #9229（"Expected at least one response" 500）。
+- **Type4_StateLogicViolation**：lifecycle 结束后，最终 count 与预期不一致（数据残留/丢失）。
+
+**关键**：
+- 500 是缺陷信号（服务器应优雅处理"集合暂不存在"，返回 404/503，而非 500 内部错误）
+- 偶发 500 需复现确认（≥2/3 次触发才报，避免竞态误报）
+- 仅 404/503 不是缺陷（正确的"暂不可用"语义）
+
+**变体**（按 target 适配）：
+- qdrant：`PUT/DELETE /collections/{name}` × `POST /collections/{name}/points/query`
+- milvus：`CreateCollection/DropCollection` × `Search`
+- weaviate：`POST /schema/{class}` × `POST /{class}/query`
+- pgvector：`CREATE/DROP TABLE` × `SELECT`（事务内）
+
 ---
 
 ## 序列攻击模式

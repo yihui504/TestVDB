@@ -335,6 +335,29 @@ def generate_judge_severity_injection(tm):
             for pt in sec.get("patterns", []):
                 p.append("  - " + pt)
             p.append("")
+    # ponytail: v2.2 崩溃放行 — Type3 崩溃无需文档契约支撑，与 aggregate_votes.py 规则 0 / judge-severity 规则 4 例外 协同
+    p.append("### 崩溃现象自动 Critical（v2.2 Crash Auto-Confirm）")
+    p.append("Reason: 运行时崩溃（OOM/panic/5xx/连接重置/容器 Killed）是客观缺陷事实，无需文档契约支撑。DOC_MISMATCH 降级规则（规则 4）**不应用于崩溃**。")
+    p.append("")
+    p.append("**触发条件**（执行日志含以下任一信号）：")
+    p.append("  - OOM / out of memory / capacity overflow / Killed（OOM killer）")
+    p.append("  - panic occurred / panic backtrace / thread panicked")
+    p.append("  - SIGSEGV / SIGABRT / SIGKILL / segmentation fault")
+    p.append("  - HTTP 5xx（status:500 / http/1.1 500 / \"status\":500）")
+    p.append("  - 连接重置 / connection reset / broken pipe")
+    p.append("")
+    p.append("**动作**：severity = **Critical**，标 `crash_auto_confirmed: true`，跳过规则 4（DOC_MISMATCH 不降级）+ 规则 5（单脚本不降级）。")
+    p.append("")
+    p.append("**排除（by-design 崩溃不触发）**：")
+    by_design_kw = []
+    if isinstance(c.get("by_design_behaviors"), dict):
+        by_design_kw = c["by_design_behaviors"].get("patterns", [])
+    # 默认平台限制白名单（即使 threat_model 无 by_design 也生效）
+    default_platform = ["jemalloc on ARM64/aarch64", "platform address space limit", "libc/musl compatibility"]
+    p.append("  - 平台限制（默认）：jemalloc ARM64/aarch64、地址空间限制、libc 兼容 — 这些是外部限制非 server 缺陷")
+    if by_design_kw:
+        p.append("  - threat_model by_design_behaviors：" + ", ".join(str(x) for x in by_design_kw[:8]))
+    p.append("")
     return chr(10).join(p)
 
 def generate_judge_novelty_injection(tm):
