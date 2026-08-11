@@ -63,13 +63,14 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 □ [Step 2] 前置条件检查（Docker/Python/磁盘/网络）
 □ [Step 3] 检查缓存（raw_knowledge.md + structured_contract.json，含 TTL 计算）
 □ [Step 3.6] 如 intelligence.enabled=true：历史情报采集（issue-miner → bug-shape-extractor → threat-modeler）
+□ [Step 3.65] bug-shape 确定性核验（v2.4，fail-fast）：`python scripts/_validate_bug_shapes.py intelligence/{target}/bug_shapes.json`；exit 1 → 读 bug_shapes_validation_report.json → 重派 bug-shape-extractor（反空壳反 repro 泄漏）
 □ [Step 4] 如缓存未命中：派 Knowledge Extractor 获取文档
 □ [Step 5] 如缓存未命中：派 Contract Formalizer 生成契约
-□ [Step 6] 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）
+□ [Step 6] 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）+ 确定性核验（v2.4，fail-fast）：`python scripts/_validate_contract.py results/{target}/{version}/structured_contract.json`；exit 1 → 读 contract_validation_report.json → 重派 contract-formalizer（反系统性 source_verified 幻觉）
 □ [Step 7] 初始化 mine_state.json + 设置 TESTVDB_SESSION_ID 环境变量
 □ [Step 8] 开始挖掘循环（最多 max_rounds 轮）：
   □ 8a. 注入 reflection_context + threat_model + cognitive_blindspots 到 Attack Agents
-  □ 8b. 并发出动 Attack Trio（boundary + state + semantic）
+  □ 8b. 并发出动 Attack Trio + Vein（boundary + state + semantic + vein）
   □ 8c. Orchestrator 自行执行辩论 Stage 1（交叉审查 + 去重）
   □ 8d. 派 Executor 在沙箱中执行通过辩论的脚本（容器保持运行）
   □ 8e. 收集执行结果 → 辩论 Stage 2（Judge Quartet 分两阶段，注入 judge_enhancements）
@@ -281,11 +282,11 @@ THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} -
 
 策略由 `scripts/strategy_injector.py {target} --text-only` 生成，在 Attack Agent prompt 中注入。
 
-#### 8b. 并发出动 Attack Trio
+#### 8b. 并发出动 Attack Trio + Vein（v2.5 — attack-vein 作为第 4 个并发 agent）
 
 **完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S1 --phase-data '{"ATTACK_GEN": {"scripts_generated": N, "agents_completed": [...]}}'`
 
-**并发（非顺序）** 派三个 Attack Agent，**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
+**并发（非顺序）** 派四个 Attack Agent（boundary + state + semantic + vein），**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
 > **派发者说明（v2.1.2）**：实际由**主进程**（`commands/mine.md`）直接派发这三个 attack agent，**orchestrator 不嵌套派孙 agent**（嵌套派发不可靠，见 `commands/mine.md:18` 与 memory `nested-agent-dispatch-limitation`）。本节描述的是派发的**内容契约**，不是 orchestrator 自行派发。⚠️ 派发依赖环境原生 Task 工具；若当前环境未暴露（非标准 provider），主进程须降级为单 agent 串行执行，或换到支持原生 Task 的环境——此为平台层限制，非代码 bug。
 
@@ -295,7 +296,10 @@ THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} -
 Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}", prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}", prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}", prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:attack-vein", description="Vein-mining 纵深攻击 {target} v{version}", prompt="按照 agents/attack-vein.md 规范，为 {target} v{version} 做 condition-space 纵深挖掘。contract=results/{target}/{version}/structured_contract.json, threat_model=intelligence/{target}/threat_model.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。**自己跑脚本**（curl 真 DB via Bash，DB URL from env TESTVDB_DB_URL），single-turn discover-then-deepen 按 condition-richness 选 top-3 endpoint 纵深挖掘 8 类通用 condition，finding-feedback loop 启发相邻 condition。产出 vein_scripts/*.py（strategy=vein_<type>）走标准 Stage 1+2+Judge。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
+
+> **attack-vein 特殊性**（v2.5）：与 Trio 不同——它**自己跑脚本**（破坏"只生成"边界，路径 2），目的是 single-turn discover-then-deepen 得即时反馈（不等 docker-executor）。但它产出的 `vein_scripts/*.py` 仍走完整 Stage 1 + Stage 2 + Judge Quartet（自跑只是发现机制，不是判定机制）。Stage 1 确定性分类器仍扫 `vein_scripts/`（attack-vein 也可能产 SCRIPT_ERROR 模式）。
 
 **自动化输出验证**：每轮 Attack Trio 完成后，使用 Bash 工具执行以下命令验证子 agent 产出：
 ```bash
@@ -315,7 +319,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
 **完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EXECUTION --phase-data '{"DEBATE_S1": {"approved_count": N, "rejected_count": M}}'`
 
-收集三个 Agent 产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
+收集四个 Agent（boundary + state + semantic + vein）产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
 
 **自动化审查步骤**：
 
@@ -329,6 +333,41 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
    - 全部使用 `safe_request()` 或等效安全包装 → **PASS**
    
    具体执行脚本见 `commands/mine.md` Step 8c 第 6 步。
+4.6. **v2.5 新增 — 确定性错误分类 + retry 子循环（反"attack 脚本 ~25%+ SCRIPT_ERROR 直接废弃"）**
+
+   **memory 教训**（meilisearch 实测 57% / chroma 12.5% 静态错误率）：attack agent 跨 target 反复犯 5 类静态错误（`bare_json_chain` / `safe_request_unused` / `cleanup_unwrapped` / `verdict_missing` / `syntax_error`），Stage 1 当前直接丢弃 → 浪费 + 掩盖有效测试方向。本 Step 用确定性脚本分类 + 重派 attack agent 带 feedback 重生成（不是废弃）。借鉴 `pipeline_state._handle_defect_review` 的 retry 设计模式（counter + 超限降级）。
+
+   **Step 4.6.1 — 确定性错误分类**：
+   ```bash
+   python scripts/_classify_script_errors.py ${SESSION_DIR}
+   # 产出 ${SESSION_DIR}/script_errors.json（errors[]: script_id + error_classes + feedback_hints）
+   ```
+
+   **Step 4.6.2 — apply retry（确定性脚本，反 LLM 维护 counter 不可靠）**：
+   ```bash
+   python scripts/_apply_script_retry.py ${SESSION_DIR}
+   # stdout JSON: {regen: [...], exhausted: [...], total_errors, max_retry}
+   # 副作用：更新 script_retry.json / 写 *.retry_feedback.json / 删超限脚本
+   ```
+   - `regen` 列表 = 需重派 attack agent 的脚本（counter < `MAX_SCRIPT_RETRY`=2，已写对应 `retry_feedback.json`）
+   - `exhausted` 列表 = 已超限降级删掉的脚本（避免 SCRIPT_ERROR 流入 Stage 2 浪费 Executor）
+
+   **⛔ 红线**（呼应反"用答案反推考题"）：`feedback_hints` 由 `_classify_script_errors.py` 内嵌的通用规则提供（"wrap in try/except"），**不是 DB 特定答案**（"测 count API exact=false"）。Orchestrator 不得在 feedback 里写被测参数名/端点名/具体测试值。把 qdrant 换 weaviate/milvus 仍合理 = 通用 = 通过。
+
+   **Step 4.6.3 — 重派 attack agent（带 feedback）**：如有"需重生成"项，按 source 分组派对应 attack agent（boundary/state/semantic）。agent 收到后**覆盖原文件**（script_id 不变），重跑 Step 4.6.1。直到无 error script 或全部超限降级。
+
+   ```
+   Agent(subagent_type="testvdb:attack-boundary", description="Retry: fix SCRIPT_ERROR 模式",
+     prompt="按 agents/attack-boundary.md § Retry Feedback Handling 规范。
+     ${SESSION_DIR}/boundary_scripts/ 下有 N 个脚本被 Stage 1 确定性分类标错，需读各
+     ${script_id}.retry_feedback.json 修正后**覆盖原文件**（script_id 不变）。
+     错误清单：[script_id → error_classes]。feedback_hints 是通用规则（不是答案），按 hint 修对应错误类，
+     保留原脚本没问题的部分，不要从头重写。target={target}, version={version}, SESSION_DIR=${SESSION_DIR}。")
+   ```
+   （state/semantic 同理，subagent_type 换 `testvdb:attack-state` / `testvdb:attack-semantic`）
+
+   **Step 4.6.4**：retry 子循环结束后，剩下的脚本进 Step 5。
+
 5. **跨 Agent 交叉审查**：对跨 Agent 重复的脚本（相同 endpoint+constraint 被多个 Attack Agent 独立生成），比较各 Agent 的实现：
    - 各 Agent 使用不同测试值/策略 → 选择覆盖最广的版本
    - 各 Agent 使用相同测试值 → 保留 confidence 最高的版本
@@ -342,7 +381,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
    # 从攻击 Agent 输出目录收集脚本（非 debate_logs/——攻击 Agent 直接写入这些目录）
    # 同时保留 script_{id}.py 在根目录做兜底
    # v2.2: 脚本统一存放在按来源命名的子目录中，不再复制到根目录（避免 Executor 重复扫描）
-   for dir in boundary_scripts state_scripts scripts; do
+   for dir in boundary_scripts state_scripts scripts vein_scripts; do
      [ ! -d "${SESSION_DIR}/${dir}" ] && continue
      for src in "${SESSION_DIR}/${dir}"/*.py; do
        [ ! -f "$src" ] && continue
@@ -350,6 +389,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
        case "$B" in
          boundary_*) cp "$src" "${SESSION_DIR}/boundary_scripts/$B" ;;
          state_*)    cp "$src" "${SESSION_DIR}/state_scripts/$B" ;;
+         vein_*)     cp "$src" "${SESSION_DIR}/vein_scripts/$B" ;;
          semantic_*|*) cp "$src" "${SESSION_DIR}/scripts/$B" ;;
        esac
      done
@@ -361,7 +401,8 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 **审查判定规则**：
 - confidence ≥ 0.7 且无重复且语法正确且约束存在且 API 格式通过 → **直接通过**
 - confidence < 0.7 或有重复 → 详细审查后决定 approve / reject
-- 语法错误、约束不存在、裸 `.json()` 链式调用 → **直接丢弃**
+- 静态代码错误（语法 / 裸 `.json()` / safe_request 不调用 / cleanup 未包 try / 缺 VERDICT 行）→ **先经 Step 4.6 retry**，超 `MAX_SCRIPT_RETRY`=2 才丢弃（反"~25% 脚本直接废弃浪费"）
+- 约束不存在（constraint_id 不在 structured_contract.json）→ **直接丢弃**（attack agent 没读 contract，retry 也修不好）
 
 辩论日志写入 `debate_logs/stage1.json`。**Orchestrator 使用 Write 工具写入此文件**，将审查结果序列化为 JSON 后写入 `results/{target}/{version}/{timestamp}/debate_logs/stage1.json`。
 

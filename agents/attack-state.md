@@ -134,6 +134,16 @@ create_object / batch_objects / get_object({id}) / delete_object({id}) / graphql
 - `resource_exhaustion_attacks` → 资源耗尽（策略 4）占对应比例
 - 权重 < 0.1 的策略 → 本轮可跳过
 
+### 5. Shape 泛化探索（v2.3 新增 — ⛔ 强制执行）
+
+如果 prompt 含「Shape 泛化探索指令（v2.3）」部分，对每个 shape_type=`concurrency_race` 或 `state_consistency` 的 shape 执行（attack-state 主攻这类）：
+- 先产出 `debate_logs/shape_exploration_{shape_id}.md` 参数族枚举清单（按 exploration_directive：lifecycle 端点 × 访问端点组合）
+- 测 known_instances（regression）+ **枚举 contract 里 issue 没报的 lifecycle×访问组合**（novel_candidate）
+- 脚本标 `# exploration_target: regression | novel_candidate`
+- novel_candidate 脚本 < 3 → DEBATE_S1 打回（`validate_shape_exploration.py` 检查）
+
+详见 attack-boundary.md § 5（完整流程）。**核心**：novel_candidate 是 issue 没报的同类组合——这些才是发现 novel TP 的地方。
+
 ## 攻击策略
 
 **重要：根据 `contract.target` 选择正确的 API 接入方式。** 详见 `agents/_target_api_reference.md` § "DB 特定 API 选择指南"。核心规则：
@@ -357,6 +367,33 @@ Search non-existent → Verify empty result
 Pause/Freeze → Modify → Resume → Verify consistency
 For pgvector: VACUUM → Verify count unchanged
 ```
+
+---
+
+## Retry Feedback Handling（v2.5 新增 — Stage 1 错误分类反馈环）
+
+Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `${script_id}.retry_feedback.json` 标记你的脚本有静态错误，需重生成。**memory 教训**：attack 脚本 ~25%+ 静态错误率（meilisearch 57% / chroma 12.5%），Stage 1 不再直接废弃，而是给你一次修正机会（每脚本最多 2 次 retry）。
+
+收到 retry feedback 时（Orchestrator 派你时 prompt 会指向 `${SESSION_DIR}/state_scripts/${script_id}.retry_feedback.json`）：
+
+1. **读 retry_feedback.json**，理解 `error_classes`（5 类静态错误的标签）
+2. **按 `feedback_hints` 修对应错误类**——hints 是**通用规则**（不是答案）：
+   | error_class | 含义 | hint 方向 |
+   |-------------|------|-----------|
+   | `syntax_error` | py_compile 失败 | 看 SyntaxError 的 line/offset，只修那一行 |
+   | `bare_json_chain` | `requests.X(...).json()["k"]` 裸链式 | 改成 `status, body, raw = safe_request(...)` 三元组 |
+   | `safe_request_unused` | 定义但不调用 | 把所有 HTTP 调用走 safe_request，或删死定义 |
+   | `cleanup_unwrapped` | delete/drop/clear 调用未在 try/except 内 | 包 `try: ... except Exception: pass`（state agent §3-4 已强制） |
+   | `verdict_missing` | 无 `VERDICT: <X>` 行 | 末尾加严格 `print("VERDICT: DEFECT_FOUND/NO_DEFECT/SCRIPT_ERROR")`（state agent §3 已要求严格格式） |
+3. **保留原脚本没问题的部分**——只改被标错的，不要从头重写（保留并发/状态测试逻辑）
+4. **覆盖原文件**（script_id 不变），不要新建文件
+5. 修正后 Stage 1 会重新分类，如全清则进 Step 5 交叉审查
+
+**⛔ 红线（不要把 feedback 当答案）**：
+- ❌ 把 hint 当作"测什么参数/端点"的提示（hint 只告诉你**代码模式**错，不告诉你测什么）
+- ❌ 重写整个脚本或换 strategy / script_id（破坏审查可追踪）
+- ❌ 在脚本里加无意义注释或 stub（只修被标错的代码模式）
+- ✅ feedback_hints 是通用规则；把 qdrant 换 weaviate/milvus 仍合理 = 通过
 
 ---
 

@@ -312,7 +312,39 @@ def generate_attack_injection(tm):
     p.extend(_inject_attack_priority(tm))
     p.extend(_inject_cognitive_blindspots(tm))
     p.extend(_inject_by_design_behaviors(tm))
+    p.extend(_inject_shape_generalization(tm))  # v2.3 — shape 泛化驱动
     return chr(10).join(p)
+
+
+# ponytail: v2.3 shape 泛化注入 — 驱动 attack agent 做参数族枚举（反"只测 issue 报的具体参数"）
+def _inject_shape_generalization(tm):
+    shapes = (tm or {}).get("generalization_shapes") or []
+    if not shapes:
+        return []
+    p = ["", '## Shape 泛化探索指令（v2.3 — 必须执行，反"attack 不泛化"）', ""]
+    p.append("**⛔ 强制要求**：对下面每个 shape，你必须先产出 `debate_logs/shape_exploration_{shape_id}.md` 参数族枚举清单，再生成脚本。")
+    p.append("**不只测 known_instances（regression）**——必须按 exploration_directive 枚举 contract 同类参数，测 issue 没报的 novel_candidate。")
+    p.append("未产出枚举清单 / novel_candidate 脚本数 < 3 → DEBATE_S1 打回重跑。")
+    p.append("")
+    for s in shapes:
+        st = s.get("shape_type", "?")
+        p.append(f"### Shape: {s.get('shape_id', '?')}（shape_type={st}）")
+        p.append(f"- 抽象模式: {s.get('abstract_pattern', '')}")
+        ed = s.get("exploration_directive") or {}
+        p.append(f"- 参数族枚举规则: {ed.get('parameter_family_rule', '（未指定）')}")
+        p.append(f"- 探索值: {ed.get('exploration_values', [])}")
+        p.append(f"- novelty 规则: {ed.get('novelty_rule', '排除 known_instances 为 novel_candidate')}")
+        ki = s.get("known_instances") or []
+        if ki:
+            p.append(f"- known_instances（regression，{len(ki)} 个）:")
+            for k in ki[:8]:
+                p.append(f"  - {k.get('param','?')}={k.get('value','?')} @ {k.get('endpoint','?')} (#{k.get('issue','?')})")
+        p.append("")
+    p.append("**两阶段测试**：")
+    p.append("1. **regression 验证**：测 known_instances（标 `exploration_target: regression`）")
+    p.append("2. **novel 探索**（重点）：按参数族规则枚举 contract，测 known_instances 之外的同类参数（标 `exploration_target: novel_candidate`）")
+    p.append("")
+    return p
 
 
 # ---- Judge Agent injection ----

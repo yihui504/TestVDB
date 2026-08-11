@@ -110,6 +110,57 @@ Milvus target 必读 [`agents/_target_api_reference.md` § "强制 runtime 协�
 - `type_confusion_attacks` → 类型混淆攻击（策略 2）占对应比例
 - 权重 < 0.1 的策略 → 本轮可跳过
 
+### 5. Shape 泛化探索（v2.3 新增 — ⛔ 强制执行，反"attack 不泛化只测 issue 报的具体参数"）
+
+如果 prompt 中包含「Shape 泛化探索指令（v2.3）」部分（含 generalization_shapes），你**必须**执行 shape-driven exploration。这是 TestVDB 从"测试向量执行器"变成"缺陷发现系统"的核心——**不只测 issue 报的参数（regression），必须探索 issue 没报的同类参数（novel_candidate）**。
+
+#### 执行流程（每个 generalization_shape）
+
+**Step 1: 产出参数族枚举清单**（强制，先于脚本生成）
+
+读取 `results/{target}/{version}/structured_contract.json`，按 shape 的 `exploration_directive.parameter_family_rule` **枚举 contract 里所有同类参数**，写入 `debate_logs/shape_exploration_{shape_id}.md`：
+
+```markdown
+## Shape: {shape_id}（shape_type={shape_type}）
+### 参数族枚举（按 parameter_family_rule: {rule}）
+| 参数 | 端点 | 类型 | known_instance? | 探索值 |
+|------|------|------|----------------|--------|
+| shard_number | PUT /collections/{name} | int | ✓ (#9149) | (regression, 跳过) |
+| replication_factor | PUT /collections/{name} | int | ✗ | 0, -1 |
+| ef_construct | PUT /collections/{name} | int | ✗ | 0, -1 |
+| m | hnsw_config | int | ✗ | 0, -1 |
+| ...（枚举所有同类，不只前几个）|
+### novel_candidate 目标（排除 known_instance）
+replication_factor / ef_construct / m / max_optimization_threads / indexing_threshold × {0, -1}
+```
+
+**枚举规则**（按 shape_type，非凭直觉）：
+- `numeric_boundary` → 遍历 contract 所有端点的 parameters，挑 int/number 类型字段
+- `type_confusion` → 所有 typed 字段（有 type 约束的）
+- `null_handling` → 所有 optional/nullable 字段（required=false）
+- `resource_limit` → 所有数值参数（limit/batch_size/dimension/group_size）
+- `concurrency_race` → 所有 lifecycle 端点（create/delete/recreate）× 访问端点组合（交由 attack-state）
+- `semantic_drift` → 所有文档化行为（枚举语义/默认值）
+
+**Step 2: 生成两阶段测试脚本**
+
+1. **regression 验证**：测 known_instances（每条生成 1 脚本，标 `# exploration_target: regression`）
+2. **novel 探索**（重点）：对清单里每个 `✗`（非 known_instance）参数，生成测试脚本测 exploration_values，标 `# exploration_target: novel_candidate`
+
+**Step 3: 脚本 metadata 标注**（强制）
+
+每脚本头部注释含：
+```python
+# exploration_target: regression | novel_candidate
+# shape_id: {shape_id}
+# shape_type: {shape_type}
+# generalized_from: {known_instance_issue 或 "novel exploration"}
+```
+
+**⛔ Gate 闸门**：若未产出 `shape_exploration_{shape_id}.md` 清单 / novel_candidate 脚本数 < 3 → DEBATE_S1 打回重跑（`scripts/validate_shape_exploration.py` 检查）。
+
+**关键心理**：novel_candidate 是 issue **没报**的同类参数——这些才是可能发现 novel TP 的地方。测它们不是"复现已知 bug"，是"探索未知缺陷"。这是本次改进的核心目的。
+
 ## 攻击策略
 
 **重要：根据 `contract.target` 选择正确的 API 接入方式。** 详见 `agents/_target_api_reference.md` § "DB 特定 API 选择指南"。核心规则：
@@ -238,6 +289,75 @@ elif status in (400, 422):
 **特别组合**：对 group search 端点（`/points/query/groups` 等），测 `limit × group_size` 同时极大值（两个都 1e6/1e8）——分配器可能基于 limit×group_size 预分配致 OOM（参考 qdrant #8406）。
 
 **容器隔离提示**：资源极限测试**可能崩容器**（#8406 实测 exit 137 OOM）。docker-executor 在每脚本前应 `docker restart` 隔离；docker-compose 配 `mem_limit` 防杀宿主。
+
+### 策略 7: Malformed Input / 字符 Fuzzing（v2.5 新增 — Type3_RuntimeFailure + Type1_IllegalSuccess，反"只测契约边界值不测畸形输入/字符边界"）
+
+**反向验证识别的盲点**：50 TPs 里 3 个（malformed JSON + NUL/UTF-16）属"系统性 serde / 特殊字符"类，当前策略 1-6 都不覆盖（策略 4 特殊值测**数值/类型特殊值**，不测**输入流畸形/字符编码**）。本策略补这个盲点。
+
+**通用维度**（DB-中立，任何 JSON-over-HTTP DB 都适用）：
+
+| 输入类别 | 测试值（通用） | 缺陷信号 |
+|---------|---------------|---------|
+| Malformed JSON | 截断（`{"a":1`）/ 多括号 / 少括号 / trailing comma（`{"a":1,}`）/ 非法转义（`"\q"`）/ 单引号 / 注释（`// foo`） | **500 / panic / parser 内部错误泄漏**（4xx + 清晰错误=正常） |
+| NUL 字节 | 字段值含 `\x00` / ` ` / 路径参数含 `%00` | **5xx / 响应截断 / silent accept**（接受 NUL 但存储/查询行为异常） |
+| UTF-16 lone surrogate | 值含 `\uD800`-`\uDFFF` 孤立代理对（非合法 Unicode） | **5xx / panic / 编码异常**（serde 信任输入是合法 Unicode） |
+| 超长字符串 | 字段值 1MB / 10MB string | **OOM / 500**（无长度上限校验） |
+| Unicode 边界 | BOM（`﻿`）/ RTL（`‮`）/ combining char / zero-width / 翻转控制字符 | **silent accept 与 doc 不符**（如 id 字段接受控制字符） |
+
+**断言逻辑**（双 defect 类型 — Type3 崩溃 + Type1 silent accept）：
+```python
+import json
+# 例：NUL 字节 in id — 必须用 data= 传 raw bytes（用 json= 会被客户端序列化先拒）
+# safe_request(**kwargs) 透传 requests.request，data= 是标准 raw body 参数
+raw_body = '{"vector": [0.1]*128, "id": "a\\u0000b"}'.encode("utf-8")  # bytes 避免编码歧义
+status, _, raw = safe_request("POST", SEARCH_PATH, data=raw_body,
+                              headers={"Content-Type": "application/json"})
+if status in (500, 502, 503) or any(k in raw.lower() for k in
+                                    ["panic", "internal", "serde", "utf", "decode"]):
+    print(f"VERDICT: DEFECT_FOUND (Type3_RuntimeFailure) — NUL/畸形输入触发 5xx")
+elif status == 200:
+    # 200 不是必然缺陷 — 需进一步验证 silent accept 是否违反 doc
+    # （如 doc 说 id 不能含控制字符但接受 = Type1）
+    print(f"VERDICT: DEFECT_FOUND (Type1_IllegalSuccess) — 畸形输入被 silent accept（待 judge-doc 验证 doc 语义）")
+elif status in (400, 422):
+    print(f"VERDICT: NO_DEFECT — 畸形输入正确拒绝")
+```
+
+**关键**：
+- Malformed JSON / NUL / lone surrogate 触发 **5xx/panic = Type3 缺陷**（任何 5xx 都是 defect——DB 应稳健处理非法输入返回 4xx，不应崩）
+- 200 silent accept **需 judge-doc 判定**（如果 doc 明说 id 不接受控制字符但接受 = Type1；如果 doc 没说 = NO_DEFECT）
+- **安全包装**：必须用 `safe_request(..., data=raw_bytes)`（不是 `json=`），否则客户端 JSON 序列化先拒畸形输入，测不到 DB 行为。`data=` 接受 bytes，requests 直接发 raw，绕过客户端序列化
+
+**通用性红线**（反 DB 特定）：测的是**输入流畸形 + 字符编码边界**，任何 JSON-over-HTTP DB 都适用。把 qdrant 换 weaviate/milvus 仍能跑 = 通用 = 通过。**禁**：在 prompt 里点名具体 DB 的具体端点（"测 qdrant 的 /points 的 NUL"）；**应**：从 contract 取所有接受 string id / 用户输入字段的端点，逐个测畸形输入。
+
+**容器隔离提示**：malformed JSON / 超长字符串测试**可能崩容器**（parser panic / OOM）。同策略 6，docker-executor 每脚本前 `docker restart` 隔离。
+
+---
+
+## Retry Feedback Handling（v2.5 新增 — Stage 1 错误分类反馈环）
+
+Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `${script_id}.retry_feedback.json` 标记你的脚本有静态错误，需重生成。**memory 教训**：attack 脚本 ~25%+ 静态错误率（meilisearch 57% / chroma 12.5%），Stage 1 不再直接废弃，而是给你一次修正机会（每脚本最多 2 次 retry）。
+
+收到 retry feedback 时（Orchestrator 派你时 prompt 会指向 `${SESSION_DIR}/boundary_scripts/${script_id}.retry_feedback.json`）：
+
+1. **读 retry_feedback.json**，理解 `error_classes`（5 类静态错误的标签）
+2. **按 `feedback_hints` 修对应错误类**——hints 是**通用规则**（不是答案）：
+   | error_class | 含义 | hint 方向 |
+   |-------------|------|-----------|
+   | `syntax_error` | py_compile 失败 | 看 SyntaxError 的 line/offset，只修那一行 |
+   | `bare_json_chain` | `requests.X(...).json()["k"]` 裸链式 | 改成 `status, body, raw = safe_request(...)` 三元组 |
+   | `safe_request_unused` | 定义但不调用 | 把所有 HTTP 调用走 safe_request，或删死定义 |
+   | `cleanup_unwrapped` | delete/drop/clear 调用未在 try/except 内 | 包 `try: ... except Exception: pass` |
+   | `verdict_missing` | 无 `VERDICT: <X>` 行 | 末尾加 `print("VERDICT: DEFECT_FOUND/NO_DEFECT/SCRIPT_ERROR")` |
+3. **保留原脚本没问题的部分**——只改被标错的，不要从头重写（保留测试逻辑、参数、断言意图）
+4. **覆盖原文件**（script_id 不变），不要新建文件
+5. 修正后 Stage 1 会重新分类，如全清则进 Step 5 交叉审查
+
+**⛔ 红线（不要把 feedback 当答案）**：
+- ❌ 把 hint 当作"测什么参数/端点"的提示（hint 只告诉你**代码模式**错，不告诉你测什么）
+- ❌ 重写整个脚本或换 strategy / script_id（破坏审查可追踪）
+- ❌ 在脚本里加无意义注释或 stub（只修被标错的代码模式）
+- ✅ feedback_hints 是通用规则；把 qdrant 换 weaviate/milvus 仍合理 = 通过
 
 ---
 

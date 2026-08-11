@@ -355,6 +355,45 @@ Cognitive Blindspot Model 从开发者认知数据中提取"开发者在这个�
 
 **注意**：open issue 噪声（feature/question 混入）由 bug-shape-extractor 的 `developer_stance` 分类前置过滤（只采纳 positive 类：maintainer 确认 / 有 repro / 有 fix PR 关联）。threat-modeler 信任 bug-shape 的 positive 标记，不二次判定真实性（真实性由后续 live test 实测验证）。
 
+### Step 4b: 生成 Generalization Shapes（v2.3 新增 — 反"attack 不泛化"）
+
+从 bug_shapes.json 的 `shape_type` + `known_instances` 构建 generalization_shapes，驱动 attack agent 做参数族枚举（contract-driven generalization）。
+
+```json
+{
+  "generalization_shapes": [
+    {
+      "shape_id": "numeric-config-zero-validation",
+      "shape_type": "numeric_boundary",
+      "abstract_pattern": "数值配置参数零值/负值校验不一致",
+      "known_instances": [
+        {"param": "shard_number", "value": 0, "issue": 9149, "endpoint": "PUT /collections/{name}"}
+      ],
+      "exploration_directive": {
+        "parameter_family_rule": "枚举 contract 中所有 int/number 类型 config/request 字段",
+        "exploration_values": [0, -1, 2147483647],
+        "novelty_rule": "排除 known_instances 已报参数，剩余为 novel_candidate（issue 没报的同类）",
+        "expected_exploration_per_shape": "≥5 个 novel_candidate 参数（若 contract 同类参数 ≥5）"
+      },
+      "confidence": 0.90
+    }
+  ]
+}
+```
+
+**生成规则**：
+1. 从 bug_shapes.json 取每个含 `shape_type` 的 shape（实例数 ≥5 的）
+2. `exploration_directive` 按 shape_type 派生（见 bug-shape-extractor taxonomy）：
+   - `numeric_boundary` → "枚举所有 int/number config 字段，测 0/-1/INT_MAX"
+   - `type_confusion` → "枚举所有 typed 字段，测跨类型值"
+   - `null_handling` → "枚举所有 nullable/optional 字段，测 null/missing/空容器"
+   - `resource_limit` → "枚举所有单值参数，测 1e6/1e8/INT_MAX"
+   - `concurrency_race` → "枚举所有 lifecycle 端点 × 访问端点组合"
+   - `semantic_drift` → "枚举所有文档化行为，测 doc-impl 不一致"
+3. `known_instances` 直接从 bug_shapes 继承（标 issue 来源，供 regression 验证 + novelty 判定）
+
+**这是 attack agent 泛化的数据源**——injector 会把它注入 attack prompt，attack agent 收到后必须按 exploration_directive 枚举 contract 同类参数（产出 shape_exploration 清单），测 issue 没报的 novel_candidate。
+
 ### Step 5: 生成 Judge 增强规则
 
 Threat Model 也用于增强 Judge Agent 的判定逻辑：
@@ -428,7 +467,8 @@ Threat Model 也用于增强 Judge Agent 的判定逻辑：
     "attack_strategy_mapping": { ... }
   },
   "attack_priority_map": { ... },
-  "judge_enhancements": { ... }
+  "judge_enhancements": { ... },
+  "generalization_shapes": [ ... ]  // v2.3 新增 — attack 泛化的数据源（Step 4b）
 }
 ```
 
@@ -437,6 +477,7 @@ Threat Model 也用于增强 Judge Agent 的判定逻辑：
 - 检查所有必填字段存在
 - 检查至少 3 个 cognitive blindspot
 - 检查至少 1 个 attack priority endpoint
+- **v2.3：检查 generalization_shapes 中每个 shape 含 shape_type + exploration_directive（驱动 attack 泛化）**
 - 先写 `.tmp`，完成后 rename
 
 ---

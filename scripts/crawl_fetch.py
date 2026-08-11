@@ -23,6 +23,12 @@ import argparse
 from typing import Dict, List, Optional, Tuple, Union
 from urllib.parse import urljoin
 
+# Force UTF-8 encoding for Windows compatibility
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 # ── HTTP 客户端选择 ──────────────────────────────────────────
 try:
     import httpx
@@ -73,6 +79,40 @@ def _http_post(url: str, headers: dict, body: dict, timeout: int):  # -> Tuple[i
             return 0, str(e)
 
 
+# ── Markdown 归一化 ─────────────────────────────────────────
+
+def _md_to_str(md) -> str:
+    """归一化 Crawl4AI 的 markdown 字段为字符串。
+
+    Crawl4AI >= 0.8.x 把 markdown 作为 dict 返回，含
+    raw_markdown / fit_markdown / markdown_with_citations 等子字段。
+    旧版 (< 0.8) 直接返回 string。本函数兼容两者。
+    """
+    if isinstance(md, str):
+        return md
+    if isinstance(md, dict):
+        return (md.get("raw_markdown")
+                or md.get("fit_markdown")
+                or md.get("markdown_with_citations")
+                or "")
+    return str(md)
+
+
+def _html_to_md(html: str) -> str:
+    """HTML → markdown 降级转换（当 Crawl4AI 未返回 markdown 时）。"""
+    if not html:
+        return ""
+    try:
+        import html2text
+        conv = html2text.HTML2Text()
+        conv.ignore_links = False
+        conv.ignore_images = True
+        conv.body_width = 0
+        return conv.handle(html)
+    except Exception:
+        return html
+
+
 # ── Crawl4AI 客户端 ──────────────────────────────────────────
 
 class Crawl4AIClient:
@@ -111,6 +151,9 @@ class Crawl4AIClient:
 
         task_id = task_resp.get("task_id")
         if not task_id:
+            # Crawl4AI >= 0.8.x: /crawl 同步返回 {success, results}（无 task_id）
+            if task_resp.get("success") and isinstance(task_resp.get("results"), list):
+                return task_resp
             print(f"[crawl4ai] 响应中无 task_id: {text[:500]}", file=sys.stderr)
             return None
 
@@ -148,11 +191,11 @@ class Crawl4AIClient:
         """从 Crawl4AI 结果中提取 markdown 内容。"""
         # 尝试多种可能的响应格式
         if "markdown" in result:
-            return result["markdown"]
+            return _md_to_str(result["markdown"])
         if "result" in result:
             r = result["result"]
             if isinstance(r, dict) and "markdown" in r:
-                return r["markdown"]
+                return _md_to_str(r["markdown"])
             if isinstance(r, str):
                 return r
         if "content" in result:
@@ -162,9 +205,13 @@ class Crawl4AIClient:
             for r in result["results"]:
                 if isinstance(r, dict):
                     if "markdown" in r:
-                        parts.append(r["markdown"])
+                        parts.append(_md_to_str(r["markdown"]))
                     elif "content" in r:
                         parts.append(r["content"])
+                    elif r.get("cleaned_html"):
+                        parts.append(_html_to_md(r["cleaned_html"]))
+                    elif r.get("html"):
+                        parts.append(_html_to_md(r["html"]))
                 elif isinstance(r, str):
                     parts.append(r)
             if parts:

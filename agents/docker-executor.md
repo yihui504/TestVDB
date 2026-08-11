@@ -181,7 +181,7 @@ export PYTHONUTF8=1
 N=0
 PASS=0
 FAIL=0
-for dir in boundary_scripts state_scripts scripts; do
+for dir in boundary_scripts state_scripts scripts vein_scripts; do
   [ -d "$dir" ] || continue
   for script in "$dir"/*.py; do
     [ -f "$script" ] || continue

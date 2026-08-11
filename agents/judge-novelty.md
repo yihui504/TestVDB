@@ -91,6 +91,21 @@ tools:
 
 > **关键变更（v2.3）**：`already_reported` 不再投 `not_defect`。judge-novelty 的角色是 **Novelty Triage（初筛）**，收集关联 issue 信息传递给 Novelty Gate。Gate 是唯一的"是否可提交"权威决策点，拥有更丰富的分级体系（NOVEL / KNOWN_OPEN / COVERED_BY_PR / BY_DESIGN / POSSIBLY_FIXED / UNVERIFIED）。 |
 
+### Shape known_instances 前置判定（v2.3 新增 — 配合 attack shape-driven exploration）
+
+如果 attack 脚本 metadata 含 `exploration_target` + `shape_id`（来自 shape-driven exploration），用 shape 的 `known_instances` 做**前置 novelty 判定**（无需 GitHub 搜索即可区分 regression vs novel）：
+
+| attack 标注 | candidate 参数 ∈ shape.known_instances？ | novelty_rating | rationale |
+|-------------|----------------------------------------|----------------|-----------|
+| `exploration_target: regression` | ✓ | `already_reported` | 已知 issue 回归验证（shape 已记录） |
+| `exploration_target: novel_candidate` | ✗ | `new`（待 Gate 终审） | shape 泛化发现的 issue 没报的同类——**这是 novel TP 候选**，Gate 终审确认 |
+| `exploration_target: novel_candidate` | ✓（矛盾，不应发生）| `already_reported` | 标注不一致，按 known_instances 判 |
+
+**关键**：`novel_candidate` 标注的 candidate（参数不在 known_instances）是 shape 泛化探索的产物——这些是 TestVDB **主动探索** issue 没报的同类参数发现的，**最可能是真 novel TP**。仍需 Gate 终审（GitHub 搜索确认无其他 issue 报过），但应给 `new` 初筛评级（非 unknown）。
+
+**shape_type 维度提示**（帮 Gate 分级）：
+- `numeric_boundary` / `type_confusion` / `null_handling` / `resource_limit` / `concurrency_race` / `semantic_drift` —— attack 脚本的 `shape_type` 标注告诉 Gate 这是哪类泛化，便于 Gate 搜对应关键词。
+
 ---
 
 ## 新颖性上下文消费（v2.1 新增）

@@ -193,32 +193,53 @@ tools:
 
 #### Bug Shape 输出格式
 
+**⛔ 抽象化要求（v2.3 新增 — 反"具体参数抄录导致 attack 照抄不泛化"）**：
+
+shape 主体必须**抽象**（不含具体参数值），具体参数值放 `known_instances`。这是 attack agent 能泛化的前提——若 shape 主体含 `shard_number=0` 这种具体值，attack 会照抄只测 shard_number，不会联想到同类参数（replication_factor=0 等）。
+
+**强制产出字段**（v2.3 前 symptom_pattern/attack_strategy_hints 实际产出缺失，现强制）：
+- `shape_type`：抽象类型标签（minimal taxonomy，供 attack agent 按规则枚举 contract 同类参数，**非凭直觉**）：
+  - `numeric_boundary`：数值参数边界校验缺失/不一致 → 匹配所有 int/number config 字段
+  - `type_confusion`：类型不匹配输入被接受 → 匹配所有 typed 字段
+  - `null_handling`：null/missing 输入处理不一致 → 匹配所有 nullable/optional 字段
+  - `resource_limit`：极值致 OOM/panic/DoS → 匹配所客单值参数（limit/batch_size/dimension）
+  - `concurrency_race`：并发操作状态不一致 → 匹配所有 lifecycle 端点 × 访问端点组合
+  - `semantic_drift`：doc-impl 不一致/行为契约违反 → 匹配所有文档化行为
+- `abstract_pattern`：剥离具体参数值的抽象描述（如"数值配置参数零值/负值校验不一致"，**非** "shard_number=0 被接受"）
+- `known_instances`：issue 的具体参数（标 issue 来源 + endpoint + param + value，供 regression 验证 + novelty 判定区分 regression vs novel_candidate）
+- `symptom_pattern` / `attack_strategy_hints`：**必须产出**（v2.3 前实际缺失），作为抽象层载体 + 泛化指引
+
+**每类实例数 ≥5 才建 shape**（避免过细）。同 root_cause_category + shape_type 的 issue 合并为一个 shape。
+
 ```json
 {
   "bug_shapes": [
     {
-      "shape_id": "missing-param-validation-rest-api",
-      "name": "Missing Required Parameter Validation on REST Endpoints",
+      "shape_id": "numeric-config-zero-validation",
+      "name": "Numeric Config Parameter Zero/Negative Validation Inconsistency",
       "root_cause_category": "parameter_validation",
+      "shape_type": "numeric_boundary",
       "affected_layer": "request_parsing",
       "defect_type_mapping": "Type1_IllegalSuccess",
       "cross_db_applicability": "cross_db_applicable",
-      "description": "REST API 端点接收了请求但未校验必填参数的存在性和合法性，导致非法请求被静默接受",
-      "symptom_pattern": "请求中缺失必填参数 {param_name}，API 返回 200 而非 400",
-      "historical_instances": [
+      "abstract_pattern": "数值配置参数零值/负值校验不一致——同 schema 内部分字段漏校验，错误接受非法边界值",
+      "description": "PUT /collections 等配置端点的数值参数（shard_number/replication_factor 等）应拒零值/负值，但部分字段漏校验被静默接受",
+      "symptom_pattern": "配置请求中数值参数 {param_name} 取非法边界值（0/-1），API 返回 200 而非 4xx",
+      "known_instances": [
         {
-          "issue_number": 50018,
-          "endpoint": "collections/rename",
-          "missing_param": "newCollectionName",
-          "fix_pr": 49999,
-          "fix_pattern": "添加参数存在性检查 + 类型校验",
-          "changed_files": ["internal/handler/collection.go", "internal/types/validate.go"]
+          "issue_number": 9149,
+          "endpoint": "PUT /collections/{name}",
+          "param": "shard_number",
+          "value": 0,
+          "fix_pr": null,
+          "fix_pattern": "添加 shard_number >= 1 校验",
+          "changed_files": []
         }
       ],
       "attack_strategy_hints": [
-        "枚举所有 REST 端点的必填参数，逐项测试缺失场景",
-        "组合测试：同时缺失多个必填参数",
-        "测试空字符串 vs null vs undefined 的区别"
+        "枚举 contract 中所有 int/numeric config 字段（不只 known_instances 报的），测 0/-1/INT_MAX",
+        "标 known_instances 报的为 regression，其余为 novel_candidate",
+        "重点测 issue 没报的同类参数（如 replication_factor=0 / ef_construct=0 / m=0）"
       ],
       "confidence": 0.90,
       "source_issues_count": 5,
@@ -227,6 +248,8 @@ tools:
   ]
 }
 ```
+
+> ⚠️ **known_instances vs abstract_pattern 的区别是泛化的关键**：known_instances 是 issue 报过的具体参数（regression 验证用）；abstract_pattern 是剥离具体值的模式（驱动 attack 泛化到 issue 没报的同类参数）。attack agent 收到后会：① 测 known_instances（regression）② 按 shape_type 枚举 contract 同类参数测 novel_candidate。详见 attack agent 的 shape-driven exploration 策略。
 
 **去重规则**：相同 root_cause_category + affected_layer 的 pattern 合并为一个 shape，`historical_instances` 数组追加。
 
@@ -327,6 +350,24 @@ tools:
 - 检查 high-frequency bug shapes（≥3 个历史实例）是否被正确识别
 - 检查 negative 分类是否有清晰的拒绝模式总结
 - 验证 cross_db_applicable 标记是否合理
+
+### Step 5.5: 确定性核验（v2.4 新增 — 反空壳反 repro 泄漏）
+
+LLM 即使在 v2.3 prompt 强制后仍可能产空壳（chroma 实测 44 shapes 全 evidence 空 + 摘要谎称含 #6664）。确定性脚本作为最终闸门。
+
+```bash
+python scripts/_validate_bug_shapes.py intelligence/{target}/bug_shapes.json
+```
+
+**Checks**（任一不通过 → exit 1）：
+1. `abstract_pattern` 非空 + 字符数 ≥ 30（反空壳）
+2. `abstract_pattern` 不含 `param=value` 具体值（反 repro 泄漏，attack 才会泛化）
+3. `known_instances` 非空 + 每条有 `issue_number`（支持 regression 验证 + novelty 判定）
+4. `symptom_pattern` / `attack_strategy_hints` 非空
+5. `shape_type` ∈ 6 类 minimal taxonomy
+6. `source_issues_count` ≥ 3
+
+**fail-fast**：exit 1 → 读 `intelligence/{target}/bug_shapes_validation_report.json` 看失败清单 → 修正空壳/repro 泄漏的 shape → 重跑本 Step。不通过不得 advance Step 6。
 
 ### Step 6: 写入最终输出
 

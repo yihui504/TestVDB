@@ -526,25 +526,26 @@ Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v
 Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}",
   prompt="按照 agents/attack-semantic.md 规范...（同上格式）{THREAT_MODEL_ATTACK}")
 
-Agent(subagent_type="testvdb:threat-driven-explorer", description="threat-driven 探索 {target} v{version}",
-  prompt="按照 agents/threat-driven-explorer.md 规范，为 {target} v{version} 执行威胁驱动探索。target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}。读 intelligence/{target}/threat_model.json 的 defect_criteria 三表（confirmed_defect_patterns 主攻 + by_design_behaviors/wontfix_patterns 护栏），对每个 confirmed pattern 直接 curl 触发（DB URL 从 TESTVDB_DB_URL 环境变量读），写 results/{target}/{version}/{timestamp}/explorer/findings.md + explorer_summary.json。不生成 Python 脚本，不做自动真假判定，只采 SUSPECTED candidate 供下游复核。")
+Agent(subagent_type="testvdb:attack-vein", description="Vein-mining 纵深攻击 {target} v{version}",
+  prompt="按照 agents/attack-vein.md 规范，为 {target} v{version} 做 condition-space 纵深挖掘。contract=results/{target}/{version}/structured_contract.json, threat_model=intelligence/{target}/threat_model.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。**自己跑脚本**（curl 真 DB via Bash，DB URL 从 TESTVDB_DB_URL 环境变量读），single-turn discover-then-deepen 按 condition-richness 评分选 top-3 endpoint，纵深挖掘 8 类通用 condition（range_filter / compound_and / compound_or / geo_filter / null_check / type_mismatch / collection_membership / pagination_cursor），finding-feedback loop 启发相邻 condition。产出 results/{target}/{version}/{timestamp}/vein_scripts/*.py（strategy=vein_<type>，走标准 Stage 1+2+Judge）+ vein_state.json（finding 链）+ vein_summary.json。")
 ```
 
-> **threat-driven-explorer 是第 4 个 attack agent**（与 boundary/state/semantic 并存）：
-> - 输入差异：boundary/state/semantic 消费 structured_contract.json；explorer 消费 threat_model.json.defect_criteria
-> - 输出差异：老三套产 `debate_logs/*.py`（自动 VERDICT 判定）；explorer 产 `explorer/findings.md`（SUSPECTED candidate，人工复核）
-> - 不替代老三套，是互补 — explorer 用真实 issue 历史做"已知缺陷回归 + by_design 护栏验证"
+> **attack-vein 是第 4 个 attack agent**（v2.5，与 boundary/state/semantic 并存）：
+> - 策略差异：boundary/state/semantic 是 shape-driven 横向枚举（shape × 同类参数）；vein 是 condition-driven 纵深挖掘（同 endpoint × 多 condition 类型）
+> - 工作模式差异：老三套只生成脚本交 Stage 1/2；vein **自己跑 curl** 得即时反馈做 single-turn discover-then-deepen，但仍产 .py 走标准 Stage 1+2+Judge
+> - 输入差异：老三套消费 contract + reflection_context（含 bug-shape）；vein 消费 contract + threat_model（**不依赖 bug-shape**，自算 condition-richness）
+> - 不替代老三套，是互补 — vein 把 count cardinality 类 novel TP（6 个历史人工挖的）合法化为流水线产出
 
 **验证产出**：
 ```bash
 # 老三套的脚本产出
 ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
-# explorer 的 candidate 产出
-ls results/{target}/{version}/{timestamp}/explorer/findings.md 2>/dev/null && \
-  cat results/{target}/{version}/{timestamp}/explorer/explorer_summary.json 2>/dev/null | python -c "import json,sys; d=json.load(sys.stdin); print(f'explorer: {d[\"patterns_covered\"]} covered, {d[\"candidates_count\"]} candidates, {d[\"skipped_count\"]} skipped')"
+# vein 的 candidate 产出
+ls results/{target}/{version}/{timestamp}/vein_scripts/*.py 2>/dev/null | wc -l
+cat results/{target}/{version}/{timestamp}/vein_summary.json 2>/dev/null | python -c "import json,sys; d=json.load(sys.stdin); print(f'vein: top_endpoints={d[\"top_endpoints\"]}, candidates={d[\"candidates_count\"]}, skipped={d[\"skipped_count\"]}')"
 ```
 
-**更新 pipeline_state**: `phase` = `"DEBATE_S1"`, `phases_completed` 追加 `"ATTACK_GEN"`, `phase_data.ATTACK_GEN` = `{scripts_generated: N, agents_completed: [...], explorer_candidates: M}`
+**更新 pipeline_state**: `phase` = `"DEBATE_S1"`, `phases_completed` 追加 `"ATTACK_GEN"`, `phase_data.ATTACK_GEN` = `{scripts_generated: N, agents_completed: [...], vein_candidates: M}`
 
 ### 8c. DEBATE_S1 — 辩论 Stage 1
 

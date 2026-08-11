@@ -459,6 +459,13 @@ tools:
    - `integrity.constraint_count`: 所有约束数组的总长度
    - **hash 计算**：使用 Bash 执行 `python scripts/passport_verify.py --compute-hash results/{target}/{version}/structured_contract.json`
      将输出的 hash 值填入 `_passport.contract_hash`
+14. **确定性核验（v2.4 新增 — 反系统性 source_verified 幻觉）**：chroma 实测 3 轮 contract-formalizer 全部 `source_verified=0%`（r3 谎报 100%）；agent 自核验不可靠，确定性脚本作为出厂闸门。
+   ```bash
+   python scripts/_validate_contract.py results/{target}/{version}/structured_contract.json
+   ```
+   - **Checks**：schema 合法性 + CRUD 覆盖率 ≥ 90% + 每 constraint source_url 真包含 assertion 关键短语（支持 github + 文档站 + 本地 doc_bundle）+ 编造下限检测（`param >= 1` 但 source 只给 default 无 min）+ DROP 比例 ≤ 20%
+   - **fail-fast**：exit 1 → 读 `contract_validation_report.json` 看失败清单 → 修正幻觉约束 → 重跑。不通过不得 advance orchestrator Step 7
+   - source fetch 失败 → 标 `UNVERIFIED`（中性，触发 orchestrator retry，不算 hallucination）
 
 ---
 
