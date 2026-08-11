@@ -246,6 +246,23 @@ def main() -> int:
             "detail": f"DROP 比例 {drop_ratio:.0%} > {DROP_REJECT_RATIO:.0%} 阈值 ({drop_count}/{total})",
         })
 
+    # Check 6 (v2.5.2): count endpoint 必存在（通用 — 任何 VDB 都有 count cardinality API）
+    # C+D 实验失败根因：contract 漏 count → attack-vein 无从测 cardinality vein
+    eps_all = contract.get("api_endpoints", []) or []
+    has_count = any(
+        "count" in ((ep.get("path") or "") + " " + (ep.get("method") or "")).lower()
+        for ep in eps_all
+    )
+    count_check = {"has_count_endpoint": has_count, "total_endpoints": len(eps_all)}
+    if not has_count:
+        count_check["failure"] = {
+            "check": "missing_count_endpoint",
+            "detail": ("contract 无 count endpoint — 任何 VDB 都有 count cardinality API "
+                       "（如 qdrant POST /points/count / milvus /count / weaviate aggregate count）。"
+                       "contract-formalizer 漏提取。下游 attack-vein 无法测 cardinality（C+D 实验失败根因）"),
+        }
+        failures.append(count_check["failure"])
+
     verdict = "PASS" if not failures else "FAIL"
     report = {
         "validated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -253,6 +270,7 @@ def main() -> int:
         "version": contract.get("version", ""),
         "schema_check": {"failures": schema_failures},
         "crud_coverage": crud,
+        "count_check": count_check,
         "constraint_classifications": classifications,
         "drop_ratio": drop_ratio,
         "drop_count": drop_count,
