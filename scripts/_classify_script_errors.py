@@ -150,6 +150,12 @@ def _collect_unwrapped_teardowns(tree: ast.AST) -> list[tuple[int, str]]:
         label = _is_teardown_call(node)
         if label is None:
             continue
+        # 冒烟实证（chroma 2026-08-17）：setup 预清理（建 collection 前删同名残留的
+        # safe_request("DELETE", ...)）与 teardown 清理语义不同——前者失败无害（本来
+        # 就可能不存在），不需要 try 保护。区分法：同一行/紧邻下一语句是创建类调用
+        # （POST/PUT/create_*/add）→ setup 预清理，放行。
+        if _is_setup_preardown(tree, parents, node):
+            continue
         # 向上找 enclosing Try（必须 handlers 非空 + node 在 try.body）
         cur: ast.AST | None = parents.get(id(node))
         protected = False
@@ -161,6 +167,72 @@ def _collect_unwrapped_teardowns(tree: ast.AST) -> list[tuple[int, str]]:
         if not protected:
             unwrapped.append((getattr(node, "lineno", 0), label))
     return unwrapped
+
+
+def _is_setup_preardown(
+    tree: ast.AST,
+    parents: dict[int, ast.AST],
+    node: ast.Call,
+) -> bool:
+    """node 是否为 setup 预清理（冒烟实证的误报源，2026-08-17）。
+
+    判据：teardown 调用所在的**语句级祖先**的下一兄弟语句（Module/If/For 体里同层）
+    是创建类调用 → 判 setup 预清理。覆盖两种典型布局：
+      safe_request("DELETE", col)   ← 本节点（setup 预清理）
+      status = safe_request("POST", col)  ← 下一语句创建
+    或：
+      client.delete_collection(col)
+      col = client.create_collection(...)
+    """
+    # 1. 找 node 的语句级祖先（最近 Expr/Assign 祖先）
+    stmt = node
+    chain = [node]
+    cur = parents.get(id(node))
+    while cur is not None:
+        chain.append(cur)
+        if isinstance(cur, (ast.Expr, ast.Assign, ast.AugAssign)):
+            stmt = cur
+            break
+        cur = parents.get(id(cur))
+    else:
+        stmt = chain[-1] if chain else node
+    # 兜底：向上再爬到最近的 stmt 节点
+    s = stmt if isinstance(stmt, ast.stmt) else node
+    # 2. 找 s 在哪个 body 里 + 它的下一兄弟
+    parent_of_s = parents.get(id(s))
+    if parent_of_s is None:
+        return False
+    body = None
+    for attr in ("body", "orelse", "finalbody"):
+        v = getattr(parent_of_s, attr, None)
+        if isinstance(v, list) and s in v:
+            body = v
+            break
+    if body is None:
+        return False
+    idx = body.index(s)
+    if idx + 1 >= len(body):
+        return False
+    nxt = body[idx + 1]
+    # 3. 下一兄弟是创建类调用？ 取它的最外层 Call（Expr(call) / Assign(value=call) / 直接 call）
+    call = None
+    if isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Call):
+        call = nxt.value
+    elif isinstance(nxt, ast.Assign) and isinstance(nxt.value, ast.Call):
+        call = nxt.value
+    elif isinstance(nxt, ast.Call):
+        call = nxt
+    if call is None:
+        return False
+    f = call.func
+    cname = f.attr if isinstance(f, ast.Attribute) else (f.id if isinstance(f, ast.Name) else None)
+    if cname in ("safe_request", "request") and call.args:
+        first = call.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            return first.value.upper() in ("POST", "PUT", "PATCH")
+    return cname is not None and (
+        cname.startswith("create_") or cname.startswith("add") or cname in ("upsert", "insert")
+    )
 
 
 def _node_in_body(target: ast.AST, try_node: ast.Try) -> bool:
@@ -277,22 +349,31 @@ def _build_entry(sid: str, path: Path, classes: list[str]) -> dict:
 # ---------------- 主入口 ----------------
 
 def _scan_session_dir(session_dir: Path) -> list[Path]:
-    """扫描 session_dir 下 {boundary,state,scripts}_scripts/ + 根 script_*.py 兜底。"""
+    """扫描 session_dir 下 {boundary,state,scripts}_scripts/ + debate_logs/ + 根 script_*.py 兜底。
+
+    冒烟实证（2026-08-17）：attack agents 按 agent 规范把脚本写 debate_logs/（与 .meta.json
+    同目录），而本分类器此前只扫 *_scripts/ 子目录 → Total scripts: 0 的漏检。
+    debate_logs/ 加入扫描面（与 *_scripts/ 内容重复时由去重逻辑按 resolve() 归并）。
+    """
     scripts: list[Path] = []
-    for sub in ("boundary_scripts", "state_scripts", "scripts", "vein_scripts"):
+    for sub in ("boundary_scripts", "state_scripts", "scripts", "vein_scripts", "debate_logs"):
         d = session_dir / sub
         if d.is_dir():
             scripts.extend(sorted(d.glob("*.py")))
     # 兜底：根目录 script_*.py
     scripts.extend(sorted(session_dir.glob("script_*.py")))
-    # 去重（保持顺序）
+    # 去重（保持顺序）：路径去重 + 文件名去重（冒烟实证：脚本会在 debate_logs/ 与
+    # *_scripts/ 双目录同名共存，只按 resolve() 不去重 → 同一脚本被分类两次、
+    # retry counter 双计。同名文件内容一致，按文件名归并即可）
     seen: set[Path] = set()
+    seen_names: set[str] = set()
     out: list[Path] = []
     for p in scripts:
         rp = p.resolve()
-        if rp in seen:
+        if rp in seen or p.name in seen_names:
             continue
         seen.add(rp)
+        seen_names.add(p.name)
         out.append(p)
     return out
 

@@ -40,10 +40,13 @@ SIGNATURES: dict[str, dict[str, list[str]]] = {
     "weaviate": {
         "ports": [r":8080\b", r"\b8080/"],
         "paths": [r"/v1/objects", r"/v1/schema", r'"/objects"', r'"/schema"'],
-        "filter_keys": [r'"where"\s*:', r'"operator"\s*:'],
+        # 冒烟实证（chroma 2026-08-17）："where" 是 chroma query filter 的原生键名，
+        # 单独作 weaviate 信号会误伤合法 chroma 脚本。收窄为 weaviate 特有的
+        # where→operator 嵌套形态（chroma 的 where 值是裸 filter dict，无 operator 键）。
+        "filter_keys": [r'"operator"\s*:'],
         # ponytail: resp_keys 清空——`["data"]`/`.get("data")` 非 Weaviate 独有
         # （Milvus v2.x 响应封装即 {"code":0,"data":{...}}，见 raw_knowledge；Weaviate GraphQL 才有 data.Get 嵌套）
-        # Weaviate 靠 ports(8080)/paths(/v1/objects,/v1/schema)/filter_keys(where/operator) 强信号检测。
+        # Weaviate 靠 ports(8080)/paths(/v1/objects,/v1/schema)/filter_keys(operator) 强信号检测。
         "resp_keys": [],
     },
     "milvus": {

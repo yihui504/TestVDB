@@ -6,27 +6,45 @@ Detects:
   - .json() calls inside safe_request() function bodies are excluded (safe harbor)
   - safe_request() defined but never called → WARN
   - All calls use safe_request() → PASS
+  - chroma 脚本使用 raw /api/v1 REST 路径 → REJECT（冒烟实证 2026-08-17：
+    chroma REST v1 已废弃返回 405，chroma 必须 SDK-first——见
+    agents/_target_api_reference.md § "DB 特定 API 选择指南"。agent 规范有提示
+    但 semantic agent 仍违规，此为机械防线）
 
 Usage:
   python scripts/validate_api_format.py <session_dir>
 """
 from __future__ import annotations
-import ast, glob, json, os, sys
+import ast, glob, json, os, re, sys
 
 from _pipeline_utils import setup_encoding
 
 setup_encoding()
 
+# chroma 违规特征：raw REST 路径 /api/v1/collections...（SDK-first 例外：无）
+CHROMA_RAW_REST_RE = re.compile(r"/api/v[12]/collections")
+
+
+def _session_target(session_dir: str) -> str:
+    """从 session 路径 results/<target>/<version>/<timestamp> 提取 target。"""
+    parts = session_dir.replace("\\", "/").rstrip("/").split("/")
+    for i, p in enumerate(parts):
+        if p == "results" and i + 1 < len(parts):
+            return parts[i + 1].lower()
+    return ""
+
 
 def validate_scripts(session_dir: str) -> list[dict]:
     """Scan all .py files in session_dir for API call format violations."""
+    target = _session_target(session_dir)
     findings = []
     for f in sorted(glob.glob(os.path.join(session_dir, "**/*.py"), recursive=True)):
         if "/mre/" in f.replace("\\", "/"):
             continue
         with open(f, encoding="utf-8", errors="replace") as fh:
+            src = fh.read()
             try:
-                tree = ast.parse(fh.read())
+                tree = ast.parse(src)
             except SyntaxError:
                 continue
 
@@ -58,6 +76,10 @@ def validate_scripts(session_dir: str) -> list[dict]:
             issues.append(f"bare .json() at lines {bare_json}")
         if has_safe_def and not has_safe_use:
             issues.append("safe_request defined but never called")
+        if target == "chroma" and CHROMA_RAW_REST_RE.search(src):
+            issues.append("chroma script uses raw REST path /api/vN/collections — "
+                          "chroma is SDK-first (REST v1 deprecated, returns 405); "
+                          "use chromadb.HttpClient")
         if issues:
             rel = os.path.relpath(f, session_dir)
             findings.append({"file": rel, "issues": issues})

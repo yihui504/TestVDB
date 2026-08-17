@@ -513,7 +513,7 @@ THREAT_MODEL_ATTACK=$(python scripts/threat_model_injector.py {target} --mode at
 
 ```
 Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}",
-  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。{THREAT_MODEL_ATTACK}")
+  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=${PROJECT_ROOT}/results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。{THREAT_MODEL_ATTACK}")
 
 Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}",
   prompt="按照 agents/attack-state.md 规范...（同上格式）{THREAT_MODEL_ATTACK}")
@@ -522,7 +522,7 @@ Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target
   prompt="按照 agents/attack-semantic.md 规范...（同上格式）{THREAT_MODEL_ATTACK}")
 
 Agent(subagent_type="testvdb:attack-vein", description="Vein-mining 纵深攻击 {target} v{version}",
-  prompt="按照 agents/attack-vein.md 规范，为 {target} v{version} 做 condition-space 纵深挖掘。contract=results/{target}/{version}/structured_contract.json, threat_model=intelligence/{target}/threat_model.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。**自己跑脚本**（curl 真 DB via Bash，DB URL 从 TESTVDB_DB_URL 环境变量读），single-turn discover-then-deepen 按 condition-richness 评分选 top-3 endpoint，纵深挖掘 8 类通用 condition（range_filter / compound_and / compound_or / geo_filter / null_check / type_mismatch / collection_membership / pagination_cursor），finding-feedback loop 启发相邻 condition。产出 results/{target}/{version}/{timestamp}/vein_scripts/*.py（strategy=vein_<type>，走标准 Stage 1+2+Judge）+ vein_state.json（finding 链）+ vein_summary.json。")
+  prompt="按照 agents/attack-vein.md 规范，为 {target} v{version} 做 condition-space 纵深挖掘。contract=results/{target}/{version}/structured_contract.json, threat_model=${PROJECT_ROOT}/intelligence/{target}/threat_model.json, session_id={session_id}, session_dir=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}。**自己跑脚本**（curl 真 DB via Bash，DB URL 从 TESTVDB_DB_URL 环境变量读），single-turn discover-then-deepen 按 condition-richness 评分选 top-3 endpoint，纵深挖掘 8 类通用 condition（range_filter / compound_and / compound_or / geo_filter / null_check / type_mismatch / collection_membership / pagination_cursor），finding-feedback loop 启发相邻 condition。产出 ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}/vein_scripts/*.py（strategy=vein_<type>，走标准 Stage 1+2+Judge）+ vein_state.json（finding 链）+ vein_summary.json。")
 ```
 
 > **attack-vein 是第 4 个 attack agent**（v2.5，与 boundary/state/semantic 并存）：
@@ -599,7 +599,7 @@ REFUTED 候选从 candidates.jsonl 移除（记入 verify_live_l1.json，供实�
 ```
 对 candidates.jsonl 每行，并发派发（受派发槽位约束，超出排队）：
 Agent(subagent_type="testvdb:evidence-builder", description="证据链构建 {defect_id}",
-  prompt="按照 agents/evidence-builder.md 规范，为候选 {defect_id} 构建证据链。target={target}, version={version}, SESSION_DIR=results/{target}/{version}/{timestamp}。你的 defect_id={defect_id}。")
+  prompt="按照 agents/evidence-builder.md 规范，为候选 {defect_id} 构建证据链。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}。你的 defect_id={defect_id}。")
 ```
 - 产出 `evidence_chain/{defect_id}.json` + `.done`（按候选命名，并发无写冲突）
 - 超时（60s/候选）或缺产出的候选：不重试进 fan-out，留给 auditor 记 NEEDS_MORE_EVIDENCE
@@ -613,7 +613,7 @@ Agent(subagent_type="testvdb:evidence-builder", description="证据链构建 {de
 **全部 builder `.done` 收口后**派发（跨候选一致性检查需要完整链集合）：
 ```
 Agent(subagent_type="testvdb:chain-auditor", description="证据链审计 {target}",
-  prompt="按照 agents/chain-auditor.md 规范，审计 evidence_chain/ 下全部证据链并产出终判。target={target}, version={version}, SESSION_DIR=results/{target}/{version}/{timestamp}。")
+  prompt="按照 agents/chain-auditor.md 规范，审计 evidence_chain/ 下全部证据链并产出终判。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}。")
 ```
 - 产出 `debate_logs/chain_verdicts.json`（DEFECT / NOT_DEFECT / NEEDS_MORE_EVIDENCE +
   fp_evidence_source + root_cause 分布）+ `.done`
@@ -633,7 +633,7 @@ python scripts/dedup_defects.py "results/{target}/{version}/{timestamp}"
 
 ```
 Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}",
-  prompt="按照 agents/reporter.md 规范，为以下 Debate-Confirmed 缺陷生成报告：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}")
+  prompt="按照 agents/reporter.md 规范，为以下 Debate-Confirmed 缺陷生成报告：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}")
 ```
 **验证：** `ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -l`
 
@@ -727,7 +727,7 @@ mkdir -p results/{target}/{version}/{timestamp}/issues
 
 ```
 Agent(subagent_type="testvdb:reporter-mre", description="生成 MRE 脚本 {target}",
-  prompt="按照 agents/reporter-mre.md 规范，为以下 Debate-Confirmed 缺陷生成自包含 MRE 脚本：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}")
+  prompt="按照 agents/reporter-mre.md 规范，为以下 Debate-Confirmed 缺陷生成自包含 MRE 脚本：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}")
 ```
 
 **验证：** `ls results/{target}/{version}/{timestamp}/mre/defect-*-script.py.done 2>/dev/null | wc -l`（应 ≥1；reporter-mre 完成每个脚本后 `touch .done` 并通过 `py_compile`）
