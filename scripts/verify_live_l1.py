@@ -278,17 +278,35 @@ def _load_candidates(agg: dict) -> list[dict]:
     return []
 
 
-def verify_l1(session_dir, target="pgvector", db_url=None):
-    """Run L1 mechanical checks against confirmed defects (ADR-0006 Check Protocol).
-    通用：跑 ALL_CHECKS，每个 check 自描述适用性（返回 None = 不适用，新 DB 无需注册）。"""
+def _load_candidates_l1(session_dir) -> list[dict]:
+    """ADR-0008: L1 前移到 EVIDENCE_BUILD 入口 → 优先读 candidates.jsonl
+    （extract_candidates.py 机械提取），旧 stage2_aggregation 作兼容期 fallback。"""
+    import json as _json
+    cands_path = Path(session_dir) / "candidates.jsonl"
+    if cands_path.exists():
+        out = []
+        for line in cands_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    out.append(_json.loads(line))
+                except _json.JSONDecodeError:
+                    continue
+        return out
     agg_path = debate_log_path(session_dir, "stage2_aggregation")
-    if not agg_path.exists():
-        return {"error": f"aggregation not found: {agg_path}"}
+    if agg_path.exists():
+        agg = read_json(agg_path)
+        if agg is not None:
+            return _load_candidates(agg)
+    return []
 
-    agg = read_json(agg_path)
-    if agg is None:
-        return {"error": f"failed to read: {agg_path}"}
-    candidates = _load_candidates(agg)
+
+def verify_l1(session_dir, target="pgvector", db_url=None):
+    """Run L1 mechanical checks against candidates (ADR-0006 Check Protocol; ADR-0008 前移).
+    通用：跑 ALL_CHECKS，每个 check 自描述适用性（返回 None = 不适用，新 DB 无需注册）。"""
+    candidates = _load_candidates_l1(session_dir)
+    if not candidates:
+        return {"error": "no candidates found (candidates.jsonl or stage2_aggregation)"}
 
     # load contract for constraint lookups
     contract = None

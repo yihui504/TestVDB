@@ -11,11 +11,15 @@ Usage:
   import: from pipeline_state import PipelineState
   CLI:    python scripts/pipeline_state.py {init|advance|mutate|status} ...
 
-Transition map (ADR-0004 — hardcoded, not config):
-  ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → DEBATE_S2
-              → VERIFY_LIVE → REPORTING → DEFECT_REVIEW → STATE_SAVE
+Transition map (ADR-0004 — hardcoded, not config; ADR-0008 renamed two phases):
+  ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → EVIDENCE_BUILD
+              → CHAIN_AUDIT → REPORTING → DEFECT_REVIEW → STATE_SAVE
               → CLEANUP → DONE
   ROUND_START may repeat (multi-round loop).
+
+ADR-0008: DEBATE_S2 → EVIDENCE_BUILD (evidence-builder 按候选并发 fan-out),
+VERIFY_LIVE → CHAIN_AUDIT (chain-auditor 单实例收口). L1 机械闸门前移到
+EXECUTION→EVIDENCE_BUILD 转换；verify-live-l2 agent 删除（B1 拍板）。
 """
 
 from __future__ import annotations
@@ -41,8 +45,8 @@ PHASE_ORDER = [
     "ATTACK_GEN",
     "DEBATE_S1",
     "EXECUTION",
-    "DEBATE_S2",
-    "VERIFY_LIVE",
+    "EVIDENCE_BUILD",
+    "CHAIN_AUDIT",
     "REPORTING",
     "DEFECT_REVIEW",
     "STATE_SAVE",
@@ -55,9 +59,9 @@ _TRANSITIONS: dict[str, set[str]] = {
     "ROUND_START":  {"ATTACK_GEN", "ROUND_START"},
     "ATTACK_GEN":   {"DEBATE_S1"},
     "DEBATE_S1":    {"EXECUTION"},
-    "EXECUTION":    {"DEBATE_S2"},
-    "DEBATE_S2":    {"VERIFY_LIVE"},
-    "VERIFY_LIVE":  {"REPORTING"},
+    "EXECUTION":    {"EVIDENCE_BUILD"},
+    "EVIDENCE_BUILD": {"CHAIN_AUDIT"},
+    "CHAIN_AUDIT":  {"REPORTING"},
     "REPORTING":    {"DEFECT_REVIEW"},
     "DEFECT_REVIEW": {"STATE_SAVE"},
     "STATE_SAVE":   {"CLEANUP", "ROUND_START"},
@@ -69,10 +73,10 @@ _TRANSITIONS: dict[str, set[str]] = {
 # ponytail: 只挂已实现 + 独立可 block 的 gate。
 # 待加：verify_defects（DEFECT_REVIEW→STATE_SAVE，exit 1=NEEDS_IMPROVEMENT 触发 retry，
 #       非简单 block，需 1b.5 retry 回退机制一起挂）。
+# ADR-0008: aggregate_votes + gate_severity_coverage 随 judge 体系删除；
+# L1 机械闸门（verify_live_l1.py）前移为 EVIDENCE_BUILD 入口门（REFUTED 候选不进 fan-out）。
 TRANSITION_GATES: dict[tuple[str, str], list[str]] = {
-    # aggregate_votes 先跑（转换器：重写 stage2_aggregation.json 为代码版，规则 1-6），
-    # gate_severity_coverage 后跑（读新 aggregation）。顺序 = 列表顺序（设计 §5 + §3.1）。
-    ("DEBATE_S2", "VERIFY_LIVE"):    ["aggregate_votes.py", "gate_severity_coverage.py"],
+    ("EXECUTION", "EVIDENCE_BUILD"): ["verify_live_l1.py"],
     ("CLEANUP", "DONE"):             ["gate_summary_consistency.py"],
 }
 
@@ -633,11 +637,11 @@ def _self_check() -> None:
         state = PipelineState.create(
             target="t", version="v1", max_rounds=1, min_defects=0, session_dir=str(sd))
         # 推到 DEFECT_REVIEW
-        for p in ["ATTACK_GEN", "DEBATE_S1", "EXECUTION", "DEBATE_S2",
-                  "VERIFY_LIVE", "REPORTING", "DEFECT_REVIEW"]:
+        for p in ["ATTACK_GEN", "DEBATE_S1", "EXECUTION", "EVIDENCE_BUILD",
+                  "CHAIN_AUDIT", "REPORTING", "DEFECT_REVIEW"]:
             state.advance(p)
         assert "REPORTING" in state._data["phases_completed"]
-        assert "VERIFY_LIVE" in state._data["phases_completed"]
+        assert "CHAIN_AUDIT" in state._data["phases_completed"]
 
         # rollback REPORTING
         state._data.setdefault("defect_retry", {})["d1"] = 1
@@ -645,7 +649,7 @@ def _self_check() -> None:
         assert state.phase == "REPORTING", f"phase={state.phase}"
         assert "REPORTING" not in state._data["phases_completed"], "REPORTING 应被移除"
         # phases_completed 里 REPORTING 之后的不存在（DEFECT_REVIEW 未 append，但逻辑等价）
-        assert "VERIFY_LIVE" in state._data["phases_completed"], "VERIFY_LIVE（REPORTING 之前）应保留"
+        assert "CHAIN_AUDIT" in state._data["phases_completed"], "CHAIN_AUDIT（REPORTING 之前）应保留"
         assert state._data["defect_retry"] == {"d1": 1}, "rollback 不碰 retry 计数"
 
         # 非法回退 → InvalidTransition

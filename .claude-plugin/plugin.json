@@ -40,14 +40,10 @@
     "./agents/attack-semantic.md",
     "./agents/attack-vein.md",
     "./agents/docker-executor.md",
-    "./agents/judge-evidence.md",
-    "./agents/judge-novelty.md",
-    "./agents/judge-severity.md",
-    "./agents/judge-doc.md",
+    "./agents/evidence-builder.md",
+    "./agents/chain-auditor.md",
     "./agents/reporter.md",
-    "./agents/reporter-mre.md",
-    "./agents/dev-reviewer.md",
-    "./agents/verify-live-l2.md"
+    "./agents/reporter-mre.md"
   ],
   "mcpServers": "./.mcp.json"
 }

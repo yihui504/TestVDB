@@ -572,84 +572,67 @@ Agent(subagent_type="testvdb:docker-executor", description="执行 {target} v{ve
 
 **验证产出**：`ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l`
 
-**打回修改机制**（8d.5）：
+**打回修改机制**（8d.5，ADR-0008 已接线 v2.5 确定性 retry 子循环）：
+```bash
+# 执行前静态检查（AST 分类 5 类错误）+ counter/feedback/超限降级，全确定性：
+python scripts/_classify_script_errors.py "results/{target}/{version}/{timestamp}"
+python scripts/_apply_script_retry.py "results/{target}/{version}/{timestamp}"
+```
+如有 `regen` 输出 → 按 source 分组派对应 Attack Agent（读 `${script_id}.retry_feedback.json`
+修后覆盖原文件，详见 `agents/orchestrator.md` §4.6）。执行后日志扫描兜底（运行期错误）：
 ```bash
 python scripts/scan_script_errors.py "results/{target}/{version}/{timestamp}"
 ```
-如有错误 → 派发对应 Attack Agent 修复（最多 2 轮）。
 
-**更新 pipeline_state**: `phase` = `"DEBATE_S2"`, `phases_completed` 追加 `"EXECUTION"`, `phase_data.EXECUTION` = `{scripts_executed: N, scripts_passed: M, scripts_error: K}`
+**更新 pipeline_state**: `phase` = `"EVIDENCE_BUILD"`, `phases_completed` 追加 `"EXECUTION"`, `phase_data.EXECUTION` = `{scripts_executed: N, scripts_passed: M, scripts_error: K}`
 
-### 8e. DEBATE_S2 — 辩论 Stage 2 + 去重
+### 8e. EVIDENCE_BUILD — 候选提取 + L1 机械闸门 + evidence-builder 并发 fan-out（ADR-0008）
 
-**阶段 1：先派 judge-doc**
-```
-Agent(subagent_type="testvdb:judge-doc", description="文档契约验证 {target}", ...)
-```
-
-**阶段 2：确认 stage2_doc.json 存在后，并发派其他 3 个 Judge**
-```
-Agent(subagent_type="testvdb:judge-evidence", ..., prompt="...${THREAT_MODEL_JUDGE_EVIDENCE}")
-Agent(subagent_type="testvdb:judge-novelty", ..., prompt="...${THREAT_MODEL_JUDGE_NOVELTY}")
-Agent(subagent_type="testvdb:judge-severity", ..., prompt="...${THREAT_MODEL_JUDGE_SEVERITY}")
+**Step 1 — 机械提取候选清单**（builder fan-out 的派发清单，确定性 0 LLM）：
+```bash
+python scripts/extract_candidates.py "results/{target}/{version}/{timestamp}"
+# 产出 candidates.jsonl（VERDICT: DEFECT_FOUND 的 log → 候选；SCRIPT_ERROR 排除）
 ```
 
-**Fallback 机制**：如果任一 Judge 超时，主进程生成默认评估文件。
+**Step 2 — L1 机械闸门前移**（0 token 杀 ~90% 历史 FP 模式，REFUTED 不进 fan-out）：
+```bash
+python scripts/verify_live_l1.py "results/{target}/{version}/{timestamp}" --target {target}
+```
+REFUTED 候选从 candidates.jsonl 移除（记入 verify_live_l1.json，供实验统计）。
 
-**投票逻辑和缺陷确认规则**见 `agents/orchestrator.md` Step 8e。
+**Step 3 — evidence-builder 按候选并发派发**（1 builder/候选，任务重减压提效）：
+```
+对 candidates.jsonl 每行，并发派发（受派发槽位约束，超出排队）：
+Agent(subagent_type="testvdb:evidence-builder", description="证据链构建 {defect_id}",
+  prompt="按照 agents/evidence-builder.md 规范，为候选 {defect_id} 构建证据链。target={target}, version={version}, SESSION_DIR=results/{target}/{version}/{timestamp}。你的 defect_id={defect_id}。")
+```
+- 产出 `evidence_chain/{defect_id}.json` + `.done`（按候选命名，并发无写冲突）
+- 超时（60s/候选）或缺产出的候选：不重试进 fan-out，留给 auditor 记 NEEDS_MORE_EVIDENCE
+- **NEEDS_MORE_EVIDENCE 补证轮**（auditor 判定后）：仅对 auditor 标记的 defect_id 重派
+  builder 一轮（最多 1 次），第二轮仍矛盾 → auditor 保守判 NOT_DEFECT
 
-**缺陷去重**（8e.5）：
+**更新 pipeline_state**: `phase` = `"CHAIN_AUDIT"`, `phases_completed` 追加 `"EVIDENCE_BUILD"`, `phase_data.EVIDENCE_BUILD` = `{candidates: N, l1_refuted: M, builders_done: K}`
+
+### 8e.7. CHAIN_AUDIT — chain-auditor 单实例收口
+
+**全部 builder `.done` 收口后**派发（跨候选一致性检查需要完整链集合）：
+```
+Agent(subagent_type="testvdb:chain-auditor", description="证据链审计 {target}",
+  prompt="按照 agents/chain-auditor.md 规范，审计 evidence_chain/ 下全部证据链并产出终判。target={target}, version={version}, SESSION_DIR=results/{target}/{version}/{timestamp}。")
+```
+- 产出 `debate_logs/chain_verdicts.json`（DEFECT / NOT_DEFECT / NEEDS_MORE_EVIDENCE +
+  fp_evidence_source + root_cause 分布）+ `.done`
+- 验证：`test -f "results/{target}/{version}/{timestamp}/debate_logs/chain_verdicts.json.done" && echo READY || echo PENDING`
+- NEEDS_MORE_EVIDENCE > 0 → 回 8e Step 3 补证轮（最多 1 次），重派 auditor 出最终 verdict
+- **⛔ 主进程绝不做判定。auditor 超时 → 全部候选保守按 NEEDS_MORE_EVIDENCE 记录并重派一轮，
+  第二轮仍超时 → NOT_DEFECT（保守）+ error_log 记录。**
+
+**跨轮去重**（8e.5，保留；输入改为 verdict 列表）：
 ```bash
 python scripts/dedup_defects.py "results/{target}/{version}/{timestamp}"
 ```
 
-**更新 pipeline_state**: `phase` = `"VERIFY_LIVE"`, `phases_completed` 追加 `"DEBATE_S2"`, `phase_data.DEBATE_S2` = `{debate_confirmed: N, rejected_defects: M}`
-
-### 8e.6. VERIFY_LIVE — L1 机械闸门 + L2 语义闸门
-
-> **设计原则**: L1 纯脚本(0 token)覆盖 ~90% 历史假阳性模式。L2 轻量 Agent 覆盖剩余 ~10% 语义微妙情况。
-
-#### L1 机械闸门
-
-```bash
-python scripts/verify_live_l1.py "results/{target}/{version}/{timestamp}" --target {target}
-```
-
-**产出**: `verify_live_l1.json`。每个候选: REFUTED | UNCERTAIN。
-
-**处理**:
-- 所有 REFUTED: 从 debate_confirmed 列表移除
-- UNCERTAIN > 0: 派发 L2 Agent
-- 全部 REFUTED 且 debate_confirmed 为空: consecutive_no_defect_rounds += 1
-
-#### L2 语义闸门(按需)
-
-```
-Agent(subagent_type="testvdb:verify-live-l2", description="L2 语义闸门 {target}",
-  prompt="按照 agents/verify-live-l2.md 规范，对 verify_live_l1.json 中 UNCERTAIN 候选执行 Docker 实测验证。session_dir=results/{target}/{version}/{timestamp}, target={target}。")
-```
-
-**超时/无产出 fallback（P2-12）**：若 L2 agent 在 maxTurns 内未产出 `verify_live_l2.json`（卡死/超时），主进程有两条降级路径（按此顺序尝试）：
-
-**路径 A — orchestrator-side direct-probe（P0-9 遗留，推荐优先）**：
-主进程直接 curl 实测 UNCERTAIN candidates（非默认全 REFUTED）。比"全 UNCERTAIN→REFUTED"更精确，且不依赖 agent（glm proxy 下 agent 可能不可靠）。
-```bash
-cd "results/{target}/{version}/{timestamp}" && source ./.executor.env
-# 逐 UNCERTAIN candidate: 读脚本核心攻击向量 → curl 实测 → 记录实际 HTTP status + body
-# 例 qdrant: curl -s -X POST "$TESTVDB_DB_URL/collections/<col>/points/search" -H 'Content-Type: application/json' -d '<attack-body>'
-```
-- 实测后写 `verify_live_l2.json`，`generated_by: "orchestrator-direct-probe"`，每 candidate 记 verdict (CONFIRMED/REFUTED/UNCERTAIN) + 实际 HTTP 响应证据
-- HTTP 4xx + 清晰错误诊断 → REFUTED（target 正确拒绝，非 defect）
-- HTTP 2xx 但契约要求拒绝 → CONFIRMED（真 positive）
-- 模棱两可（状态污染/隔离不足）→ UNCERTAIN
-- 见 `agents/verify-live-l2.md` 的 direct-probe 交叉引用
-
-**路径 B — 兜底 UNCERTAIN→REFUTED（保守最后手段）**：
-若 direct-probe 也无法执行（如非 HTTP target、容器不可达），UNCERTAIN 候选视为 REFUTED（保守移除，不进 reporter — 避免未经验证的误报；与 L1 REFUTED 同处理）
-- 升级路径：检查 `.executor.env` 是否 source（P1-8）、Docker 容器是否 healthy（P2-8）、counter-query 是否过复杂
-- L2 是按需闸门（覆盖 ~10% 语义情况），超时降级**不阻塞**流水线
-
-**更新 pipeline_state**: `phase` = `"REPORTING"`, `phases_completed` 追加 `"VERIFY_LIVE"`
+**更新 pipeline_state**: `phase` = `"REPORTING"`, `phases_completed` 追加 `"CHAIN_AUDIT"`, `phase_data.CHAIN_AUDIT` = `{verdict_defect: N, not_defect: M, needs_more_evidence: K}`
 
 ### 8f. REPORTING — 派 Reporter
 
@@ -698,9 +681,9 @@ python scripts/verify_defects.py "results/{target}/{version}/{timestamp}"
 
 ### Step 9: Issue 草稿 + 汇总 + 清理
 
-#### 9a. 运行 Novelty Gate
+#### 9a. 运行 Novelty Gate（ADR-0008：后置终判 + NON_NOVEL 归档不删）
 
-**在生成 Issue 草稿前，必须对全部 Debate-Confirmed candidate 运行 Novelty Gate。Gate 产出 Gate-Endorsed（endorsement=true）才是真正可提交的缺陷（ADR-0001）。**
+**在生成 Issue 草稿前，必须对全部 chain-verdict DEFECT candidate 运行 Novelty Gate（输入源：chain_verdicts.json，ADR-0008 已适配）。Gate 产出 Gate-Endorsed（endorsement=true）才是真正可提交的缺陷（ADR-0001）。**
 
 ```bash
 python scripts/novelty_gate.py --session-dir results/{target}/{version}/{timestamp}
@@ -721,6 +704,11 @@ print(json.dumps({'endorsed_defects': endorsed}, ensure_ascii=False))
 "
 ```
 
+**NON_NOVEL 归档（ADR-0008，替代旧"拒绝即丢弃"）**：Gate 终判后一次性执行——被归档
+candidate 的 defect-N.md 移入 `archived/`，并在 `archived/manifest.json` 记录
+`related_issue_numbers`（gate_evidence_url 提取）。这是 RQ1"发现已被报告 bug"列的数据源。
+轮内不做归档（REPORTING→Step 9 窗口期 defect-N.md 保留原位）。
+
 #### 9b. 生成 Issue 草稿（仅背书的 NOVEL，candidate 级）
 
 **⛔ 绝对禁止：直接提交 Issue 到 GitHub。所有产出仅限本地文件系统。**
@@ -730,8 +718,8 @@ mkdir -p results/{target}/{version}/{timestamp}/issues
 ```
 
 **粒度映射规则（ADR-0002）**：Novelty Gate 按 candidate/script 级判定（一个 defect 聚合可含多个 candidate，如 defect-2 含 7 个参数）。映射如下：
-- **Issue 草稿**：按 **candidate 级**生成，仅 `endorsement=true` 的 candidate → `issues/issue-{param-slug}-novel.md`。reject 的 candidate **不**生成 issue 草稿。
-- **拒绝清单**：reject 的 candidate 记入 `summary.md` 的「Novelty Gate 拒绝清单」（candidate + param + grade + evidence_url）。`judge_discrepancy=true` 的 candidate 须标注（门控推翻了 judge 的 NOVEL——这是门控核心价值）。
+- **Issue 草稿**：按 **candidate 级**生成，仅 `endorsement=true` 的 candidate → `issues/issue-{param-slug}-novel.md`。reject 的 candidate **不**生成 issue 草稿，**移入 `archived/`（ADR-0008，见 9a 归档段）**。
+- **归档清单**：reject 的 candidate 记入 `archived/manifest.json`（candidate + param + grade + evidence_url + related_issue_numbers）。`judge_discrepancy=true` 的 candidate 须标注（门控推翻了初判的 NOVEL——这是门控核心价值）。
 - **Defect 聚合报告**（`defects/defect-N.md`）仍生成，但头部必须标注门控汇总：含 N candidate，M endorse / (N-M) reject，避免聚合叙事掩盖 candidate 级门控决策。
 
 #### 9b.5 Issue 审核提醒

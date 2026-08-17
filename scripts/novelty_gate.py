@@ -414,10 +414,48 @@ def load_stage2_aggregation(session_dir: Path) -> Optional[Dict]:
     return safe_read(aggregation_files[0])
 
 
+def load_chain_verdicts(session_dir: Path) -> Optional[Dict]:
+    """ADR-0008: chain-auditor 产出 → novelty gate 候选源（优先于旧 stage2_aggregation）。
+
+    chain_verdicts.json schema 见 agents/chain-auditor.md：{verdicts: [...], target, version}。
+    只取 verdict == "DEFECT" 的条目，映射为 extract_confirmed 兼容的 list[dict]
+    （defect_id / script / param / defect_type 字段名不变，消费方 grade_candidate 无感）。
+    NEEDS_MORE_EVIDENCE / NOT_DEFECT 不进终判（前者由主进程重派 builder，后者已归档线）。
+    """
+    cv_path = session_dir / "debate_logs" / "chain_verdicts.json"
+    cv = safe_read(cv_path)
+    if not cv:
+        return None
+    verdicts = cv.get("verdicts", [])
+    confirmed = [
+        {
+            "defect_id": v.get("defect_id", ""),
+            "script": v.get("defect_id", ""),
+            "param": v.get("param", ""),
+            "defect_type": v.get("defect_type", "unknown"),
+            "chain_verdict": "DEFECT",
+            "fp_evidence_source": v.get("fp_evidence_source"),
+        }
+        for v in verdicts
+        if isinstance(v, dict) and v.get("verdict") == "DEFECT"
+    ]
+    return {
+        "target": cv.get("target", ""),
+        "version": cv.get("version", ""),
+        "confirmed_defects": confirmed,
+        "source": "chain_verdicts",
+    }
+
+
+def load_candidates_source(session_dir: Path) -> Optional[Dict]:
+    """B4 拍板：chain_verdicts 优先，旧 stage2_aggregation 作兼容期 fallback。"""
+    return load_chain_verdicts(session_dir) or load_stage2_aggregation(session_dir)
+
+
 def run_novelty_gate(session_dir: Path, github_token: Optional[str]) -> Dict:
-    aggregation = load_stage2_aggregation(session_dir)
+    aggregation = load_candidates_source(session_dir)
     if not aggregation:
-        return {"error": "No stage2_aggregation*.json found"}
+        return {"error": "No chain_verdicts.json or stage2_aggregation*.json found"}
 
     contract = safe_read(session_dir / "structured_contract.json") or {}
     target = (aggregation.get("target") or contract.get("target") or "unknown").lower()
@@ -485,10 +523,13 @@ def generate_final_verdict(
             "param": defect_data.get("param", ""),
             "param_name": gate_result.get("param_name", ""),
             "defect_type": gate_result.get("defect_type", ""),
-            "judge_doc": defect_data.get("doc", "UNKNOWN"),
-            "judge_evidence": defect_data.get("evidence", "UNKNOWN"),
-            "judge_novelty": judge_novelty,
-            "judge_severity": defect_data.get("severity", "UNKNOWN"),
+            # ADR-0008: judge 四字段随 Judge Quartet 删除，兼容期旧数据填原值、新数据填 N/A
+            "chain_verdict": defect_data.get("chain_verdict", "N/A"),
+            "fp_evidence_source": defect_data.get("fp_evidence_source", "N/A"),
+            "judge_doc": defect_data.get("doc", "UNKNOWN") if defect_data.get("doc") else "N/A",
+            "judge_evidence": defect_data.get("evidence", "UNKNOWN") if defect_data.get("evidence") else "N/A",
+            "judge_novelty": judge_novelty if defect_data.get("novelty") else "N/A",
+            "judge_severity": defect_data.get("severity", "UNKNOWN") if defect_data.get("severity") else "N/A",
             "gate_grade": gate_result.get("grade", "UNKNOWN"),
             "gate_layer": gate_result.get("layer", "unknown"),
             "gate_evidence_url": gate_result.get("evidence_url", ""),
@@ -563,6 +604,38 @@ def _self_check() -> None:
         expect(v["total_defects"] == 1, "final_verdict total=1")
         expect(v["defects"][0]["defect_id"] == "qdrant_boundary_01_x",
                f"final_verdict defect_id 匹配（dict schema），实际 {v['defects'][0]['defect_id']}")
+
+    # 5. ADR-0008 load_chain_verdicts：DEFECT 保留 / 其他过滤 / fallback 顺序
+    with tempfile.TemporaryDirectory() as td:
+        sd = Path(td)
+        (sd / "debate_logs").mkdir()
+        cv = {"auditor": "chain-auditor", "target": "Qdrant", "version": "v1.18.3",
+              "verdicts": [
+                  {"defect_id": "qdrant_b_01", "verdict": "DEFECT", "fp_evidence_source": None},
+                  {"defect_id": "qdrant_b_02", "verdict": "NOT_DEFECT",
+                   "fp_evidence_source": "source"},
+                  {"defect_id": "qdrant_b_03", "verdict": "NEEDS_MORE_EVIDENCE"},
+              ]}
+        (sd / "debate_logs" / "chain_verdicts.json").write_text(
+            json.dumps(cv), encoding="utf-8")
+        src = load_chain_verdicts(sd)
+        expect(src is not None and src["source"] == "chain_verdicts",
+               "chain_verdicts.json 存在 → 返回 chain 源")
+        expect([d["defect_id"] for d in src["confirmed_defects"]] == ["qdrant_b_01"],
+               f"只取 verdict=DEFECT，实际 {src['confirmed_defects']}")
+        expect(src["target"] == "Qdrant", "target 透传")
+        # 优先级：chain_verdicts 存在时忽略旧 stage2_aggregation
+        (sd / "debate_logs" / "stage2_aggregation.json").write_text(
+            json.dumps({"confirmed_defects": [{"defect_id": "old_01"}]}), encoding="utf-8")
+        src2 = load_candidates_source(sd)
+        expect(src2["source"] == "chain_verdicts", "chain_verdicts 优先于 stage2_aggregation")
+        # 无 chain_verdicts → fallback 到旧 aggregation
+        sd3 = Path(td + "3")
+        (sd3 / "debate_logs").mkdir(parents=True)
+        (sd3 / "debate_logs" / "stage2_aggregation.json").write_text(
+            json.dumps({"confirmed_defects": [{"defect_id": "old_02"}]}), encoding="utf-8")
+        src3 = load_candidates_source(sd3)
+        expect(src3 is not None and "confirmed_defects" in src3, "无 chain → fallback 旧源")
 
     if failures:
         print("self-check FAIL:", file=sys.stderr)

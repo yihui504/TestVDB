@@ -63,7 +63,13 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 □ [Step 2] 前置条件检查（Docker/Python/磁盘/网络）
 □ [Step 3] 检查缓存（raw_knowledge.md + structured_contract.json，含 TTL 计算）
 □ [Step 3.6] 如 intelligence.enabled=true：历史情报采集（issue-miner → bug-shape-extractor → threat-modeler）
-□ [Step 3.65] bug-shape 确定性核验（v2.4，fail-fast）：`python scripts/_validate_bug_shapes.py intelligence/{target}/bug_shapes.json`；exit 1 → 读 bug_shapes_validation_report.json → 重派 bug-shape-extractor（反空壳反 repro 泄漏）
+□ [Step 3.65] bug-shape 确定性核验（v2.4，fail-fast + bounded retry + v2.5.2 降级）：
+  - 跑 `python scripts/_validate_bug_shapes.py intelligence/{target}/bug_shapes.json`
+  - **exit 0** → 进 Step 4
+  - **exit 1** → 读 `bug_shapes_validation_report.json`，把 failures 摘要（尤其 `empty_shell_instance` 清单：哪些 issue 的 endpoint/param/value 全 N/A）作为 feedback 注入 bug-shape-extractor 重派
+  - **bounded retry**：最多重派 `MAX_BUGSHAPE_RETRY=2` 次。counter 由 orchestrator 维护（重派前写 `intelligence/{target}/.bugshape_retry` 单行整数；简单 counter 不需确定性脚本，区别于 Step 4.6 attack 脚本 retry 的多脚本复杂 counter）
+  - **超限降级**（重派后仍 exit 1 且已达上限）：**不阻塞 pipeline**。写 `intelligence/{target}/.bugshape_empty_shell_warning`（含 failure 摘要 + 降级原因），继续 Step 4。下游 attack agent 读 bug_shapes 时若见此 warning 则降级为 richness-only（shape 引导不可信，等价 D1 行为）
+  - **为什么 bounded**（v2.5.2 D2 教训）：empty_shell 校验是"检测"非"修复"——extractor 能力未变时无界重派 = 死循环。降级路径让 pipeline 在 extractor 未根本修时仍可跑（牺牲 shape 引导质量换 pipeline 可用性）。根本修 extractor 是独立 follow-up
 □ [Step 4] 如缓存未命中：派 Knowledge Extractor 获取文档
 □ [Step 5] 如缓存未命中：派 Contract Formalizer 生成契约
 □ [Step 6] 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）+ 确定性核验（v2.4，fail-fast）：`python scripts/_validate_contract.py results/{target}/{version}/structured_contract.json`；exit 1 → 读 contract_validation_report.json → 重派 contract-formalizer（反系统性 source_verified 幻觉）
@@ -73,7 +79,7 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
   □ 8b. 并发出动 Attack Trio + Vein（boundary + state + semantic + vein）
   □ 8c. Orchestrator 自行执行辩论 Stage 1（交叉审查 + 去重）
   □ 8d. 派 Executor 在沙箱中执行通过辩论的脚本（容器保持运行）
-  □ 8e. 收集执行结果 → 辩论 Stage 2（Judge Quartet 分两阶段，注入 judge_enhancements）
+  □ 8e. 候选机械提取 + L1 闸门 → evidence-builder 并发 fan-out → chain-auditor 收口（ADR-0008）
   □ 8f. 派 Reporter 为通过辩论的缺陷生成报告（含 Pre-Submit Gate 复现验证）
   □ 8g. 保存 mine_state.json + coverage.json + experience_handoff.json
   □ 8h. 分析本轮产出，生成 reflection_context
@@ -212,7 +218,7 @@ TTL 从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取（默认 168h）�
 ```
 
 **v3 schema 说明**（跨 Turn 状态机）：
-- `phase`：当前所处阶段枚举（ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → DEBATE_S2 → REPORTING → DEFECT_REVIEW → STATE_SAVE → CLEANUP → DONE）
+- `phase`：当前所处阶段枚举（ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → EVIDENCE_BUILD → CHAIN_AUDIT → REPORTING → DEFECT_REVIEW → STATE_SAVE → CLEANUP → DONE）
 - `phases_completed`：当前轮次已完成的阶段列表（轮内断点恢复用，每轮重置）
 - `phase_data`：每个阶段的产出摘要（供断点恢复时跳过已完成的工作）
 - `turn_type`：`setup`（Turn 1）→ `loop`（Loop Turn）→ `done`（完成）
@@ -263,21 +269,9 @@ THREAT_MODEL_ATTACK=$(python scripts/threat_model_injector.py {target} --mode at
 - `evolution.enabled=true` 且 `cross_session_strategies` 有实质内容 → 注入跨会话策略
 - `intelligence.enabled=true` 且 `inject_to_attack_agents=true` → 执行 `threat_model_injector.py --mode attack` 并注入结果
 
-### v2.1 Judge Agent 增强注入（intelligence.enabled=true 且 inject_to_judge_agents=true）
+### v2.1 威胁模型注入说明（ADR-0008：judge 增强注入已随 Judge Quartet 删除；attack 注入保留）
 
-**使用程序化注入脚本**（详见 `commands/mine.md` Step 8a）：
-
-```bash
-THREAT_MODEL_JUDGE_SEVERITY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type severity --text-only)
-THREAT_MODEL_JUDGE_NOVELTY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type novelty --text-only)
-THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type evidence --text-only)
-```
-
-在派发对应 Judge Agent 时（Step 8e），将 `${THREAT_MODEL_JUDGE_*}` 追加到 prompt 末尾：
-- **judge-severity** → `${THREAT_MODEL_JUDGE_SEVERITY}`（severity_calibration：AUTO_DOWNGRADE / CONFIRM_SEVERITY / DOWNGRADE）
-- **judge-novelty** → `${THREAT_MODEL_JUDGE_NOVELTY}`（novelty_context：已修复模式、已知进行中 issue、回归风险）
-- **judge-evidence** → `${THREAT_MODEL_JUDGE_EVIDENCE}`（submission_success_probability：高/中/低提交成功率 + 证据门槛调整）
-
+inject_to_judge_agents 配置废弃。threat_model_injector.py 仅 --mode attack 路径仍在用。
 ### v2.0 跨会话策略注入（evolution.enabled=true）
 
 策略由 `scripts/strategy_injector.py {target} --text-only` 生成，在 Attack Agent prompt 中注入。
@@ -299,7 +293,7 @@ Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target
 Agent(subagent_type="testvdb:attack-vein", description="Vein-mining 纵深攻击 {target} v{version}", prompt="按照 agents/attack-vein.md 规范，为 {target} v{version} 做 condition-space 纵深挖掘。contract=results/{target}/{version}/structured_contract.json, threat_model=intelligence/{target}/threat_model.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。**自己跑脚本**（curl 真 DB via Bash，DB URL from env TESTVDB_DB_URL），single-turn discover-then-deepen 按 condition-richness 选 top-3 endpoint 纵深挖掘 8 类通用 condition，finding-feedback loop 启发相邻 condition。产出 vein_scripts/*.py（strategy=vein_<type>）走标准 Stage 1+2+Judge。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
 
-> **attack-vein 特殊性**（v2.5）：与 Trio 不同——它**自己跑脚本**（破坏"只生成"边界，路径 2），目的是 single-turn discover-then-deepen 得即时反馈（不等 docker-executor）。但它产出的 `vein_scripts/*.py` 仍走完整 Stage 1 + Stage 2 + Judge Quartet（自跑只是发现机制，不是判定机制）。Stage 1 确定性分类器仍扫 `vein_scripts/`（attack-vein 也可能产 SCRIPT_ERROR 模式）。
+> **attack-vein 特殊性**（v2.5）：与 Trio 不同——它**自己跑脚本**（破坏"只生成"边界，路径 2），目的是 single-turn discover-then-deepen 得即时反馈（不等 docker-executor）。但它产出的 `vein_scripts/*.py` 仍走完整 Stage 1 + evidence-builder/chain-auditor 链（自跑只是发现机制，不是判定机制，ADR-0008）。Stage 1 确定性分类器仍扫 `vein_scripts/`（attack-vein 也可能产 SCRIPT_ERROR 模式）。
 
 **自动化输出验证**：每轮 Attack Trio 完成后，使用 Bash 工具执行以下命令验证子 agent 产出：
 ```bash
@@ -408,7 +402,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
 #### 8d. 派 Executor 执行通过辩论的脚本
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S2 --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EVIDENCE_BUILD --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
 
 **必须使用 Agent 工具派生 docker-executor 子 agent**，禁止自己直接执行：
 
@@ -426,91 +420,50 @@ ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l
 
 **容器生命周期管理**：Executor 在 Step 5 执行完脚本后，**不得清理容器**。容器必须保持运行直到 Reporter 完成 Pre-Submit Gate 复现验证（Step 8f）后，由 Orchestrator 在 Step 8j 统一清理。Executor 只负责启动和执行，不负责停止。轮次间如需重置 DB 状态，由 Orchestrator 在 Step 8j 执行 `docker restart`。
 
-#### 8e. 收集结果 → 辩论 Stage 2
+#### 8e. 收集结果 → EVIDENCE_BUILD + CHAIN_AUDIT（ADR-0008 证据链双 Agent）
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase REPORTING --phase-data '{"DEBATE_S2": {"debate_confirmed": N, "rejected_defects": M}}'`
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EVIDENCE_BUILD --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
 
-将执行结果分发给 Judge Quartet（**4 个 Judge，分两阶段派发**）：
-
-**阶段 1：先派 judge-doc（文档契约验证）**
-```
-Agent(subagent_type="testvdb:judge-doc", description="文档契约验证 {target}", prompt="按照 agents/judge-doc.md 规范，验证以下候选缺陷的文档引用有效性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-```
-
-**自动化输出验证**：等待 judge-doc 完成后，使用 Bash 工具执行以下命令验证产出（检查 .done 标记确保写入完成）：
+**Step 1 — 机械提取候选清单**（fan-out 派发清单，确定性 0 LLM）：
 ```bash
-test -f "results/{target}/{version}/{timestamp}/debate_logs/stage2_doc.json.done" && echo "READY" || echo "PENDING"
-```
-如果输出为 PENDING（含超时 60s 仍 PENDING），说明 judge-doc 未正常执行，必须在 error_log 中记录并终止当前轮次。
-
-**阶段 2：确认 stage2_doc.json 存在后，并发派其他 3 个 Judge**
-```
-Agent(subagent_type="testvdb:judge-evidence", description="证据审查 {target}", prompt="按照 agents/judge-evidence.md 规范，审查以下执行结果的证据可信度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Agent(subagent_type="testvdb:judge-novelty", description="新颖性审查 {target}", prompt="按照 agents/judge-novelty.md 规范，审查以下候选缺陷的新颖性：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Agent(subagent_type="testvdb:judge-severity", description="严重性评估 {target}", prompt="按照 agents/judge-severity.md 规范，评估以下候选缺陷的严重程度：{execution_results}。session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+python scripts/extract_candidates.py $SESSION_DIR
+# 产出 candidates.jsonl（VERDICT: DEFECT_FOUND 的 log → 候选；SCRIPT_ERROR 排除）
 ```
 
-**自动阻断**：4 个 Judge 全部完成后，使用 Bash 工具执行以下命令验证产出（所有文件必须都有 .done 标记）：
+**Step 2 — L1 机械闸门前移**（0 token 杀 ~90% 历史 FP 模式）：
 ```bash
-echo "doc: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_doc.json.done && echo 1 || echo 0)"
-echo "evidence: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_evidence.json.done && echo 1 || echo 0)"
-echo "novelty: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_novelty.json.done && echo 1 || echo 0)"
-echo "severity: $(test -f results/{target}/{version}/{timestamp}/debate_logs/stage2_severity.json.done && echo 1 || echo 0)"
+python scripts/verify_live_l1.py $SESSION_DIR --target {target}
 ```
-如果任一 Judge 计数为 0，**禁止 Orchestrator 自己做 Judge 判断**，必须在 error_log 中记录缺失的 Judge 名称。**⛔ 绝对禁止 Orchestrator 自己执行 WebSearch 或代码审查来替代 Judge。如果 Judge 失败，缺失的 Judge 投 not_defect（保守策略）。注意：judge-novelty 超时 → 全部标记 `unknown`，投 `is_defect`（不因网络问题丢弃缺陷，v2.3）。**
+REFUTED 候选从 candidates.jsonl 移除（记入 verify_live_l1.json）。verify-live-l2 已删（ADR-0008 B1：其主动 Docker 实测职能与 dev-reviewer 同物种，NEEDS_MORE_EVIDENCE 补证轮覆盖剩余语义情况）。
 
-**平局处理规则（v2.2 新增）**：
-- evidence 2:2 平局 → 投 `not_defect`（保守策略：证据不足不确认）
-- severity 分歧（同一缺陷两个不同 severity）→ 取**中位数**（如 High+Medium+High → High）
-- judge-doc 超时 → 视为 DOC_UNVERIFIED，不调节权重（等同 DOC_VERIFIED，不降级）
-- novelty 超时 → 全部标记 `unknown`，投 `is_defect`（不因网络问题丢弃缺陷）
+**Step 3 — evidence-builder 按候选并发派发**（1 builder/候选）：
+```
+对 candidates.jsonl 每行并发派发（受派发槽位约束）：
+Agent(subagent_type="testvdb:evidence-builder", description="证据链构建 {defect_id}",
+  prompt="按照 agents/evidence-builder.md 规范，为候选 {defect_id} 构建证据链。target={target}, version={version}, SESSION_DIR=$SESSION_DIR。你的 defect_id={defect_id}。")
+```
+- 产出 `evidence_chain/{defect_id}.json` + `.done`（按候选命名，并发无写冲突）
+- 超时/缺产出候选：不重试，留给 auditor 记 NEEDS_MORE_EVIDENCE
 
-**交叉审查规则（防止自评偏见）：**
-- 每个 Judge Agent 独立审查全部执行结果，不得参考其他 Judge 的投票
-- Judge Quartet 四票独立投票，无作者-审查者角色冲突
-- judge-doc 的 doc_verification_result 作为权重调节器，影响其他 3 个 Judge 的审查严格度
+**8e.5 缺陷去重（v2.2，ADR-0008 输入源更新）**
 
-**投票逻辑（加权 AND，非简单多数票）：**
+主进程在派发 auditor 前对 candidates 执行跨轮次去重（同 endpoint + 同 defect_type 合并；跨轮与 dedup_state.json 比较）。产出 `debate_logs/stage2_deduped.json`。
 
-evidence 和 severity 按 is_defect/not_defect 投票，novelty 根据新颖性评级投票，doc 作为权重调节器：
-1. **文档门控**（judge-doc）：产出 DOC_VERIFIED / DOC_PARTIAL / DOC_MISMATCH，调节其他 Judge 审查严格度
-2. **证据门控**（judge-evidence）：证据等级 D → 自动 not_defect，无需继续
-3. **严重性门控**（judge-severity）：severity = trivial → not_defect
-4. **新颖性初筛**（judge-novelty，v2.3 修正 — 不做 kill）：
-   - `new` / `new_similar` / `unknown`（网络不可用）→ 投 is_defect
-   - `already_reported` → 投 is_defect（**不 kill**，附带 related_issue_numbers 传递给 Novelty Gate）
-   - `known_wontfix` → 投 not_defect（维护者明确拒绝，唯一 kill 场景）
+**8e.7 CHAIN_AUDIT — chain-auditor 单实例收口**
 
-**缺陷确认规则（按优先级判定）：**
-1. evidence=not_defect → **丢弃**（证据不足，记录驳回原因，不检查 severity）
-2. severity=trivial → **丢弃**（影响过小不值得报告，记录驳回原因）
-   - **重要**：severity 降级逻辑（如 DOC_PARTIAL → 自动降级）可能在 judge-severity 内部将 Low 降为 trivial，此降级不代表缺陷不存在，仅影响是否值得单独报告。降级被丢弃的缺陷记录到 `downgraded_defects` 数组，供 reflection_context 参考
-3. evidence=is_defect AND severity∈{Critical,High,Medium,Low} → **辩论确认 (Debate-Confirmed)**
-4. novelty_rating 影响确认状态 (v2.3 修正 — Triage 不做 kill)：
-   - `new` / `new_similar` / `unknown` / `already_reported` → 正常进入其他维度判定
-   - `already_reported` 的候选保留 `related_issue_numbers`，传递给 Novelty Gate 做最终裁决
-   - `known_wontfix` → vote=not_defect，缺陷被丢弃（记录关联 issue 编号到 dedup_log.json）
-   - novelty 超时 → 全部标记 `unknown`，投 `is_defect`（不因网络问题丢弃缺陷）
-   - **关键变更**：`already_reported` 不再 kill candidate——judge-novelty 是初筛（Novelty Triage），Novelty Gate（Step 9a）是唯一权威的"是否可提交"决策点
-5. doc_verification_result 附加到缺陷元数据：
-   - DOC_VERIFIED → 正常格式
-   - DOC_PARTIAL → 标注文档引用为 PARTIAL，严重性自动降一级（但仅影响 severity 输出，不影响 evidence 判定）
-   - DOC_MISMATCH → 标注文档引用不匹配，严重性自动降两级，但**不阻塞缺陷确认**（只要 evidence 确认即可）
+全部 builder `.done` 后派发（跨候选一致性检查需要完整链集合）：
+```
+Agent(subagent_type="testvdb:chain-auditor", description="证据链审计 {target}",
+  prompt="按照 agents/chain-auditor.md 规范，审计 evidence_chain/ 下全部证据链并产出终判。target={target}, version={version}, SESSION_DIR=$SESSION_DIR。")
+```
+- 产出 `debate_logs/chain_verdicts.json`（DEFECT / NOT_DEFECT / NEEDS_MORE_EVIDENCE + fp_evidence_source + root_cause 分布）+ `.done`
+- 验证：`test -f "$SESSION_DIR/debate_logs/chain_verdicts.json.done" && echo READY || echo PENDING`
+- NEEDS_MORE_EVIDENCE > 0 → 仅对标记的 defect_id 重派 builder 补证一轮（最多 1 次），再重派 auditor 出最终 verdict；第二轮仍矛盾 → NOT_DEFECT（保守）
+- **⛔ 主进程绝不做判定。auditor 两轮均超时 → 全候选保守 NOT_DEFECT + error_log。**
 
-> **术语精确化（v2.3）**：此处产出的是 **Debate-Confirmed**（辩论确认）candidate。后续 VERIFY_LIVE、Reporter、DEFECT_REVIEW、dev-reviewer、Novelty Gate 五层中仍可能被推翻。只有 Gate 的 `endorsement=true` 产出才是 **Gate-Endorsed**（闸门背书）——真正可提交的级别。`confirmed_defects` JSON 字段保留不变，指代通过本轮辩论的 candidate 列表。
+**完成后更新 pipeline_state**: `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase REPORTING --phase-data '{"CHAIN_AUDIT": {"verdict_defect": N, "not_defect": M, "needs_more_evidence": K}}'`
 
-辩论日志写入 `debate_logs/stage2.json`（含 stage2_doc.json 的文档验证结果）。
-
-#### 8e.5 缺陷去重（v2.2 新增 — 防止同一根因的多个缺陷重复报告）
-
-**主进程在派发 Reporter 之前，必须对 debate_confirmed 列表执行跨轮次去重。**
-
-去重维度：
-1. **同 endpoint + 同 defect_type** → 合并为单个缺陷，保留所有 reproduction scenario
-2. **跨轮次去重** → 与 `dedup_state.json` 中历史确认的缺陷比较，相同 root cause 丢弃
-3. **合并规则**：合并后保留最高 severity，证据取 AND
-
-产出 `debate_logs/stage2_deduped.json`。去重后数量为 0 → 本轮无新缺陷，跳过 Reporter。
+**experience_handoff 采集**：auditor 的 `root_cause_distribution` 与 `fp_evidence_source_distribution` 采集进 experience_handoff.json 的 rejection_patterns（词表沿用原 dev-reviewer root_cause_if_fp）。
 
 #### 8f. 派 Reporter
 
@@ -568,7 +521,7 @@ FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Repor
 
 **experience_handoff.json 写入逻辑：**
 - 记录本轮关键发现：debate_confirmed 的 endpoint 分布、驳回原因分类、新发现的高价值攻击策略
-- 记录当前辩论机制状态：stage1/stage2 的 approve/reject 比例、Judge Quartet 一致率
+- 记录当前判定链状态：L1 refuted / verdict_defect / not_defect / needs_more_evidence 计数（ADR-0008）
 - 供下次 session 或上下文压缩恢复时快速理解当前进度
 
 **experience_handoff.json 模板**（Orchestrator 使用 Write 工具写入）：
@@ -582,12 +535,12 @@ FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Repor
   "key_findings": [
     {"endpoint": "...", "defect_type": "...", "confidence": 0.0, "summary": "..."}
   ],
-  "debate_stats": {
-    "stage1_approved": 0,
-    "stage1_rejected": 0,
-    "stage2_confirmed": 0,
-    "stage2_rejected": 0,
-    "judge_agreement_rate": 0.0
+  "chain_stats": {
+    "candidates": 0,
+    "l1_refuted": 0,
+    "verdict_defect": 0,
+    "not_defect": 0,
+    "needs_more_evidence": 0
   },
   "rejection_patterns": [
     {"endpoint": "...", "reason": "by-design|false_positive|irreproducible|insufficient_evidence"}
@@ -706,7 +659,7 @@ Orchestrator
   │     ├──▶ Threat Modeler ◀──────┘
   │     │           │
   │     │           ▼
-  │     │     threat_model.json (attack priorities + cognitive blindspots + judge enhancements)
+  │     │     threat_model.json (attack priorities + cognitive blindspots)
   │     │
   ├──▶ Knowledge Extractor ──▶ raw_knowledge.md
   │                                      │
@@ -730,12 +683,16 @@ Orchestrator
   │           ▼
   │     execution_results[]
   │           │
-  ├──▶ Judge Quartet (分两阶段) ◀── execution_results[] + threat_model(judge_enhancements)
-  │     Phase 1: judge-doc (文档契约验证)
-  │     Phase 2: evidence │ novelty │ severity (读取 doc 结果后执行)
+  ├──▶ extract_candidates (机械提取) ──▶ verify_live_l1 (L1 机械闸门, 0 token)
   │           │
   │           ▼
-  │     confirmed_defects[] + debate_log_stage2.json + stage2_doc.json
+  ├──▶ evidence-builder × N (按候选并发, ADR-0008) ◀── candidates.jsonl + contract + src clone
+  │     step1: 文档验证+执行证据审查+证据链追溯
+  │     step2: 源码搜证
+  │           │
+  │           ▼
+  ├──▶ chain-auditor (单实例收口) ──▶ chain_verdicts.json
+  │     (DEFECT/NOT_DEFECT/NEEDS_MORE_EVIDENCE + fp_evidence_source + root_cause)
   │           │
   ├──▶ Reporter ◀── confirmed_defects[]  [复用运行中容器做 Pre-Submit Gate]
   │           │

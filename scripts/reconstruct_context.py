@@ -49,7 +49,8 @@ PHASE_DESCRIPTIONS: dict[str, str] = {
     "ATTACK_GEN": "并发派发 Attack Trio 生成攻击脚本（Step 8b）",
     "DEBATE_S1": "辩论 Stage 1 — 自动审查+去重（Step 8c）",
     "EXECUTION": "Docker 沙箱执行 + 打回修改（Step 8d-8d.5）",
-    "DEBATE_S2": "辩论 Stage 2 — Judge Quartet + 去重（Step 8e-8e.5）",
+    "EVIDENCE_BUILD": "证据链构建 — evidence-builder 按候选并发 fan-out（Step 8e，ADR-0008）",
+    "CHAIN_AUDIT": "证据链审计 — chain-auditor 单实例收口三查+三视角聚合（Step 8e.7，ADR-0008）",
     "REPORTING": "派发 Reporter 生成缺陷报告（Step 8f）",
     "DEFECT_REVIEW": "逐缺陷全面审查（Step 8f.5）",
     "STATE_SAVE": "保存状态 + 分析产出 + 终止检查（Step 8g-8i）",
@@ -59,7 +60,7 @@ PHASE_DESCRIPTIONS: dict[str, str] = {
 
 PHASE_ORDER = [
     "SETUP", "ROUND_START", "ATTACK_GEN", "DEBATE_S1", "EXECUTION",
-    "DEBATE_S2", "REPORTING", "DEFECT_REVIEW", "STATE_SAVE",
+    "EVIDENCE_BUILD", "CHAIN_AUDIT", "REPORTING", "DEFECT_REVIEW", "STATE_SAVE",
 ]
 
 NEXT_ACTION_MAP: dict[str, str] = {
@@ -79,10 +80,15 @@ NEXT_ACTION_MAP: dict[str, str] = {
         "执行 EXECUTION：派发 Docker Executor 在沙箱中执行通过辩论的脚本。"
         "执行完成后检查 output_*.log.done。如有脚本错误，执行打回修改（8d.5）。"
     ),
-    "DEBATE_S2": (
-        "执行 DEBATE_S2：分两阶段派发 Judge Quartet。"
-        "阶段 1: judge-doc → 阶段 2: evidence + novelty + severity。"
-        "完成后执行投票逻辑 + 缺陷去重（8e.5）。"
+    "EVIDENCE_BUILD": (
+        "执行 EVIDENCE_BUILD：python scripts/extract_candidates.py 提取候选清单 → "
+        "python scripts/verify_live_l1.py L1 机械闸门（REFUTED 淘汰）→ "
+        "按候选并发派发 evidence-builder（每候选一个实例，产出 evidence_chain/{defect_id}.json）。"
+    ),
+    "CHAIN_AUDIT": (
+        "执行 CHAIN_AUDIT：全部 builder .done 收口后派发 chain-auditor 单实例。"
+        "产出 debate_logs/chain_verdicts.json（DEFECT/NOT_DEFECT/NEEDS_MORE_EVIDENCE + "
+        "fp_evidence_source + root_cause 分布）。"
     ),
     "REPORTING": (
         "执行 REPORTING：派发 Reporter 为确认的缺陷生成报告（含 Pre-Submit Gate 复现验证）。"
@@ -350,7 +356,7 @@ def format_text(data: dict[str, Any]) -> str:
             f"{s1_data.get('rejected_count', '?')} 驳回"
         )
 
-    if na["resume_from_phase"] == "DEBATE_S2" or "EXECUTION" in s["phases_completed"]:
+    if na["resume_from_phase"] in ("EVIDENCE_BUILD", "CHAIN_AUDIT") or "EXECUTION" in s["phases_completed"]:
         exec_data = pd.get("EXECUTION", {})
         lines.append(
             f"- 执行结果: {exec_data.get('scripts_executed', '?')} 执行, "
