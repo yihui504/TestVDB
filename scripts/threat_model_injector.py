@@ -348,104 +348,8 @@ def _inject_shape_generalization(tm):
 
 
 # ---- Judge Agent injection ----
-
-
-def generate_judge_severity_injection(tm):
-    if tm is None:
-        return "(threat model unavailable)"
-    j = tm.get("judge_enhancements", {})
-    c = j.get("severity_calibration", {})
-    if not c:
-        return "(no severity calibration)"
-    p = ["## 严重性校准规则（v2.1 Strategic Intelligence）", ""]
-    for k, lbl in [("by_design_behaviors","Auto-downgrade"),("out_of_scope_patterns","Out-of-scope"),("historical_high_severity_patterns","Confirm severity"),("wontfix_patterns","Downgrade")]:
-        sec = c.get(k, {})
-        if sec.get("action"):
-            p.append("### " + lbl)
-            p.append("Reason: " + sec.get("rationale",""))
-            p.append("")
-            for pt in sec.get("patterns", []):
-                p.append("  - " + pt)
-            p.append("")
-    # ponytail: v2.2 崩溃放行 — Type3 崩溃无需文档契约支撑，与 aggregate_votes.py 规则 0 / judge-severity 规则 4 例外 协同
-    p.append("### 崩溃现象自动 Critical（v2.2 Crash Auto-Confirm）")
-    p.append("Reason: 运行时崩溃（OOM/panic/5xx/连接重置/容器 Killed）是客观缺陷事实，无需文档契约支撑。DOC_MISMATCH 降级规则（规则 4）**不应用于崩溃**。")
-    p.append("")
-    p.append("**触发条件**（执行日志含以下任一信号）：")
-    p.append("  - OOM / out of memory / capacity overflow / Killed（OOM killer）")
-    p.append("  - panic occurred / panic backtrace / thread panicked")
-    p.append("  - SIGSEGV / SIGABRT / SIGKILL / segmentation fault")
-    p.append("  - HTTP 5xx（status:500 / http/1.1 500 / \"status\":500）")
-    p.append("  - 连接重置 / connection reset / broken pipe")
-    p.append("")
-    p.append("**动作**：severity = **Critical**，标 `crash_auto_confirmed: true`，跳过规则 4（DOC_MISMATCH 不降级）+ 规则 5（单脚本不降级）。")
-    p.append("")
-    p.append("**排除（by-design 崩溃不触发）**：")
-    by_design_kw = []
-    if isinstance(c.get("by_design_behaviors"), dict):
-        by_design_kw = c["by_design_behaviors"].get("patterns", [])
-    # 默认平台限制白名单（即使 threat_model 无 by_design 也生效）
-    default_platform = ["jemalloc on ARM64/aarch64", "platform address space limit", "libc/musl compatibility"]
-    p.append("  - 平台限制（默认）：jemalloc ARM64/aarch64、地址空间限制、libc 兼容 — 这些是外部限制非 server 缺陷")
-    if by_design_kw:
-        p.append("  - threat_model by_design_behaviors：" + ", ".join(str(x) for x in by_design_kw[:8]))
-    p.append("")
-    return chr(10).join(p)
-
-def generate_judge_novelty_injection(tm):
-    if tm is None:
-        return "(threat model unavailable)"
-    j = tm.get("judge_enhancements", {})
-    nc = j.get("novelty_context", {})
-    if not nc:
-        return "(no novelty context)"
-    p = ["## 新颖性上下文（v2.1 Strategic Intelligence）", ""]
-    rfp = nc.get("recently_fixed_patterns", [])
-    if rfp:
-        p.append("### Recently Fixed")
-        for r in rfp:
-            pat = r.get("pattern", "")
-            fix = r.get("fix_pr", "")
-            p.append("  - " + pat + " (PR #" + str(fix) + ")")
-        p.append("")
-    koi = nc.get("known_ongoing_issues", [])
-    if koi:
-        issues = ", ".join("#" + str(i) for i in koi)
-        p.append("### Ongoing: " + issues)
-        p.append("")
-    rra = nc.get("regression_risk_areas", [])
-    if rra:
-        p.append("### Regression Risks")
-        for r in rra:
-            if isinstance(r, dict):
-                r = r.get("area") or r.get("name") or r.get("description") or r.get("pattern") or r.get("id") or str(r)
-            p.append("  - " + str(r))
-        p.append("")
-    return chr(10).join(p)
-
-def generate_judge_evidence_injection(tm):
-    if tm is None:
-        return "(threat model unavailable)"
-    j = tm.get("judge_enhancements", {})
-    ssp = j.get("submission_success_probability", {})
-    if not ssp:
-        return "(no submission success data)"
-    p = ["## 提交成功率校准（v2.1 Strategic Intelligence）", ""]
-    for k, lbl in [("high","High >0.8"),("medium","Medium 0.4-0.8"),("low","Low <0.4")]:
-        items = ssp.get(k, [])
-        if items:
-            p.append("### " + lbl)
-            for x in items:
-                prob = x.get("probability")
-                if prob is None: prob = 0
-                cond = x.get("condition", "")
-                reason = x.get("reason", "")
-                p.append("  - " + cond + " (" + str(prob) + "): " + reason)
-            p.append("")
-    return chr(10).join(p)
-
-
-# ---- Main entry ----
+# ADR-0008: judge 注入路径随 Judge Quartet 删除（--mode judge CLI 已收窄）。
+# 历史实现见 git 历史（aggregate_votes/gate_severity_coverage 同批删除）。
 
 
 def main():
@@ -453,14 +357,10 @@ def main():
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("target_db", choices=sorted(VALID_TARGETS))
-    ap.add_argument("--mode", required=True, choices=["attack","judge"])
-    ap.add_argument("--judge-type", choices=["severity","novelty","evidence"])
+    ap.add_argument("--mode", required=True, choices=["attack"])  # ADR-0008: judge 模式已删
     ap.add_argument("--text-only", action="store_true")
     ap.add_argument("--intelligence-dir", default=None)
     args = ap.parse_args()
-    if args.mode == "judge" and not args.judge_type:
-        print("Error: --judge-type required", file=sys.stderr)
-        sys.exit(1)
     if args.intelligence_dir:
         try:
             _validate_path_inside_project(Path(args.intelligence_dir).resolve())
@@ -477,14 +377,9 @@ def main():
         if tm:
             meta["blindspot_count"] = len(tm.get("cognitive_blindspots", {}).get("blindspots", []))
             meta["endpoint_count"] = len(tm.get("attack_priority_map", {}).get("endpoints", []))
-    else:
-        gens = {"severity": generate_judge_severity_injection, "novelty": generate_judge_novelty_injection, "evidence": generate_judge_evidence_injection}
-        txt = gens[args.judge_type](tm)
     if args.text_only:
         print(txt)
     else:
-        if args.mode == "judge":
-            meta["judge_type"] = args.judge_type
         print(json.dumps({**meta, "injection_text": txt, "injection_length": len(txt)}, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":

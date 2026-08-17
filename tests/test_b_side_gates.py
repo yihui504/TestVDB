@@ -135,8 +135,18 @@ class TestB5AiFailureCheckM4:
         assert "Missing .done markers" in r["detail"]
 
     def test_m4_pass_all_done(self, tmp_path):
-        """全部 .done 标记存在 → PASS。"""
+        """全部 .done 标记存在 → PASS（ADR-0008 新管线：stage1 + chain_verdicts）。"""
         session = tmp_path / "s"
+        debate = session / "debate_logs"
+        debate.mkdir(parents=True)
+        for name in ["stage1.json.done", "chain_verdicts.json.done"]:
+            (debate / name).write_text("")
+        r = check_m4_shortcut_pipeline(str(session))
+        assert r["passed"] is True
+
+    def test_m4_legacy_session_fallback(self, tmp_path):
+        """ADR-0008 旧会话兼容：仅旧五件套（无 chain_verdicts）→ 按旧清单 PASS。"""
+        session = tmp_path / "s_legacy"
         debate = session / "debate_logs"
         debate.mkdir(parents=True)
         for name in [

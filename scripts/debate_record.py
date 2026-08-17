@@ -43,6 +43,8 @@ class DefectVerdict:
     param: str
     param_name: str
     defect_type: str
+    # ADR-0008: judge_* 四字段已无生产方（Judge Quartet 删除）。schema 保留是为
+    # 兼容历史 final_verdict.json（from_file 校验 required）；新数据 novelty_gate 填 N/A。
     judge_doc: str
     judge_evidence: str
     judge_novelty: str

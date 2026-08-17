@@ -216,7 +216,7 @@ curl -s -o /tmp/resp.txt -w "HTTP %{http_code}\n" \
 
 对每条 SUSPECTED candidate，写成标准 attack 脚本到 `<session_dir>/vein_scripts/vein_<condition_type>_<endpoint>_<counter>.py`，**格式同 Attack Trio**（含 safe_request 三元组 + VERDICT + cleanup try/except）。
 
-**strategy 标 `vein_<condition_type>`**（如 `vein_range_filter`）—— 供 aggregate_votes / novelty_gate 区分来源。
+**strategy 标 `vein_<condition_type>`**（如 `vein_range_filter`）—— 供 novelty_gate 区分来源（ADR-0008：aggregate_votes 已删）。
 
 **⛔ 强制**：脚本必须使用 `safe_request()` 包装所有 HTTP 调用（同 attack-boundary § 输出格式）。Stage 1 确定性分类器（`_classify_script_errors.py`）**仍扫 `vein_scripts/`**——5 类静态错误检测对 vein 脚本同样适用，attack-vein 自跑后产脚本仍可能漏 cleanup try/except 等。
 
@@ -274,7 +274,7 @@ curl -s -o /tmp/resp.txt -w "HTTP %{http_code}\n" \
 - 输出 `<session>/vein_scripts/*.py` 与 `boundary_scripts/` `state_scripts/` `scripts/` 并列
 - Stage 1 确定性分类**仍扫 vein_scripts/**（attack-vein 自跑也可能产 SCRIPT_ERROR 模式）
 - Stage 2 Executor 正常跑 vein_scripts/
-- Judge Quartet 正常审，strategy=`vein_*` 供 aggregate_votes 区分
+- 正常走 evidence-builder/chain-auditor 链（ADR-0008），strategy=`vein_*` 供 novelty_gate 区分
 - vein_state.json 跨 turn 持久 finding 链（resume 时读它继续 deepen）
 
 **不替代** Attack Trio（它们 shape-driven 横向枚举，本 agent vein-mining 纵深挖掘，输入/策略都不同）。

@@ -192,14 +192,31 @@ def check_m4_shortcut_pipeline(session_dir: str) -> dict:
     M4: 走捷径跳过关键验证
     检查 .done 标记是否全部存在。
     仅当有管道执行痕迹（debate_logs 目录存在或 defect 文件存在）时才检查。
+
+    ADR-0008: 新管线关键产物是 chain_verdicts.json（chain-auditor 终判）；
+    stage2_* 五件套随 Judge Quartet 删除。旧会话兼容：无 chain_verdicts 但有
+    stage2_doc → 按旧五件套评估（历史 session 复检仍按当时管线）。
     """
-    required_done = [
+    # 旧管线会话判定先做（依赖 stage2_doc 存在性）
+    _old_five = [
         "debate_logs/stage1.json.done",
         "debate_logs/stage2_doc.json.done",
         "debate_logs/stage2_evidence.json.done",
         "debate_logs/stage2_novelty.json.done",
         "debate_logs/stage2_severity.json.done",
     ]
+    has_new = os.path.exists(
+        os.path.join(session_dir, "debate_logs", "chain_verdicts.json.done"))
+    has_old = os.path.exists(
+        os.path.join(session_dir, "debate_logs", "stage2_doc.json.done"))
+
+    if has_new or not has_old:
+        required_done = [
+            "debate_logs/stage1.json.done",
+            "debate_logs/chain_verdicts.json.done",
+        ]
+    else:
+        required_done = _old_five
 
     # 仅在有管道执行痕迹时才检查
     debate_logs_dir = os.path.join(session_dir, "debate_logs")
@@ -530,12 +547,21 @@ def _self_check() -> int:
         expect(check_m4_shortcut_pipeline(empty)["passed"] is False,
                "M4 debate_logs missing .done → fail")
 
-        # 全部 .done 存在 → pass
-        for f in ["stage1.json", "stage2_doc.json", "stage2_evidence.json",
-                  "stage2_novelty.json", "stage2_severity.json"]:
+        # 全部 .done 存在 → pass（ADR-0008 新管线两件套）
+        for f in ["stage1.json", "chain_verdicts.json"]:
             (open(os.path.join(debate_dir, f + ".done"), "w").close())
         expect(check_m4_shortcut_pipeline(empty)["passed"] is True,
-               "M4 all .done → pass")
+               "M4 all .done → pass（新管线 stage1 + chain_verdicts）")
+
+        # ADR-0008 旧会话兼容：仅旧五件套 → 仍按旧清单 pass
+        old_dir = os.path.join(empty, "m4_old")
+        debate_old = os.path.join(old_dir, "debate_logs")
+        os.makedirs(debate_old)
+        for f in ["stage1.json", "stage2_doc.json", "stage2_evidence.json",
+                  "stage2_novelty.json", "stage2_severity.json"]:
+            (open(os.path.join(debate_old, f + ".done"), "w").close())
+        expect(check_m4_shortcut_pipeline(old_dir)["passed"] is True,
+               "M4 旧管线会话按旧五件套 → pass")
 
         # ── check_m2 offline 模式（TESTVDB_OFFLINE=1 早退，P3-21）──
         with open(os.path.join(defects_dir, "defect-2.md"), "w", encoding="utf-8") as f:

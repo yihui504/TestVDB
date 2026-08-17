@@ -33,7 +33,7 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 | ❌ 自己生成 structured_contract.json | ✅ `Agent(subagent_type="testvdb:contract-formalizer")` |
 | ❌ 自己写 Python 攻击脚本 | ✅ `Agent(subagent_type="testvdb:attack-boundary/state/semantic")` |
 | ❌ 自己运行 Python 脚本或 curl | ✅ `Agent(subagent_type="testvdb:docker-executor")` |
-| ❌ 自己判断缺陷有效性 | ✅ `Agent(subagent_type="testvdb:judge-*")` |
+| ❌ 自己判断缺陷有效性 | ✅ `Agent(subagent_type="testvdb:chain-auditor")`（ADR-0008） |
 | ❌ 自己生成缺陷报告 | ✅ `Agent(subagent_type="testvdb:reporter")` |
 
 **主进程只使用这些工具做编排工作：** `Read`(读文件), `Write`(写状态文件), `Bash`(验证产出), `Grep`(搜索), `Glob`(匹配), `Agent`(派发子Agent)。跨 turn 由 Stop hook（`pipeline_gate.py`）驱动，主进程无需调度工具。
@@ -505,12 +505,7 @@ docker ps --filter "name=testvdb-{target}" --format "{{.Names}}" 2>/dev/null
 THREAT_MODEL_ATTACK=$(python scripts/threat_model_injector.py {target} --mode attack --text-only 2>/dev/null || echo "")
 ```
 
-**Judge 增强注入**（intelligence.enabled=true 且 inject_to_judge_agents=true）：
-```bash
-THREAT_MODEL_JUDGE_SEVERITY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type severity --text-only 2>/dev/null || echo "")
-THREAT_MODEL_JUDGE_NOVELTY=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type novelty --text-only 2>/dev/null || echo "")
-THREAT_MODEL_JUDGE_EVIDENCE=$(python scripts/threat_model_injector.py {target} --mode judge --judge-type evidence --text-only 2>/dev/null || echo "")
-```
+（ADR-0008：Judge 增强注入已随 Judge Quartet 删除；threat_model 仅 --mode attack 注入仍在用。）
 
 ### 8b. ATTACK_GEN — 并发出动 Attack Trio + Explorer
 

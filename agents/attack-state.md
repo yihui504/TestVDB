@@ -429,7 +429,7 @@ Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `$
 
 ## Metadata 产出契约（P3-18b）
 
-每个候选脚本**必须额外**产出 `debate_logs/{script_id}.meta.json`（与 `.py` 同目录），供 aggregate_votes 合并 param/endpoint 到 confirmed entry → novelty_gate grade_candidate 用 param_name 做真 GitHub/corpus 搜索（产出 NOVEL/KNOWN 判决，非全 UNVERIFIED）。
+每个候选脚本**必须额外**产出 `debate_logs/{script_id}.meta.json`（与 `.py` 同目录），供 extract_candidates/novelty_gate 消费 param/endpoint → grade_candidate 用 param_name 做真 GitHub/corpus 搜索（产出 NOVEL/KNOWN 判决，非全 UNVERIFIED；ADR-0008：aggregate_votes 已删）。
 
 ```json
 {
@@ -441,7 +441,7 @@ Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `$
 }
 ```
 
-⛔ **强制步骤**：Write `{script_id}.py` 后，立即 Write 对应 `{script_id}.meta.json`（缺 meta.json 的脚本会被 aggregate_votes 视为 param 缺失，novelty 降级 UNVERIFIED）。
+⛔ **强制步骤**：Write `{script_id}.py` 后，立即 Write 对应 `{script_id}.meta.json`（缺 meta.json 的脚本 param 缺失，novelty 降级 UNVERIFIED；ADR-0008：由 extract_candidates/novelty_gate 消费）。
 
 ---
 

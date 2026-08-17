@@ -53,20 +53,21 @@ version: 1.1.0
 2. 镜像 tag 预检 → 启动容器 → 健康检查
 3. 安装 SDK 依赖 → 在独立执行容器中运行脚本
 4. 收集结果（stdout/stderr/exit code/HTTP 响应/容器日志）
-5. **容器保持运行**（供后续 Judge 和 Reporter 复用）
+5. **容器保持运行**（供后续 Reporter 复用）
 
-### Phase 5: 缺陷判定（4-Judge 两阶段辩论）
+### Phase 5: 缺陷判定（ADR-0008 证据链双 Agent）
 
-**阶段 1：** 先派 judge-doc（文档契约验证，权重调节器）
-**阶段 2：** 确认 doc 结果后，并发派其他 3 个 Judge：
-- judge-evidence：6 维度证据评分（复现性/隔离性/完整性/类型准确性/源可追溯性）
-- judge-novelty（Novelty Triage）：GitHub Issues 搜索初筛，5 级标注（new/new_similar/already_reported/known_wontfix/unknown），仅 known_wontfix 投 not_defect，其余投 is_defect
-- judge-severity：4 级严重性分类 + 触发频率 + Workaround 评估
-
-**投票逻辑（加权 AND）：**
-- evidence=is_defect AND severity∈{Critical,High,Medium,Low} → 辩论确认 (Debate-Confirmed)
-- evidence=not_defect OR severity=trivial → 丢弃
-- doc_verification_result 作为权重调节器（DOC_PARTIAL/MISMATCH 时降级但不阻塞确认）
+1. **候选提取**（extract_candidates.py，机械）：output_*.log 含 `VERDICT: DEFECT_FOUND` → candidates.jsonl
+2. **L1 机械闸门**（verify_live_l1.py，0 token）：杀 ~90% 历史假阳性模式，REFUTED 淘汰
+3. **evidence-builder 按候选并发 fan-out**（1 builder/候选）：
+   - step1 文档验证 + 执行证据审查 + 证据链追溯 → `evidence_chain/{defect_id}.json`
+   - step2 源码搜证（本地 clone Grep + 调用链追踪）
+   - 不做真伪判定，只写实证据
+4. **chain-auditor 单实例收口**（全部 builder .done 后）：完备性/一致性/自洽性三查 + 三视角聚合（契约/物理压倒行为优雅）→ `chain_verdicts.json`
+   - verdict ∈ {DEFECT, NOT_DEFECT, NEEDS_MORE_EVIDENCE}
+   - FP 判定必填 fp_evidence_source（doc/source/both/behavior）+ root_cause
+   - NEEDS_MORE_EVIDENCE 回 builder 补证一轮（最多 1 次），仍矛盾保守判 NOT_DEFECT
+5. **novelty 终判后置**到提交前（Phase 7 后）：NON_NOVEL 归档不删（archived/ + manifest.json）
 
 ### Phase 6: 报告生成
 

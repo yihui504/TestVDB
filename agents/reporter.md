@@ -61,7 +61,7 @@ Turn 5: Bash  ls -la ${SESSION_DIR}/defects/defect-*.md
 ## Metadata
 - Defect ID: TESTVDB-{TARGET}-{N}
 - Type: {Type1_IllegalSuccess | Type2_PoorDiagnostics | Type3_RuntimeFailure | Type4_StateLogicViolation}
-- Severity: {Critical | High | Medium | Low}
+- Severity: {Critical | High | Medium | Low}（ADR-0008：判定管线已不产 severity；展示字段保留，由 Type 推断——Type3→High，Type1→Medium，Type2/4→Low，仅人工分流参考）
 - Endpoint: {HTTP_METHOD} {endpoint_path}
 - Discovered: {ISO 8601 timestamp}
 
