@@ -671,8 +671,8 @@ def main():
         print(f"ERROR: {gate_results['error']}", file=sys.stderr)
         sys.exit(2)
 
-    # Load aggregation for final verdict
-    aggregation = load_stage2_aggregation(session_dir)
+    # Load aggregation for final verdict (ADR-0008: chain_verdicts 优先，与 run_novelty_gate 同源)
+    aggregation = load_candidates_source(session_dir)
 
     # Generate final verdict
     final_verdict = generate_final_verdict(session_dir, gate_results, aggregation or {})

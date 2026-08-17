@@ -12,15 +12,35 @@ from datetime import datetime, timezone
 from _pipeline_utils import read_json, write_json, debate_log_path, extract_confirmed
 
 
+def _load_verdicts_source(session_dir: str):
+    """ADR-0008: chain_verdicts（DEFECT 条目）优先；旧 stage2_aggregation fallback。"""
+    cv_path = debate_log_path(session_dir, "chain_verdicts")
+    cv = read_json(str(cv_path))
+    if cv is not None:
+        verdicts = cv.get("verdicts", [])
+        confirmed = [
+            {"defect_id": v.get("defect_id", ""),
+             "defect_type": v.get("defect_type", "unknown"),
+             "endpoint": v.get("endpoint", "")}
+            for v in verdicts
+            if isinstance(v, dict) and v.get("verdict") == "DEFECT"
+        ]
+        return {"confirmed_defects": confirmed, "source": "chain_verdicts"}
+    agg_path = debate_log_path(session_dir, "stage2_aggregation")
+    agg = read_json(str(agg_path))
+    if agg is not None:
+        return agg
+    return None
+
+
 def dedup_defects(session_dir: str) -> dict:
-    stage2_agg_path = debate_log_path(session_dir, "stage2_aggregation")
-    current = read_json(str(stage2_agg_path))
+    current = _load_verdicts_source(session_dir)
     if current is None:
         return {
             "before_count": 0,
             "after_count": 0,
             "deduped": [],
-            "error": "stage2_aggregation.json not found",
+            "error": "chain_verdicts.json / stage2_aggregation.json not found",
         }
 
     history_file = os.path.join(os.path.dirname(session_dir), "dedup_state.json")
