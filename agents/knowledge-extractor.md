@@ -90,6 +90,65 @@ curl -sf http://127.0.0.1:11235/health && echo "Crawl4AI OK" || echo "Crawl4AI D
    - 仅当 Crawl4AI 和 curl 都不可达时，使用 WebFetch
 4. 如果找不到匹配版本的文档 → 在 raw_knowledge.md 中标注 `doc_version_mismatch: true`，记录实际文档版本
 
+### Step 1.5: 版本路由规则（新增 — 反"靠 WebSearch 试错碰运气"）
+
+**背景**：各 VDB 文档站的版本路由策略不同（qdrant/milvus 有版本归档，weaviate 无）。仅靠 WebSearch `{target} API reference {version}` 是脆弱的——搜索引擎倾向于返回 latest 版 URL，触发 major.minor mismatch 后只能"重新搜索"且无明确 fallback URL 构造规则。本步给出**确定性的 per-target URL 构造规则**。
+
+**① 判定目标版本是否属于 latest 系列**
+
+对每个 target，先查 GitHub latest release tag，与目标版本比 major.minor：
+
+| Target | GitHub latest 查询 | 实测示例 |
+|--------|---|---|
+| milvus | `curl -sL https://api.github.com/repos/milvus-io/milvus/releases/latest` → `tag_name` | v3.0.0 |
+| qdrant | `curl -sL https://api.github.com/repos/qdrant/qdrant/releases/latest` → `tag_name` | v1.19.0 |
+| weaviate | `curl -sL https://api.github.com/repos/weaviate/weaviate/releases/latest` → `tag_name` | v1.39.0 |
+| pgvector | `curl -sL https://api.github.com/repos/pgvector/pgvector/tags`（取首项） | v0.8.0 |
+
+设目标 `v = M.m.P`，latest `V = M'.m'.P'`：
+- `M.m == M'.m'` → 目标属于 latest 系列 → 走"无前缀"URL
+- `M.m != M'.m'` → 目标是老版本 → 走"versioned"URL
+
+**② Per-target URL 模板**
+
+**milvus**（概念文档 latest/versioned 双形态并存；api-reference 子树**始终**带 `v{M}.{m}.x`）：
+
+| 子树 | latest 系列（v 属于 latest） | versioned（v 不是 latest） |
+|------|---|---|
+| 概念文档 `docs/*.md` | `https://milvus.io/docs/{page}.md` | `https://milvus.io/docs/v{M}.{m}.x/{page}.md` |
+| REST API ref | `https://milvus.io/api-reference/restful/v{M}.{m}.x/v2/...` | 同左（api-ref 子树始终带 `v{M}.{m}.x`，无"无前缀"形态） |
+
+实证：`results/milvus/v3.0.0/raw_knowledge.md` 83 URL 全是 api-reference，**0 个 `docs/*.md` 概念文档**——这是 Step 2.5 要补的概念文档子树（api-ref 页面只列参数名/类型，约束的详细描述在概念文档）。
+
+**qdrant**（API ref latest/versioned 双形态并存；概念文档站**无**版本归档）：
+
+| 子树 | latest 系列 | versioned |
+|------|---|---|
+| API ref `api-reference/...` | `https://api.qdrant.tech/api-reference/...` | `https://api.qdrant.tech/v-{M}-{m}-x/api-reference/...` |
+| 概念文档 `documentation/...` | `https://qdrant.tech/documentation/...` | **无 versioned 形态**（qdrant.tech/documentation 仅维护 latest） |
+
+注意：qdrant 老版本的概念文档无法版本对齐——只能用 API ref 的 versioned 路径对齐契约 + 概念文档抓 current，并在 raw_knowledge.md 标 `doc_version_provenance: concept_docs_current_only_aligned_via_api_ref`。
+
+**weaviate**（**无版本归档**，专项处理）：
+
+weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weaviate/`）所有页面始终是 current，URL **无 `v{M}.{m}` 路径段**。契约主源**必须**用 GitHub tag 下的 OpenAPI spec 做版本对齐：
+
+| 数据 | 主源 | 验证 |
+|------|------|------|
+| API 端点 + 参数 schema | `https://raw.githubusercontent.com/weaviate/weaviate/v{tag}/openapi-specs/schema.json` | curl GET 验证 200；`tag` = 目标 version（如 `v1.38.2`） |
+| 行为约束 / 概念 | `weaviate.io/developers/weaviate/...`（current） | 抓取时刻可能偏离目标版本，**强制标注** `doc_version_provenance: current_only_aligned_to_v{tag}_via_openapi` |
+
+**关键规则**：weaviate 若目标 tag 在 GitHub 不存在 → 报错退出，标 `openapi_tag_missing: true`，**不**降级到 current-only（防版本漂移）。与 Step 6b（OpenAPI cross-check）的关系：Step 6b 用本地 `.sourcedeps/weaviate/{version}/docs/redoc/master/openapi.json` 做端点覆盖率自检；本步用 GitHub 远程 `openapi-specs/schema.json@v{tag}` 做版本对齐——两件事不能互替。
+
+**pgvector**：GitHub README + SQL docs 始终是 latest，无版本路由问题；老版本走 `github.com/pgvector/pgvector/blob/v{tag}/README.md`。
+
+**③ 验证 URL 可达性**
+
+构造 URL 后必须 Crawl4AI 抓取或 `curl -sL` 验证：
+- HTTP 200 → 可用
+- **milvus.io 返回 302 不算失败**——milvus.io 对裸 curl 反爬虫 redirect，但 Crawl4AI（带浏览器渲染）实际能抓到内容（已有 `results/milvus/2.4.0/raw_knowledge.md` 抓过 `docs/v2.4.x/single-vector-search.md` 标 `matched` 为证）；判定标准是**抓到正文内容**而非状态码
+- HTTP 404 → 用 WebSearch 找替代页，并在 raw_knowledge.md 标 `url_construction_failed: true`
+
 ### Step 2: 获取 API 端点列表
 
 **对于 REST API 数据库（qdrant、weaviate、milvus）：**
@@ -103,6 +162,48 @@ curl -sf http://127.0.0.1:11235/health && echo "Crawl4AI OK" || echo "Crawl4AI D
 2. **降级用 WebFetch**（仅当 Crawl4AI 不可用）
 3. 提取所有 SQL 操作：CREATE TABLE、CREATE INDEX、INSERT、SELECT、UPDATE、DELETE、向量操作符
 4. 按功能分类：DDL、DML、DQL、索引管理
+
+### Step 2.5: 概念文档必抓清单（新增 — 反"只抓 api-reference 漏约束"）
+
+**背景**：API reference 页面只列参数名/类型/必填；**约束的详细描述**（min/max 语义、枚举含义、组合规则、by-design 注解）通常在概念文档页。`results/milvus/v3.0.0/raw_knowledge.md` 历史 run 抓了 83 个 api-reference URL 但 **0 个 `docs/*.md` 概念文档**——这与 qdrant v1.18.3 历史 run 中 contract-formalizer 系统幻觉 `m/ef_construct≤16384` 不存在的上限（约束描述不在被抓的页面 → LLM 编造）是同类根因。
+
+每个 target 在 Step 2 抓 API 端点之外，**必须额外抓取以下概念文档子树**。URL 按 Step 1.5 版本路由规则构造；每个 URL 必须 Crawl4AI 抓取验证（milvus.io 反爬虫 302 不算失败，判定标准是抓到正文内容）；404 用 WebSearch 找替代页并记录。
+
+**milvus**（约束主源 — 概念文档）：
+- `docs/index.md` — 索引类型（HNSW/IVF/DISKANN/...）、index params（M/efConstruction/nlist）
+- `docs/metric.md` — 距离度量（L2/IP/COSINE/JACCARD/HAMMING）语义与适用索引
+- `docs/consistency.md` — 4 级一致性（Strong/Bounded/Session/Eventually）语义
+- `docs/schema.md` — 字段类型（FloatVector/BinaryVector/VarChar）、动态 schema、partition key
+- `docs/single-vector-search.md` — search params（nprobe/ef/radius/range_filter）
+- `docs/filtered-search.md` — 过滤表达式语法、布尔规则
+- `docs/boolean.md` — 布尔表达式操作符
+- `docs/manage-collections.md` — collection 生命周期、load/release 状态
+
+**qdrant**（API ref + concepts 双源；URL 用**目录形态带尾 `/`**，不是 `.md` —— `.md` 形态返回 404）：
+- `documentation/concepts/collections/` — collection 数据模型、collection params（vectors config, optimizers_config, hnsw_config）
+- `documentation/concepts/points/` — point 操作语义
+- `documentation/concepts/vectors/` — vector 数据模型、dimension 约束
+- `documentation/concepts/payload/` — payload indexing、过滤表达式
+- `documentation/concepts/indexing/` — HNSW/quantization 配置约束（hnsw_ef, exact, quantization）
+- `documentation/concepts/search/` — search vs recommend vs discover、score 模型
+- `documentation/collections/` — collection 管理操作详细
+- `documentation/points/` — point 操作详细
+- `documentation/search/` — search params 详细
+
+**weaviate**（current-only + GitHub tag fallback；版本路由详见 Step 1.5 weaviate 段；URL **无后缀、无尾 `/`**）：
+- `developers/weaviate/concepts/storage` — collection/object/data model
+- `developers/weaviate/concepts/search` — search 模型
+- `developers/weaviate/manage-collections` — collection schema、vectorizer config
+- `developers/weaviate/manage-collections/multi-tenancy` — multi-tenancy 约束
+- `developers/weaviate/config-refs` — 环境变量 + 运行时配置
+- `developers/weaviate/api/rest` + `developers/weaviate/api/graphql` — API 入口
+
+**pgvector**：`README.md` 索引章节 + SQL 操作符章节（已在 Step 2 处理）。
+
+**产出要求**：
+1. 每个被抓的概念文档页必须在 raw_knowledge.md 的 **Document Sources 表里独立列出**（与 API reference 页分行），不能合并为"docs/*"通配
+2. **约束提取**（Step 3）的 source_url **必须优先引用概念文档**而非 api-reference——概念文档是约束的**主源**，api-reference 只是参数清单的源
+3. Step 6 完整性自检必须确认：**每个 target 的概念文档清单至少抓到 5 个页面**（若清单不足 5 项则全抓），未达标的端点约束不得标 `source_verified: true`
 
 ### Step 3: 提取约束信息
 

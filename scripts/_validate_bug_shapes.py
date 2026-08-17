@@ -9,6 +9,7 @@ Checks:
 1. abstract_pattern 非空 + 字符数 ≥ 30
 2. abstract_pattern 不含具体值（regex param=value，反 repro 泄漏）
 3. known_instances 非空 + 每条有 issue_number
+3b. known_instances 每条 context 字段（非 issue_number）非全 N/A（反空壳 — D2 暴露）
 4. symptom_pattern / attack_strategy_hints 非空
 5. shape_type ∈ 6 类 minimal taxonomy
 6. source_issues_count ≥ 3
@@ -46,6 +47,10 @@ REPRO_LEAK_RE = re.compile(r"\b[a-z][a-z0-9_]*\s*=\s*\[?[-]?\d")
 
 MIN_ABSTRACT_LEN = 30
 MIN_SOURCE_ISSUES = 3
+
+# 空壳检测：被视作"N/A"的空值（大小写不敏感）
+# extractor 历史产 issue_number 有值但 endpoint/param/value 全 N/A 的空壳（chroma 44 个、qdrant 4 个）
+NA_VALUES = {"", "n/a", "na", "none", "null", "unknown"}
 
 
 def check_shape(shape: dict) -> list[dict]:
@@ -86,6 +91,26 @@ def check_shape(shape: dict) -> list[dict]:
                     "check": "missing_issue_number",
                     "detail": f"known_instances[{i}] 缺 issue_number",
                 })
+            # Check 3b: empty-shell instance（反空壳 — D2 暴露）
+            # 所有非 issue_number 字段都 N/A = extractor 产了 issue 号但无 endpoint/param/value
+            # 可执行证据（chroma 44 个、qdrant 4 个均为此模式）
+            context_keys = [k for k in inst if k != "issue_number"]
+            if context_keys:
+                na_count = sum(
+                    1 for k in context_keys
+                    if str(inst.get(k, "")).strip().lower() in NA_VALUES
+                )
+                if na_count == len(context_keys):
+                    failures.append({
+                        "shape_id": sid,
+                        "check": "empty_shell_instance",
+                        "detail": (
+                            f"known_instances[{i}] (issue #{inst.get('issue_number')}): "
+                            f"all {len(context_keys)} context fields "
+                            f"({', '.join(context_keys)}) are N/A — empty-shell, no "
+                            f"actionable evidence for attack agent"
+                        ),
+                    })
 
     # Check 4: symptom_pattern + attack_strategy_hints 非空
     if not (shape.get("symptom_pattern") or "").strip():
