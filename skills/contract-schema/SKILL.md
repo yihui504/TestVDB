@@ -95,7 +95,7 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
 | description | string | Yes | Human-readable constraint |
 | assertion | string | Yes | Machine-readable check |
 | type | string | Yes | `type_constraint/range_constraint/state_constraint` |
-| confidence | float | Yes | 0.0-1.0 confidence score |
+| evidence_tier | string | Yes | `explicit` / `inferred`（ADR-0008 两档） |
 
 ## 断言字段
 
@@ -106,7 +106,7 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
 | description | string | Yes | Human-readable |
 | category | string | Yes | `type_check/range_check/state_check/behavioral` |
 | expected_behavior | string | Yes | Expected outcome |
-| confidence | float | Yes | 0.0-1.0 |
+| evidence_tier | string | Yes | `explicit` / `inferred`（ADR-0008 两档） |
 | defect_type_if_violated | string | No | Type1-4 classification |
 
 ## 置信度指南

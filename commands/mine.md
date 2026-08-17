@@ -507,13 +507,19 @@ THREAT_MODEL_ATTACK=$(python scripts/threat_model_injector.py {target} --mode at
 
 （ADR-0008：Judge 增强注入已随 Judge Quartet 删除；threat_model 仅 --mode attack 注入仍在用。）
 
-### 8b. ATTACK_GEN — 并发出动 Attack Trio + Explorer
+### 8b. ATTACK_GEN — 契约分块 + 并发出动 Attack Trio + Explorer
+
+**契约分块（ADR-0008，每轮一块）**：
+```bash
+python scripts/chunk_contract.py results/{target}/{version}/structured_contract.json --session-dir ${PROJECT_ROOT}/results/{target}/{version}/{timestamp}
+```
+第 R 轮派发 `chunks[R-1]`。派发 prompt 附 `本轮块={chunk_id}` + 块内 unit_ref 清单。
 
 **⛔ 绝对禁止：主进程自己生成攻击脚本。必须通过 Agent 工具派发。**
 
 ```
 Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}",
-  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=${PROJECT_ROOT}/results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。{THREAT_MODEL_ATTACK}")
+  prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=${PROJECT_ROOT}/results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, reflection_context={reflection_context}, 本轮块={chunk_id}（块内 unit_ref 清单见 chunks.json，只攻该块内单元）。{THREAT_MODEL_ATTACK}")
 
 Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}",
   prompt="按照 agents/attack-state.md 规范...（同上格式）{THREAT_MODEL_ATTACK}")
@@ -546,7 +552,7 @@ cat results/{target}/{version}/{timestamp}/vein_summary.json 2>/dev/null | pytho
 
 主进程自行执行自动化审查（编排协调工作）：
 
-1. 收集脚本 → 自动去重（endpoint + constraint_id + strategy）
+1. 收集脚本（ADR-0008：脚本去重已删——重复攻击交给执行与 chain-auditor 自然淘汰，缺陷级去重在 8e.5）
 2. 语法验证（`python -m py_compile`）
 3. 约束存在性验证
 4. 脚本错误启发式检测：`python scripts/detect_risky_scripts.py "results/{target}/{version}/{timestamp}"`

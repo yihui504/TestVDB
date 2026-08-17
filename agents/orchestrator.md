@@ -278,7 +278,14 @@ inject_to_judge_agents 配置废弃。threat_model_injector.py 仅 --mode attack
 
 #### 8b. 并发出动 Attack Trio + Vein（v2.5 — attack-vein 作为第 4 个并发 agent）
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S1 --phase-data '{"ATTACK_GEN": {"scripts_generated": N, "agents_completed": [...]}}'`
+**契约分块派发（ADR-0008，每轮一块）**：派发前先确定性分块：
+```bash
+python scripts/chunk_contract.py ${SESSION_DIR}/../structured_contract.json --session-dir $SESSION_DIR
+# 产出 chunks.json（按 endpoint 分组，每块 ≤12 可攻单元）
+```
+第 R 轮派发 `chunks[R-1]`（round 1 → chunk 1，round 2 → chunk 2，…，轮数 > 块数则循环）。派发 prompt 中指定 `本轮块={chunk_id}` + 块内 unit_ref 清单——attack agents 只攻该块内单元（策略覆盖目标驱动，见各 agent 规范的"强制输出要求"）。vein agent 不受分块约束（其 endpoint 选择由 condition-richness 自主决定，与块机制互补）。
+
+**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S1 --phase-data '{"ATTACK_GEN": {"scripts_generated": N, "agents_completed": [...], "chunk_id": "{chunk_id}"}}'`
 
 **并发（非顺序）** 派四个 Attack Agent（boundary + state + semantic + vein），**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
@@ -309,7 +316,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 3. 在 mine_state.json 的 error_log 中记录超时事件
 4. 如果 3 个 Attack Agent 全部超时，终止当前轮次并记录错误
 
-#### 8c. 辩论 Stage 1（自动化审查 + 去重 + 交叉审查）
+#### 8c. 辩论 Stage 1（自动化审查 — ADR-0008：脚本去重已删）
 
 **完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EXECUTION --phase-data '{"DEBATE_S1": {"approved_count": N, "rejected_count": M}}'`
 
@@ -317,9 +324,9 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
 **自动化审查步骤**：
 
-1. **收集脚本**：读取三个 Attack Agent 产出的所有脚本文件，按来源标记为 boundary/state/semantic
-2. **自动去重**：按 `endpoint + constraint_id + strategy` 组合去重，只保留 confidence 最高的脚本。高 confidence（≥0.7）且无重复的脚本直接通过
-3. **语法验证**：对每个脚本执行 `python -m py_compile` 验证语法，语法错误直接丢弃
+1. **收集脚本**：读取 Attack Agents 产出的所有脚本文件，按来源标记为 boundary/state/semantic
+2. **（ADR-0008 删）脚本去重不再执行**——按 endpoint+constraint+strategy 去重会压制合法的多角度攻击同一约束；重复脚本交给执行与 chain-auditor 自然淘汰（同根因候选在 8e.5 缺陷级去重合并）
+3. **语法验证**：对每个脚本执行 `python -m py_compile` 验证语法，语法错误进 retry 子循环（4.6）
 4. **约束存在性验证**：检查脚本的 constraint_id 是否在 structured_contract.json 中存在，不存在的直接丢弃
 4.5. **v2.2 新增 — API 调用格式 AST 验证**：对通过语法验证的脚本，用 Python `ast` 模块检测 API 调用格式：
    - 裸 `.json()` 链式调用（`requests.post(...).json()["key"]` 等）→ **REJECT**（必现 SCRIPT_ERROR）
@@ -362,11 +369,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
    **Step 4.6.4**：retry 子循环结束后，剩下的脚本进 Step 5。
 
-5. **跨 Agent 交叉审查**：对跨 Agent 重复的脚本（相同 endpoint+constraint 被多个 Attack Agent 独立生成），比较各 Agent 的实现：
-   - 各 Agent 使用不同测试值/策略 → 选择覆盖最广的版本
-   - 各 Agent 使用相同测试值 → 保留 confidence 最高的版本
-   - 交叉验证通过的脚本 confidence 提升 0.1
-6. **抽样审查**：只对 confidence < 0.7 或跨 Agent 重复的脚本做详细审查（评估预期是否合理、攻击策略是否匹配）
+5. **（ADR-0008 删）跨 Agent 交叉审查与 confidence 抽样不再执行**——confidence 字段已从契约与脚本链路删除
 7. **记录审查结果**：将审查结果写入 `debate_logs/stage1.json`
 8. **脚本路径标准化**：将通过审查的脚本按来源复制到对应的子目录（Executor 在此搜索）。使用 Bash 执行：
    ```bash

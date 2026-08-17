@@ -158,15 +158,14 @@ tools:
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["constraint_id", "endpoint", "description", "assertion", "type", "confidence", "source_url"],
+            "required": ["constraint_id", "endpoint", "description", "assertion", "type", "evidence_tier", "source_url"],
             "properties": {
               "constraint_id": { "type": "string" },
               "endpoint": { "type": "string" },
               "description": { "type": "string" },
               "assertion": { "type": "string" },
               "type": { "type": "string", "enum": ["type_constraint"] },
-              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
+              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred"], "description": "证据层级（ADR-0008 两档）：explicit=文档原文明确声明；inferred=示例/行为推断（description 须以 inferred: 开头）" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
               "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" },
               "source_verified": { "type": "boolean", "description": "source_url 是否经 get_file_contents/WebFetch 二次核对真包含对应 constraint 文本。默认 false。agent 核对通过才能设 true。" }
@@ -177,15 +176,14 @@ tools:
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["constraint_id", "endpoint", "description", "assertion", "type", "confidence", "source_url"],
+            "required": ["constraint_id", "endpoint", "description", "assertion", "type", "evidence_tier", "source_url"],
             "properties": {
               "constraint_id": { "type": "string" },
               "endpoint": { "type": "string" },
               "description": { "type": "string" },
               "assertion": { "type": "string" },
               "type": { "type": "string", "enum": ["range_constraint"] },
-              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
+              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred"], "description": "证据层级（ADR-0008 两档）：explicit=文档原文明确声明；inferred=示例/行为推断（description 须以 inferred: 开头）" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
               "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" },
               "source_verified": { "type": "boolean", "description": "source_url 是否经 get_file_contents/WebFetch 二次核对真包含对应 constraint 文本。默认 false。agent 核对通过才能设 true。" }
@@ -196,15 +194,14 @@ tools:
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["constraint_id", "endpoint", "description", "assertion", "type", "confidence", "source_url"],
+            "required": ["constraint_id", "endpoint", "description", "assertion", "type", "evidence_tier", "source_url"],
             "properties": {
               "constraint_id": { "type": "string" },
               "endpoint": { "type": "string" },
               "description": { "type": "string" },
               "assertion": { "type": "string" },
               "type": { "type": "string", "enum": ["state_constraint"] },
-              "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
+              "evidence_tier": { "type": "string", "enum": ["explicit", "inferred"], "description": "证据层级（ADR-0008 两档）：explicit=文档原文明确声明；inferred=示例/行为推断（description 须以 inferred: 开头）" },
               "source_url": { "type": "string", "description": "该约束来源的文档 URL" },
               "source_status": { "type": "string", "enum": ["reachable", "unreachable", "degraded"], "description": "source_url 可达性状态" },
               "source_verified": { "type": "boolean", "description": "source_url 是否经 get_file_contents/WebFetch 二次核对真包含对应 constraint 文本。默认 false。agent 核对通过才能设 true。" }
@@ -217,15 +214,14 @@ tools:
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["assertion_id", "endpoint", "description", "category", "expected_behavior", "confidence", "source_url"],
+        "required": ["assertion_id", "endpoint", "description", "category", "expected_behavior", "evidence_tier", "source_url"],
         "properties": {
           "assertion_id": { "type": "string" },
           "endpoint": { "type": "string" },
           "description": { "type": "string" },
           "category": { "type": "string", "enum": ["type_check", "range_check", "state_check", "behavioral"] },
           "expected_behavior": { "type": "string" },
-          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "evidence_tier": { "type": "string", "enum": ["explicit", "inferred_from_example", "inferred_from_behavior", "convention"], "description": "证据层级：文档明确声明 → 示例推断 → 行为推断 → 惯例" },
+          "evidence_tier": { "type": "string", "enum": ["explicit", "inferred"], "description": "证据层级（ADR-0008 两档）：explicit=文档原文明确声明；inferred=示例/行为推断（description 须以 inferred: 开头）" },
           "defect_type_if_violated": { "type": "string", "enum": ["Type1_IllegalSuccess", "Type2_PoorDiagnostics", "Type3_RuntimeFailure", "Type4_StateLogicViolation"] },
           "source_verified": { "type": "boolean", "description": "source_url 是否经二次核对真包含对应 assertion 文本。默认 false。" },
               "source_url": { "type": "string", "description": "该断言来源的文档 URL" },
@@ -318,11 +314,11 @@ tools:
 | 状态/一致性 | "atomic", "consistent", "after {op}", "should not affect" | state_constraint |
 | 行为/响应 | "returns", "returns error", "successful", "failure", "should not" | assertion (behavioral) |
 
-### 规则 2.5: 端点分类标准化（强制，target 中立）
+### 规则 2.5: 端点分类（强制）
 
-在生成 structured_contract.json 时，所有 api_endpoints[].category 必须使用**通用功能分类词表**（target 中立，所有 DB 共用）：`schema / data / search / index / admin / other`。禁止用 DB 特定概念名（collections/points/objects/class/entities 等）作 category——它们是 DB 资源名，不是功能分类。
+所有 api_endpoints[].category 从固定词表中选值：`schema / data / search / index / admin / other`。禁止用 DB 特定资源名（collections/points/objects/class/entities 等）作 category——它们是端点的 path 资源，不是类别。
 
-从 raw_knowledge.md 提取端点时，按**功能语义**归类到通用词表：
+从 raw_knowledge.md 提取端点时，按功能语义归类：
 
 | 端点功能 | 通用 category | 各 DB 对应资源（仅参考，不作 category） |
 |---------|--------------|----------------------------------------|
@@ -333,13 +329,10 @@ tools:
 | 运维管理（cluster/snapshot/backup/shard/partition/health/stats/modules/vacuum） | `admin` | partition, alias, cluster, system |
 | 罕见、无法按功能归类 | `other` | — |
 
-**标准化步骤**：
+**步骤**：
 1. 从 raw_knowledge.md 提取端点时，先识别其功能（管结构/读写数据/检索/索引/运维）
-2. 按上表归到通用 category
-3. 在 api_endpoints 中只使用通用词表（schema/data/search/index/admin/other）
-4. 在输出验证中确认无 DB 特定概念名（collections/points/objects/class 等）作 category
-
-**注意**：此分类是强制性的。DB 特定资源名（collections/points/objects 等）是端点的 path/资源，不是功能 category——category 必须是通用功能词。
+2. 按上表归到固定 category 词表之一
+3. 输出验证确认无 DB 特定资源名作 category
 
 ### 规则 2.6: 耦合约束展开 + 字面量格式记录 + by-design 标注（强制 — 防系统性假阳性）
 
@@ -360,33 +353,21 @@ tools:
 - ✅ assertion `"vector → halfvec 隐式 cast (by-design)；跨类型距离操作应成功"`，不设 defect_type_if_violated
 - 自检：成对可操作类型间，文档是否支持隐式转换？支持 → 记 by-design。
 
-### 规则 3: 置信度标记与证据分级
+### 规则 3: 证据分级（ADR-0008 简化版 — 删 confidence 自评，两档 evidence_tier）
 
-每条约束/断言都需标记 `confidence`（0.0-1.0）和 `evidence_tier` 字段。
+每条约束/断言标记 `evidence_tier` 字段（`explicit` / `inferred` 两档）。**不再使用 LLM confidence 自评**（导师 2026-08-17 反馈：自评分数不可靠且无消费方，机械的文档可追溯性分级已足够）。
 
-**核心原则：契约只能断言文档明确声明的事实。任何从示例、行为或惯例推断的声明都是低置信度的猜测，不能作为硬约束。**
+**核心原则：契约只能断言文档明确声明的事实。任何推断的声明都不是硬约束。**
 
 **evidence_tier（证据层级）**：
-- **`explicit`**: 文档原文明确声明了该行为或约束。需要能从 raw_knowledge.md 中找到对应的原文句子。confidence ≥ 0.9。
-- **`inferred_from_example`**: 从文档示例中间接推断。confidence 0.6-0.8。
-- **`inferred_from_behavior`**: 从相关端点或同类 API 行为推断，文档未直接说明。confidence 0.4-0.6。
-- **`convention`**: 行业惯例推断（如 "REST APIs typically..."），文档无任何相关内容。confidence 0.3-0.5。
+- **`explicit`**: 文档原文明确声明了该行为或约束。必须能从 raw_knowledge.md 中找到对应的原文句子（可追溯到 source_url）。
+- **`inferred`**: 从文档示例或相关端点行为推断，文档未直接声明。description 必须以 "inferred:" 开头标明推断性质。
 
-**evidence_tier 判定流程（逐条检查每条 constraint/assertion）**：
+**判定流程（逐条检查）**：
 1. 在 raw_knowledge.md 中搜索该端点对应的文档原文
-2. 如果文档原文直接描述了该行为 → `explicit`，confidence ≥ 0.9
-3. 如果文档示例暗示了该行为但未明确声明 → `inferred_from_example`
-4. 如果从其他端点的文档推断 → `inferred_from_behavior`
-5. 如果仅基于行业惯例而不依赖任何文档内容 → `convention`
-6. **`convention` 层级的 constraint 不得纳入契约**（confidence < 0.4）
-7. **`inferred_from_behavior` 层级的 state_constraint 不得声称行为具有保证性**（如 "must"、"guaranteed"、"ensures"）——只能标记为 "expected but unverified"
-
-**confidence 调整规则**：
-- **≥ 0.9**: evidence_tier = `explicit`
-- **0.6-0.8**: evidence_tier = `inferred_from_example`
-- **0.4-0.6**: evidence_tier = `inferred_from_behavior`
-- **0.3-0.5**: evidence_tier = `convention`
-- **< 0.4**: 不纳入契约
+2. 文档原文直接描述该行为 → `explicit`
+3. 文档示例暗示但未声明，或从同类 API 推断 → `inferred`（description 前缀 "inferred:"）
+4. **完全找不到文档依据（纯行业惯例/训练数据记忆）→ 不得纳入契约**（这是删掉 convention 档的实质：不是降级，是不收）
 
 ### 规则 4: 约束 ID 命名
 
@@ -427,7 +408,7 @@ tools:
 2. 所有必填字段非空
 3. 约束 ID 唯一（无重复）
 4. 断言引用有效的端点路径
-5. confidence 字段全部在 0.0-1.0 范围内
+5. evidence_tier 全部 ∈ {explicit, inferred}；inferred 条目的 description 以 "inferred:" 开头
 6. sdk 和 docker 信息已从 raw_knowledge.md 提取
 7. **每个 api_endpoint 都有 source_url 和 doc_version 字段**
 8. **每个 constraint 都有 source_url 字段**
@@ -505,7 +486,7 @@ tools:
         "description": "limit must be positive",
         "assertion": "limit > 0",
         "type": "range_constraint",
-        "confidence": 1.0
+        "evidence_tier": "explicit"
       }
     ]
   },
@@ -516,7 +497,7 @@ tools:
       "description": "empty collection returns empty result",
       "category": "behavioral",
       "expected_behavior": "returns empty array, no error",
-      "confidence": 1.0,
+      "evidence_tier": "explicit",
       "defect_type_if_violated": "Type4_StateLogicViolation"
     }
   ]
@@ -537,15 +518,15 @@ tools:
 3. **设置 `source_verified` 字段**：
    - `true`：source 真包含对应内容（核对通过）
    - `false`（默认）：未核对 / 核对失败 / source 不可达
-4. **核对失败的处置**：
-   - source 不含对应内容 → **不得**标 evidence_tier="explicit"；改为 "inferred_from_behavior" 或 "convention"，confidence <= 0.3
-   - source 不可达 → source_status="unreachable"，confidence <= 0.2
-   - 编造的 constraint（找不到任何 source 支持）→ **剔除**，不写入 contract
+4. **核对失败的处置**（ADR-0008：confidence 已删，处置只看 evidence_tier）：
+   - source 不含对应内容 → **不得**标 evidence_tier="explicit"；降为 "inferred"（description 加 "inferred:" 前缀）
+   - source 不可达 → source_status="unreachable"，不得标 explicit
+   - 编造的 constraint（找不到任何 source 支持）→ **剔除**，不写入 contract（不降级收留）
 
 ### 禁止
-- ❌ 禁止仅凭 source_url 可达（source_status="reachable"）就标 confidence=1.0 / explicit
+- ❌ 禁止仅凭 source_url 可达（source_status="reachable"）就标 evidence_tier="explicit"（可达 ≠ 内容一致）
 - ❌ 禁止跳过 get_file_contents / WebFetch 核对步骤
-- ❌ 禁止 confidence=1.0 且 source_verified=false 同时成立（必须先核对再高 confidence）
+- ❌ 禁止 evidence_tier="explicit" 且 source_verified=false 同时成立（必须先核对再标 explicit）
 
 ### 输出
 每个 constraint 必须含 `source_verified` 字段（boolean）。`scripts/verify_contract_sources.py` 会在 contract 生成后批量复核。

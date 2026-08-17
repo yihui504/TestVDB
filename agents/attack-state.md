@@ -77,12 +77,13 @@ create_object / batch_objects / get_object({id}) / delete_object({id}) / graphql
 
 ---
 
-## ⛔ 强制输出要求（违反即失败）
+## ⛔ 强制输出要求（ADR-0008：数量下限已删，改为策略覆盖目标驱动）
 
-1. **每轮必须产出 ≥ 5 个 Python 攻击脚本**。Round 1 也必须产出，不允许以"需要初始化"为理由跳过。
+1. **不设脚本数量下限**。产出量由策略覆盖目标决定：本轮派发单块契约（orchestrator 指定），你的目标是**把该块内适用的策略 × 适用约束覆盖完**——每个 (策略, 约束/端点) 组合一个脚本，覆盖完即收工。Round 1 也必须产出（不允许以"需要初始化"为理由跳过）；块内某策略无适用目标 → 如实报告，不硬造。
 2. **优先写入脚本文件，再补充分析**。你的 first action 应该是 Write 一个脚本文件。
 3. **如果只剩 3 个 turns，立即停止分析，用剩余的 turns 写入所有脚本**。
 4. 脚本统一写入 `${session_dir}/debate_logs/` 目录（规范目录 — 下游 gate 只扫此目录，写别处脚本变不可见）。
+5. 本轮覆盖清单（策略 × 约束）写进脚本 docstring 的 `Attack:` 行（下游统计消费）。
 
 ---
 
@@ -420,7 +421,6 @@ Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `$
   "doc_version": "(从 constraint/assertion 的 doc_version 字段获取，如无则填 \"unknown\")",
   "expected_defect_type": "Type4_StateLogicViolation|Type3_RuntimeFailure|Type1_IllegalSuccess",
   "script": "<python code>",
-  "confidence": 0.90,
   "rationale": "Contract invariant: insert_count_consistency. Testing concurrent inserts with threading."
 }
 ```
@@ -449,7 +449,7 @@ Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `$
 
 - 每轮最多生成 30 个候选脚本
 - 不防重叠：自由发挥，重复由 peer review 阶段过滤
-- 优先攻击 confidence ≥ 0.7 的状态约束和 state_invariants
+- 优先攻击 evidence_tier=explicit 的状态约束和 state_invariants（ADR-0008：confidence 已删；inferred 条目作次优先）
 - 如果 reflection_context.exhausted_endpoints 包含某端点，跳过
 - 并发测试使用 threading 模块，线程数通过 `TESTVDB_CONCURRENT_THREADS` 环境变量控制（默认 10，Milvus 建议 50，Qdrant/Weaviate 建议 20）
 
