@@ -105,7 +105,17 @@ python scripts/check_chain_grounding.py {chain_json} {contract_json}
 轮且零方差。你仍须在 rationale 里**转述**该 case 的 A 判定依据（constraint_id 与理由），
 但值本身不得改判。**rationale 中也禁止出现"源码推翻 A/契约被推翻"类措辞**（E2-r2
 渗漏观察：verdict_A 字段虽保持机械值，rationale 写"但源码推翻"会误导下游消费方）——
-源码与契约冲突的正确表述是"源码疑义存在，走视角 D 锚点或 NEEDS_MORE_EVIDENCE"。
+源码与契约冲突的正确表述是"源码疑义存在，走视角 D 锚点或 NEEDS_MORE_EVIDENCE"
+
+**⛔ 聚合层同样机械化（2026-08-18 E2 差距解剖后增——防聚合违例）**：
+脚本输出含 `implied_verdict` 三态，按它执行，**LLM 无权改写 A 定案 case 的最终 verdict**：
+- `implied_verdict = DEFECT`（A=CONFIRMED）→ 该 case 最终 verdict **必须** = DEFECT。
+  即使你认为源码 by_design/契约过时——E2 实测 5 个 case 因此被 LLM 翻案丢失
+  （"源码证据推翻了它"写在 aggregation_applied 里仍判 NOT_DEFECT = 违例）。
+  你的余地在 rationale 记录疑义 + 备注建议主进程人工复核，**不是**改 verdict。
+- `implied_verdict = NOT_DEFECT`（A=REFUTED）→ 最终 verdict **必须** = NOT_DEFECT
+  （fp_evidence_source 记 `doc`）。
+- `implied_verdict = GREY_ZONE`（A=NEUTRAL）→ 按下方聚合灰区分支行使 B/C/D。。
 **例外条款已删除**（agent_suspects_contract_wrong 不再存在）："契约本身可能错"的情况由
 视角 D 的认知锚点吸收（维护者态度模式中有相关锚点时 D 给信号）；无锚点的契约疑义 →
 verdict 走 NEEDS_MORE_EVIDENCE 由主进程人工复核。
@@ -151,19 +161,19 @@ NEEDS_MORE_EVIDENCE。消费表：
 
 **聚合（固定，2026-08-18 增 D 灰区分支）**：
 ```
-A==CONFIRMED or B==CONFIRMED        → DEFECT
-A==REFUTED                          → NOT_DEFECT
-以下为灰区（A ≠ CONFIRMED 且 B ≠ CONFIRMED，A/B 未定案）：
-  D==SUPPORTS_DEFECT                → DEFECT
-  D==SUPPORTS_NOT_DEFECT            → NOT_DEFECT
-  D==NO_SIGNAL：
-    A==NEUTRAL and B==NEUTRAL and C==REFUTED      → NOT_DEFECT（真 by-design in source）
-    A==NEUTRAL and B==NEUTRAL and C==WEAK_REFUTED → NEEDS_MORE_EVIDENCE
-    其他                                          → 按 A 优先（A 定，B/C 不翻案）
+（机械化层：implied_verdict ≠ GREY_ZONE → verdict = implied_verdict，PERIOD，LLM 无权改写）
+以下仅当 implied_verdict == GREY_ZONE（A=NEUTRAL）：
+  B==CONFIRMED                       → DEFECT
+  D==SUPPORTS_DEFECT                 → DEFECT（链内须有实质违规观测非 grade D）
+  D==SUPPORTS_NOT_DEFECT             → NOT_DEFECT
+  B==NEUTRAL and D==NO_SIGNAL：
+    C==REFUTED                       → NOT_DEFECT（真 by-design in source）
+    C==WEAK_REFUTED                  → NEEDS_MORE_EVIDENCE
+    其他                             → NEEDS_MORE_EVIDENCE（保守）
 ```
-原则：**行为优雅不能单独推翻契约或物理违反；维护者认知同样不能**——D 只解
-A/B 双未定案的灰区，D 命中 DEFECT 方向时链内仍须有实质违规观测（execution_evidence
-非 grade D），否则降 NEEDS_MORE_EVIDENCE。
+原则：**行为优雅不能单独推翻契约或物理违反；维护者认知同样不能；LLM 聚合也不能
+推翻机械 A 定案**——A 定案 case 的 verdict 由 check_chain_grounding.py 的
+implied_verdict 唯一决定，LLM 的职责只剩灰区 B/C/D 与 rationale。
 
 ## FP 判定必须写明证据来源（RQ2 量化基础）
 

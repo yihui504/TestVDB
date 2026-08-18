@@ -33,21 +33,30 @@ if sys.platform == "win32":
 
 
 def judge_grounding(chain: dict, contract_text: str) -> dict:
-    """视角 A 机械判定。chain = evidence_chain/{did}.json 内容；contract_text = 契约全文。"""
+    """视角 A 机械判定 + 聚合暗示（2026-08-18 E2 差距解剖后增：A 定案 case 聚合唯一）。
+
+    implied_verdict 三态：
+      DEFECT      —— A=CONFIRMED，聚合唯一结果 DEFECT（LLM 无权改判）
+      NOT_DEFECT  —— A=REFUTED，聚合唯一结果 NOT_DEFECT（LLM 无权改判）
+      GREY_ZONE   —— A=NEUTRAL，聚合交 LLM 按视角 B/C/D 行使（SOP 聚合灰区分支）
+    """
     cg = (chain.get("steps") or {}).get("contract_grounding") or {}
     cid = str(cg.get("constraint_id", "") or "").strip()
     if not cid:
         return {"verdict_A": "NEUTRAL", "reason": "no_reference",
-                "constraint_id": None}
+                "implied_verdict": "GREY_ZONE", "constraint_id": None}
     if cid not in contract_text:
         return {"verdict_A": "NEUTRAL", "reason": "constraint_absent",
-                "constraint_id": cid}
+                "implied_verdict": "GREY_ZONE", "constraint_id": cid}
     quote = cg.get("assertion_text_quoted", "") or ""
     if quote and quote in contract_text:
-        return {"verdict_A": "CONFIRMED" if cg.get("api_violates_assertion") else "REFUTED",
-                "reason": "id+quote_ok", "constraint_id": cid}
+        if cg.get("api_violates_assertion"):
+            return {"verdict_A": "CONFIRMED", "reason": "id+quote_ok",
+                    "implied_verdict": "DEFECT", "constraint_id": cid}
+        return {"verdict_A": "REFUTED", "reason": "id+quote_ok",
+                "implied_verdict": "NOT_DEFECT", "constraint_id": cid}
     return {"verdict_A": "NEUTRAL", "reason": "quote_mismatch",
-            "constraint_id": cid}
+            "implied_verdict": "GREY_ZONE", "constraint_id": cid}
 
 
 def scan_all(root: Path) -> dict:

@@ -415,20 +415,25 @@ class TestStabilization:
         from check_chain_grounding import judge_grounding
         ct = json.dumps({"constraints": [{"constraint_id": "c1", "assertion": "x >= 1"}]})
         # 1. 无引用
-        assert judge_grounding({"steps": {"contract_grounding": {}}}, ct) == {
-            "verdict_A": "NEUTRAL", "reason": "no_reference", "constraint_id": None}
+        r = judge_grounding({"steps": {"contract_grounding": {}}}, ct)
+        assert r["verdict_A"] == "NEUTRAL" and r["reason"] == "no_reference"
+        assert r["implied_verdict"] == "GREY_ZONE"
         # 2. id 不存在
         r = judge_grounding({"steps": {"contract_grounding": {"constraint_id": "cX"}}}, ct)
         assert r["verdict_A"] == "NEUTRAL" and r["reason"] == "constraint_absent"
-        # 3. id+quote_ok → violates 分支
+        assert r["implied_verdict"] == "GREY_ZONE"
+        # 3. id+quote_ok → violates 分支（implied_verdict 定案）
         ok = {"steps": {"contract_grounding": {"constraint_id": "c1", "assertion_text_quoted": "x >= 1", "api_violates_assertion": True}}}
-        assert judge_grounding(ok, ct)["verdict_A"] == "CONFIRMED"
-        ok2 = dict(ok); ok2["steps"] = {"contract_grounding": {**ok["steps"]["contract_grounding"], "api_violates_assertion": False}}
-        assert judge_grounding(ok2, ct)["verdict_A"] == "REFUTED"
+        r = judge_grounding(ok, ct)
+        assert r["verdict_A"] == "CONFIRMED" and r["implied_verdict"] == "DEFECT"
+        ok2 = {"steps": {"contract_grounding": {**ok["steps"]["contract_grounding"], "api_violates_assertion": False}}}
+        r = judge_grounding(ok2, ct)
+        assert r["verdict_A"] == "REFUTED" and r["implied_verdict"] == "NOT_DEFECT"
         # 4. 引文不一致
         mm = {"steps": {"contract_grounding": {"constraint_id": "c1", "assertion_text_quoted": "完全不同的文字", "api_violates_assertion": True}}}
         r = judge_grounding(mm, ct)
         assert r["verdict_A"] == "NEUTRAL" and r["reason"] == "quote_mismatch"
+        assert r["implied_verdict"] == "GREY_ZONE"
 
     def test_auditor_sop_mechanical_A(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
@@ -440,6 +445,13 @@ class TestStabilization:
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
         assert "≤12 条链" in sop or "≤12" in sop, "缺分批硬上限"
         assert "必读先验" in sop, "缺认知必读先验"
+
+
+    def test_auditor_sop_aggregation_mechanized(self):
+        sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
+        assert "implied_verdict" in sop, "缺聚合机械化字段"
+        assert "LLM 无权改写" in sop, "缺聚合改写禁令"
+        assert "GREY_ZONE" in sop, "缺灰区三态"
 
     def test_builder_sop_sufficiency_check(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "evidence-builder.md").read_text(encoding="utf-8")
