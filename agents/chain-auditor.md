@@ -19,6 +19,8 @@ tools:
 - `${SESSION_DIR}/candidates.jsonl` —— 派发清单（核对覆盖度：每候选必有链）
 - `results/{target}/{version}/structured_contract.json` —— 仅用于核对链内引证真实性
   （constraint_id 是否存在、assertion_text_quoted 是否与契约原文一致）
+- `intelligence/{target}/developer_cognition.json` —— 本 target 的维护者认知模型
+  （仅限视角 D 消费，见视角 D 段；不跨 vendor 引用）
 
 ⛔ 禁止访问:
 - **attack 脚本源码（.py 文件）与 evidence_chain 之外的 log 原文** —— 双盲核心。链文件之外
@@ -38,7 +40,8 @@ Turn 1: Read  ${SESSION_DIR}/candidates.jsonl（候选总数 N）
 Turn 1: Bash  ls ${SESSION_DIR}/evidence_chain/*.json.done 2>/dev/null | wc -l
          （< N → 有 builder 缺席，缺席候选直接记 NEEDS_MORE_EVIDENCE，reason: "builder_missing"）
 Turn 2: Read  structured_contract.json（引证核对用，一次性）
-Turn 2-M: 对每条链执行三查 + 三视角聚合（见下）
+Turn 2: Read  intelligence/{target}/developer_cognition.json（视角 D 材料，一次性；缺文件 → 全部链 D=NO_SIGNAL）
+Turn 2-M: 对每条链执行三查 + 四视角聚合（A/B/C/D，见下）
 Turn M:  Write ${SESSION_DIR}/debate_logs/chain_verdicts.json
 Turn M:  Bash  touch ${SESSION_DIR}/debate_logs/chain_verdicts.json.done
 ```
@@ -96,15 +99,36 @@ A 因材料缺失躺倒时 B 是最后的客观防线。
 **视角 C — 行为优雅（权重 LOW，不能单独推翻 A/B）**：源码显式 by-design → REFUTED；
 优雅但无源码证据 → WEAK_REFUTED；行为不优雅 → CONFIRMED。
 
-**聚合（固定）**：
+**视角 D — 维护者认知（灰区裁决，权重最低，2026-08-18 接入）**：
+消费 `intelligence/{target}/developer_cognition.json`（仅本 vendor）：
+
+| cognition 字段 | 命中时 verdict_D | 要求 |
+|----------------|-----------------|------|
+| `blindspot_indicators` | SUPPORTS_DEFECT（维护者已知盲区——历史上同类现象被修） | matched_pattern 记 blindspot 摘要 |
+| `by_design_patterns` / `rejection_patterns` | SUPPORTS_NOT_DEFECT（维护者明确不认） | 须引用 developer_quote 与 pattern_id |
+| `what_developers_prioritize` 命中"不在乎"维度 | 仅降置信标注，不单独定案 | — |
+| 无任何命中 | NO_SIGNAL | — |
+
+**⛔ 视角 D 双盲边界**：认知是维护者态度的陈述，不是证据——
+- 禁止用认知"补"链内缺失的执行观测（观测缺失走 NEEDS_MORE_EVIDENCE，不因认知存在而跳过）
+- 禁止跨 vendor 引用（qdrant 的宽松文化不能给 milvus 定案）
+- 命中判定必须是现象级匹配（参数类/行为类同构），不是字面词重叠
+
+**聚合（固定，2026-08-18 增 D 灰区分支）**：
 ```
 A==CONFIRMED or B==CONFIRMED        → DEFECT
-A==NEUTRAL and B==NEUTRAL and C==REFUTED     → NOT_DEFECT（真 by-design in source）
-A==NEUTRAL and B==NEUTRAL and C==WEAK_REFUTED → NEEDS_MORE_EVIDENCE
 A==REFUTED                          → NOT_DEFECT
-其他                                 → 按 A 优先（A 定，B/C 不翻案）
+以下为灰区（A ≠ CONFIRMED 且 B ≠ CONFIRMED，A/B 未定案）：
+  D==SUPPORTS_DEFECT                → DEFECT
+  D==SUPPORTS_NOT_DEFECT            → NOT_DEFECT
+  D==NO_SIGNAL：
+    A==NEUTRAL and B==NEUTRAL and C==REFUTED      → NOT_DEFECT（真 by-design in source）
+    A==NEUTRAL and B==NEUTRAL and C==WEAK_REFUTED → NEEDS_MORE_EVIDENCE
+    其他                                          → 按 A 优先（A 定，B/C 不翻案）
 ```
-原则：**行为优雅不能单独推翻契约或物理违反。**
+原则：**行为优雅不能单独推翻契约或物理违反；维护者认知同样不能**——D 只解
+A/B 双未定案的灰区，D 命中 DEFECT 方向时链内仍须有实质违规观测（execution_evidence
+非 grade D），否则降 NEEDS_MORE_EVIDENCE。
 
 ## FP 判定必须写明证据来源（RQ2 量化基础）
 
@@ -137,6 +161,9 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
         "contract": {"verdict_A": "CONFIRMED|REFUTED|NEUTRAL", "agent_suspects_contract_wrong": false},
         "physical": {"verdict_B": "CONFIRMED|REFUTED|NEUTRAL", "objective_constraint_class": "数值下界|枚举闭集|互斥参数|类型恒真|无"},
         "behavioral": {"verdict_C": "CONFIRMED|REFUTED|WEAK_REFUTED"},
+        "cognition": {"verdict_D": "SUPPORTS_DEFECT|SUPPORTS_NOT_DEFECT|NO_SIGNAL",
+                       "matched_pattern": "pattern_id 或 blindspot 摘要",
+                       "developer_quote": "引文或 null"},
         "aggregation_applied": "verdict_A=CONFIRMED → final=DEFECT"
       },
       "chain_broken_at": null,

@@ -318,3 +318,46 @@ class TestApplyScriptRetry:
         assert not (sd / "boundary_scripts" / "syn_001.py").exists(), "超限脚本应被删除"
         ex_doc = json.loads((sd / "script_retry_exhausted.json").read_text(encoding="utf-8"))
         assert any(e["script_id"] == "syn_001" for e in ex_doc["exhausted"])
+
+
+# ═══════════════════════════════════════════════════════════════
+# 视角 D（开发者认知）接入 — SOP 条款防回归（2026-08-18）
+# ═══════════════════════════════════════════════════════════════
+
+class TestPerspectiveD:
+    """视角 D 灰区裁决接入（commit 计划见 plans/validated-riding-cat.md）。"""
+
+    def test_data_access_includes_cognition(self):
+        from pathlib import Path
+        sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
+        s = sop.read_text(encoding="utf-8")
+        assert "developer_cognition.json" in s, "dataAccess 缺认知材料"
+        assert "不跨 vendor 引用" in s or "不跨 vendor" in s, "缺跨 vendor 禁令"
+
+    def test_perspective_d_section_exists(self):
+        from pathlib import Path
+        sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
+        s = sop.read_text(encoding="utf-8")
+        assert "视角 D" in s, "缺视角 D 段"
+        for kw in ("blindspot_indicators", "by_design_patterns", "SUPPORTS_DEFECT", "NO_SIGNAL"):
+            assert kw in s, f"视角 D 段缺 {kw}"
+
+    def test_aggregation_grey_zone_rule(self):
+        from pathlib import Path
+        sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
+        s = sop.read_text(encoding="utf-8")
+        # 灰区分支：D 只在 A/B 未定案时生效
+        assert "D==SUPPORTS_DEFECT" in s and "D==SUPPORTS_NOT_DEFECT" in s, "缺 D 灰区分支"
+        assert "维护者认知同样不能" in s, "缺认知不翻 A/B 案原则"
+
+    def test_verdict_schema_cognition_field(self):
+        from pathlib import Path
+        sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
+        s = sop.read_text(encoding="utf-8")
+        assert '"verdict_D": "SUPPORTS_DEFECT|SUPPORTS_NOT_DEFECT|NO_SIGNAL"' in s, "schema 缺 cognition 字段"
+
+    def test_mine_dispatch_prompt_has_cognition(self):
+        from pathlib import Path
+        mine = Path(__file__).resolve().parent.parent / "commands" / "mine.md"
+        s = mine.read_text(encoding="utf-8")
+        assert "developer_cognition.json" in s, "auditor 派发 prompt 缺材料路径"

@@ -619,7 +619,7 @@ Agent(subagent_type="testvdb:evidence-builder", description="证据链构建 {de
 **全部 builder `.done` 收口后**派发（跨候选一致性检查需要完整链集合）：
 ```
 Agent(subagent_type="testvdb:chain-auditor", description="证据链审计 {target}",
-  prompt="按照 agents/chain-auditor.md 规范，审计 evidence_chain/ 下全部证据链并产出终判。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}。")
+  prompt="按照 agents/chain-auditor.md 规范，审计 evidence_chain/ 下全部证据链并产出终判（四视角 A/B/C/D，视角 D 消费 intelligence/{target}/developer_cognition.json）。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}。")
 ```
 - 产出 `debate_logs/chain_verdicts.json`（DEFECT / NOT_DEFECT / NEEDS_MORE_EVIDENCE +
   fp_evidence_source + root_cause 分布）+ `.done`
