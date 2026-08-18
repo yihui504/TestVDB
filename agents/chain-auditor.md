@@ -69,12 +69,29 @@ fp_evidence_source 按证据来源标注。这是双盲设计所防的原型案�
 
 **视角 A — 契约（ground truth，不允许 LLM 用常识推翻）**：
 - 链内 contract_grounding.api_violates_assertion == true 且 assertion 为契约原文 → verdict_A = CONFIRMED
-- 不违反 → REFUTED；契约无相关 assertion（或引证核对失败）→ NEUTRAL
+- 不违反 → REFUTED；契约无相关 assertion → NEUTRAL
 - 唯一例外：链内 source_grounding 证明 assertion 与源码逻辑不符 **且** 有维护者明示
   （issue/PR 引文）→ 仍默认 CONFIRMED，标 `agent_suspects_contract_wrong: true`
 
-**视角 B — 物理/语义约束**：数值下界/枚举闭集/互斥参数等客观约束，API 接受违反值 → CONFIRMED；
-无客观约束 → NEUTRAL。
+**⛔ 视角 A 的"引证核对失败"必须基于实际 Grep（RQ2 v3 执行缺陷修正，2026-08-18）**：
+链内 contract_grounding 引用了 constraint_id 时，你**必须对 structured_contract.json
+实际 Grep 该 id**（禁止凭印象）。核对结果三选一，禁止跳过：
+- id 存在且 assertion_text_quoted 与契约原文一致 → api_violates_assertion=true 时 **A=CONFIRMED**
+  （PERIOD——不得因"怀疑约束合理性"降 NEUTRAL。milvus_036 教训：链内证据齐全仍被判 NOT_DEFECT）
+- id 存在但引文不一致 → 以契约为准重判（引文错≠约束不存在）
+- id 确实不在契约中（Grep 零命中）→ A=NEUTRAL，rationale 记 "constraint_absent_verified"
+
+**视角 B — 物理/语义约束（必须主动行使，RQ2 v3 执行缺陷修正）**：
+**每一链都必须独立评估视角 B，禁止"沿用 A 的结论"或跳过**。客观约束判据：
+- 数值下界：计数/大小/并行度/limit 类参数 ≥1、≥0 的下界（groupSize=0/-1、shardNum=0、
+  ef=0、topK=0 均属此类——"接受负数/零计数"是客观违规，**不需要契约背书**）
+- 枚举闭集：参数取值域是有限集（metricType/consistencyLevel 枚举），接受集合外值即违规
+- 互斥参数：文档/语义上互斥的参数被同时接受
+- 类型恒真：数字字段接受非数字、向量字段接受标量
+判定：execution_evidence 有 API 接受违反值的观测 → **B=CONFIRMED**；
+参数不属于任何一类客观约束 → B=NEUTRAL（rationale 须写明为何不属于任何一类）。
+禁止：链断在 contract/doc 就把 B 跟着判 NEUTRAL——视角独立性是聚合规则的前提，
+A 因材料缺失躺倒时 B 是最后的客观防线。
 
 **视角 C — 行为优雅（权重 LOW，不能单独推翻 A/B）**：源码显式 by-design → REFUTED；
 优雅但无源码证据 → WEAK_REFUTED；行为不优雅 → CONFIRMED。
@@ -118,7 +135,7 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
       "fp_evidence_source": "doc | source | both | behavior | null",
       "perspective_analysis": {
         "contract": {"verdict_A": "CONFIRMED|REFUTED|NEUTRAL", "agent_suspects_contract_wrong": false},
-        "physical": {"verdict_B": "CONFIRMED|REFUTED|NEUTRAL"},
+        "physical": {"verdict_B": "CONFIRMED|REFUTED|NEUTRAL", "objective_constraint_class": "数值下界|枚举闭集|互斥参数|类型恒真|无"},
         "behavioral": {"verdict_C": "CONFIRMED|REFUTED|WEAK_REFUTED"},
         "aggregation_applied": "verdict_A=CONFIRMED → final=DEFECT"
       },
