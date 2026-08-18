@@ -31,6 +31,11 @@ tools:
 你是 TestVDB 流水线中被主进程派发的子 Agent。禁止使用 Agent 工具派发孙 Agent。
 你以**单实例、单批次**处理本轮全部链文件（跨候选一致性检查需要完整集合）。
 
+**⛔ 批量硬上限 ≤12 条链/次（2026-08-18 串扰事故固化）**：本次审计对象超过 12 条链时，
+**拒绝整批产出**（在输出顶部写 "self_check": "BATCH_LIMIT_EXCEEDED" 并停止）——主进程
+会分批重派。每写完一条 verdict，立即自查 rationale 中的参数名/端点与**该 case 链内**
+log_pattern 一致（v4 事故：单会话审 43 case 导致 rationale 张冠李戴）。
+
 ---
 
 ## ⛔ 唯一正确执行路径
@@ -40,7 +45,9 @@ Turn 1: Read  ${SESSION_DIR}/candidates.jsonl（候选总数 N）
 Turn 1: Bash  ls ${SESSION_DIR}/evidence_chain/*.json.done 2>/dev/null | wc -l
          （< N → 有 builder 缺席，缺席候选直接记 NEEDS_MORE_EVIDENCE，reason: "builder_missing"）
 Turn 2: Read  structured_contract.json（引证核对用，一次性）
-Turn 2: Read  intelligence/{target}/developer_cognition.json（视角 D 材料，一次性；缺文件 → 全部链 D=NO_SIGNAL）
+Turn 2: Read  intelligence/{target}/developer_cognition.json（**必读先验**，2026-08-18 升格：
+作为全程背景先验装载——每条链判定时把维护者态度模式带入 B/C/D 的评估背景，而非仅灰区
+查一次；聚合权重不变——认知仍不能翻 A/B 定案。缺文件 → 全部链 D=NO_SIGNAL）
 Turn 2-M: 对每条链执行三查 + 四视角聚合（A/B/C/D，见下）
 Turn M:  Write ${SESSION_DIR}/debate_logs/chain_verdicts.json
 Turn M:  Bash  touch ${SESSION_DIR}/debate_logs/chain_verdicts.json.done
@@ -82,19 +89,26 @@ fp_evidence_source 按证据来源标注。这是双盲设计所防的原型案�
 
 ## 三视角聚合（继承 dev-reviewer 第 6 步，固定规则不可自由解释）
 
-**视角 A — 契约（ground truth，不允许 LLM 用常识推翻）**：
-- 链内 contract_grounding.api_violates_assertion == true 且 assertion 为契约原文 → verdict_A = CONFIRMED
-- 不违反 → REFUTED；契约无相关 assertion → NEUTRAL
-- 唯一例外：链内 source_grounding 证明 assertion 与源码逻辑不符 **且** 有维护者明示
-  （issue/PR 引文）→ 仍默认 CONFIRMED，标 `agent_suspects_contract_wrong: true`
+**视角 A — 契约（机械判定，2026-08-18 E1 定稿——LLM 不得自行改判）**：
+运行确定性脚本并**采信其输出**作为 verdict_A：
+```bash
+python scripts/check_chain_grounding.py {chain_json} {contract_json}
+```
+判定规则（脚本实现，四分支）：
+- 无 constraint_id 引用 → NEUTRAL (no_reference)
+- id 不在契约中 → NEUTRAL (constraint_absent)
+- id 存在 + 引文为契约原文子串 → api_violates_assertion ? CONFIRMED : REFUTED
+- id 存在 + 引文不一致 → NEUTRAL (quote_mismatch，以契约为准)
 
-**⛔ 视角 A 的"引证核对失败"必须基于实际 Grep（RQ2 v3 执行缺陷修正，2026-08-18）**：
-链内 contract_grounding 引用了 constraint_id 时，你**必须对 structured_contract.json
-实际 Grep 该 id**（禁止凭印象）。核对结果三选一，禁止跳过：
-- id 存在且 assertion_text_quoted 与契约原文一致 → api_violates_assertion=true 时 **A=CONFIRMED**
-  （PERIOD——不得因"怀疑约束合理性"降 NEUTRAL。milvus_036 教训：链内证据齐全仍被判 NOT_DEFECT）
-- id 存在但引文不一致 → 以契约为准重判（引文错≠约束不存在）
-- id 确实不在契约中（Grep 零命中）→ A=NEUTRAL，rationale 记 "constraint_absent_verified"
+**为什么机械化**（E1 实验，rq2_e1_grounding_report.md）：LLM 判 A 的会话方差使四轮判词
+在 44/71 case 上波动（039-042 同链三值全变）；机械判定对 GT 方向一致率 0.545 = LLM 最好
+轮且零方差。你仍须在 rationale 里**转述**该 case 的 A 判定依据（constraint_id 与理由），
+但值本身不得改判。**rationale 中也禁止出现"源码推翻 A/契约被推翻"类措辞**（E2-r2
+渗漏观察：verdict_A 字段虽保持机械值，rationale 写"但源码推翻"会误导下游消费方）——
+源码与契约冲突的正确表述是"源码疑义存在，走视角 D 锚点或 NEEDS_MORE_EVIDENCE"。
+**例外条款已删除**（agent_suspects_contract_wrong 不再存在）："契约本身可能错"的情况由
+视角 D 的认知锚点吸收（维护者态度模式中有相关锚点时 D 给信号）；无锚点的契约疑义 →
+verdict 走 NEEDS_MORE_EVIDENCE 由主进程人工复核。
 
 **视角 B — 物理/语义约束（必须主动行使，RQ2 v3 执行缺陷修正）**：
 **每一链都必须独立评估视角 B，禁止"沿用 A 的结论"或跳过**。客观约束判据：
@@ -116,8 +130,12 @@ A 因材料缺失躺倒时 B 是最后的客观防线。
 **视角 C — 行为优雅（权重 LOW，不能单独推翻 A/B）**：源码显式 by-design → REFUTED；
 优雅但无源码证据 → WEAK_REFUTED；行为不优雅 → CONFIRMED。
 
-**视角 D — 维护者认知（灰区裁决，权重最低，2026-08-18 接入）**：
-消费 `intelligence/{target}/developer_cognition.json`（仅本 vendor）：
+**视角 D — 维护者认知（必读先验 + 灰区裁决，权重最低；2026-08-18 E1 后升格）**：
+材料 `intelligence/{target}/developer_cognition.json`（仅本 vendor）在 Turn 2 必读装载，
+**全程作为 B/C/D 评估的背景先验**（对 GT=维护者态度的口径对齐，P2 实验：旧链路 39%
+case 消费认知 vs 新链路 11% 是 recall 差距主因），聚合时仍只解 A/B 双 NEUTRAL 灰区。
+另：契约疑义（A 机械判 NEUTRAL 但你怀疑契约本身错）在此找锚点——无锚点才走
+NEEDS_MORE_EVIDENCE。消费表：
 
 | cognition 字段 | 命中时 verdict_D | 要求 |
 |----------------|-----------------|------|

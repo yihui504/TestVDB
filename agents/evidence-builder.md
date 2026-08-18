@@ -124,6 +124,15 @@ Read 触发 log（`${SESSION_DIR}/${log_path}`）：
 
 源码片段写入 `source_excerpt`（含文件路径+行号，30-50 行，非空——除非 not_found）。
 
+**⛔ 搜证充分性自检（2026-08-18 新增——防取证遗漏，v4 在 milvus_035/037 漏找校验代码）**：
+拟判 `not_found_in_source` 前，先机械 Grep 链内 claim 的参数名/错误码关键词跨 clone：
+```bash
+Grep pattern="<claim 参数名>" path="${TESTVDB_SRC_DIR}" output_mode="files_with_matches"
+```
+有命中（≥1 文件）而你未 Read 过其中任何一个 → **搜证不充分**，必须补搜补读后再定
+outcome（命中文件里可能就有你结论需要的校验代码）。零命中才允许 not_found_in_source。
+归档时在 source_grounding 记 `sufficiency_check: "grep_hit_pursued" | "grep_zero_hits"`。
+
 ---
 
 ## 输出（Write 到 ${SESSION_DIR}/evidence_chain/${defect_id}.json）

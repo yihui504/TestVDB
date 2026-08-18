@@ -402,3 +402,46 @@ class TestReworkMechanism:
         s = mine.read_text(encoding="utf-8")
         assert "rework_order" in s and "rework_state" in s, "8e 缺打回工单消费说明/计数文件"
         assert "最多 3 轮" in s or "3 轮" in s, "缺 3 轮上限"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 稳定化改进（E1 定稿 2026-08-18）— 机械视角A + 必读先验 + ≤12 分批 + 搜证自检
+# ═══════════════════════════════════════════════════════════════
+
+class TestStabilization:
+    def test_check_chain_grounding_four_branches(self, tmp_path):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from check_chain_grounding import judge_grounding
+        ct = json.dumps({"constraints": [{"constraint_id": "c1", "assertion": "x >= 1"}]})
+        # 1. 无引用
+        assert judge_grounding({"steps": {"contract_grounding": {}}}, ct) == {
+            "verdict_A": "NEUTRAL", "reason": "no_reference", "constraint_id": None}
+        # 2. id 不存在
+        r = judge_grounding({"steps": {"contract_grounding": {"constraint_id": "cX"}}}, ct)
+        assert r["verdict_A"] == "NEUTRAL" and r["reason"] == "constraint_absent"
+        # 3. id+quote_ok → violates 分支
+        ok = {"steps": {"contract_grounding": {"constraint_id": "c1", "assertion_text_quoted": "x >= 1", "api_violates_assertion": True}}}
+        assert judge_grounding(ok, ct)["verdict_A"] == "CONFIRMED"
+        ok2 = dict(ok); ok2["steps"] = {"contract_grounding": {**ok["steps"]["contract_grounding"], "api_violates_assertion": False}}
+        assert judge_grounding(ok2, ct)["verdict_A"] == "REFUTED"
+        # 4. 引文不一致
+        mm = {"steps": {"contract_grounding": {"constraint_id": "c1", "assertion_text_quoted": "完全不同的文字", "api_violates_assertion": True}}}
+        r = judge_grounding(mm, ct)
+        assert r["verdict_A"] == "NEUTRAL" and r["reason"] == "quote_mismatch"
+
+    def test_auditor_sop_mechanical_A(self):
+        sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
+        assert "check_chain_grounding.py" in sop, "缺机械 A 脚本引用"
+        assert "不得改判" in sop or "不得自行改判" in sop, "缺采信约束"
+        assert "agent_suspects_contract_wrong: true" not in sop.split("例外条款已删除")[1][:500], "例外条款残留"
+
+    def test_auditor_sop_batch_limit_and_prior(self):
+        sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
+        assert "≤12 条链" in sop or "≤12" in sop, "缺分批硬上限"
+        assert "必读先验" in sop, "缺认知必读先验"
+
+    def test_builder_sop_sufficiency_check(self):
+        sop = (Path(__file__).resolve().parent.parent / "agents" / "evidence-builder.md").read_text(encoding="utf-8")
+        assert "搜证充分性自检" in sop, "缺充分性自检条款"
+        assert "sufficiency_check" in sop, "缺自检留痕字段"
