@@ -68,6 +68,18 @@ fp_evidence_source 按证据来源标注。这是双盲设计所防的原型案�
 
 **NEEDS_MORE_EVIDENCE 最多回炉 1 次**（主进程重派 builder）；第二轮仍矛盾 → NOT_DEFECT（保守）。
 
+**4. 对应性核查（第 4 查，2026-08-18 新增——防取证漂移）**：
+对照「候选声称的现象」vs「链内 execution_evidence.log_pattern 实际审的现象」：
+- 候选声称来源：RQ2 实验树=派发材料中的 raw_observation；实战管线=candidates.jsonl 的 claim_hint
+- 检查主违规观测是否同一现象（同参数/同违规方向/同端点）。**次现象可作辅助证据，但主观测必须被链覆盖**
+  （milvus_030 教训：claim=c1 "password='abcdefgh' → code:0 复杂度未强制"，链却只审了 c3 长度校验被拒——
+  链内自洽但测错现象，漂移在未检查对应性时不可见）
+- 不对应 → verdict=NEEDS_MORE_EVIDENCE + 填 `rework_order` 打回工单（见 schema）
+
+**打回工单 3 轮上限（用户拍板 2026-08-18）**：同一 defect_id 的 rework_order 最多 3 次
+（计数由主进程维护在 rework_state 文件）；第 3 轮后仍 mismatch → 保守 NOT_DEFECT。
+你在工单中如实写判定，轮次控制由主进程执行。
+
 ## 三视角聚合（继承 dev-reviewer 第 6 步，固定规则不可自由解释）
 
 **视角 A — 契约（ground truth，不允许 LLM 用常识推翻）**：
@@ -91,6 +103,11 @@ fp_evidence_source 按证据来源标注。这是双盲设计所防的原型案�
 - 枚举闭集：参数取值域是有限集（metricType/consistencyLevel 枚举），接受集合外值即违规
 - 互斥参数：文档/语义上互斥的参数被同时接受
 - 类型恒真：数字字段接受非数字、向量字段接受标量
+- HTTP 语义恒真（强限定，2026-08-18）：**仅当两条件同时满足**——①错误属请求侧可判定
+  （参数校验类：非法值/格式错误/越界）②契约或文档对错误响应形态有声称（文档示例错误
+  响应为 4xx，或契约 assertion 明确 "invalid → reject"）——实测却是 2xx+业务错误码
+  （如 200+code:65535）→ B=CONFIRMED（Type2_PoorDiagnostics 方向）。两条件缺一 → 仅在
+  rationale 记录 http_semantics 观测，不触发 B（防误伤"全 200 包业务码"的 by-design 风格）
 判定：execution_evidence 有 API 接受违反值的观测 → **B=CONFIRMED**；
 参数不属于任何一类客观约束 → B=NEUTRAL（rationale 须写明为何不属于任何一类）。
 禁止：链断在 contract/doc 就把 B 跟着判 NEUTRAL——视角独立性是聚合规则的前提，
@@ -168,7 +185,8 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
       },
       "chain_broken_at": null,
       "root_cause_if_fp": null,
-      "rationale": "≤3 句，必须引用链内具体证据"
+      "rationale": "≤3 句，必须引用链内具体证据",
+      "rework_order": null
     }
   ],
   "summary": {
@@ -178,6 +196,20 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
   }
 }
 ```
+
+**rework_order 工单（仅 NEEDS_MORE_EVIDENCE 时填，其余 null）**：
+```json
+"rework_order": {
+  "type": "PHENOMENON_MISMATCH | EVIDENCE_GAP | SUSPECTED_HALLUCINATION",
+  "claim": "<候选声称的现象（引原文）>",
+  "chain_covered": "<链实际审的现象>",
+  "drift_point": "<漂移点定位：应审 X 却审了 Y>",
+  "targeted_instruction": "<针对性重做指令>"
+}
+```
+- `PHENOMENON_MISMATCH`（取证漂移）：指令=重读 output log **全文**，围绕 claim 主违规观测重建 execution_evidence，次观测作辅助
+- `EVIDENCE_GAP`（链不全）：指出缺哪节（source_excerpt 空 / doc 未核对 / 缺 step2），针对性补
+- `SUSPECTED_HALLUCINATION`（疑似幻觉）：引文/引证与原材料对不上，要求重新核对并引用原文行
 
 **写完立即 touch .done。每候选必有 verdict 条目（缺席的也要记 NEEDS_MORE_EVIDENCE），
 不得遗漏。你的 verdict 是 reporter 与 novelty 终判的唯一上游判定，summary 的两个

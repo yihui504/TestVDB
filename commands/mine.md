@@ -609,8 +609,14 @@ Agent(subagent_type="testvdb:evidence-builder", description="证据链构建 {de
 ```
 - 产出 `evidence_chain/{defect_id}.json` + `.done`（按候选命名，并发无写冲突）
 - 超时（60s/候选）或缺产出的候选：不重试进 fan-out，留给 auditor 记 NEEDS_MORE_EVIDENCE
-- **NEEDS_MORE_EVIDENCE 补证轮**（auditor 判定后）：仅对 auditor 标记的 defect_id 重派
-  builder 一轮（最多 1 次），第二轮仍矛盾 → auditor 保守判 NOT_DEFECT
+- **NEEDS_MORE_EVIDENCE 补证轮 + 打回工单**（auditor 判定后，2026-08-18 扩展）：
+  仅对 auditor 标记的 defect_id 重派 builder。重派 prompt **必须携带 auditor 的
+  rework_order 工单**（type/claim/chain_covered/drift_point/targeted_instruction），
+  builder 按工单针对性重做（不是重跑全部）。
+  **打回上限 3 轮**（rework_state 文件按 defect_id 计数，模式同缺陷级 retry counter）：
+  第 3 轮后仍 mismatch → auditor 保守判 NOT_DEFECT。
+  工单三种 type：PHENOMENON_MISMATCH（取证漂移→重读 log 全文围绕 claim 重建）/
+  EVIDENCE_GAP（链不全→针对性补节）/ SUSPECTED_HALLUCINATION（引文对不上→重核原文行）
 
 **更新 pipeline_state**: `phase` = `"CHAIN_AUDIT"`, `phases_completed` 追加 `"EVIDENCE_BUILD"`, `phase_data.EVIDENCE_BUILD` = `{candidates: N, l1_refuted: M, builders_done: K}`
 

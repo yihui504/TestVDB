@@ -361,3 +361,44 @@ class TestPerspectiveD:
         mine = Path(__file__).resolve().parent.parent / "commands" / "mine.md"
         s = mine.read_text(encoding="utf-8")
         assert "developer_cognition.json" in s, "auditor 派发 prompt 缺材料路径"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 打回重审机制 + 全量取证 + HTTP 语义判定（2026-08-18）— 防回归
+# ═══════════════════════════════════════════════════════════════
+
+class TestReworkMechanism:
+    """auditor 打回工单 + builder 全量取证 + 视角B第五类（plans/validated-riding-cat.md）。"""
+
+    def test_auditor_correspondence_check(self):
+        from pathlib import Path
+        sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
+        s = sop.read_text(encoding="utf-8")
+        assert "对应性核查" in s, "缺第 4 查（现象对应性核查）"
+        assert "PHENOMENON_MISMATCH" in s and "EVIDENCE_GAP" in s and "SUSPECTED_HALLUCINATION" in s, "缺工单三 type"
+        assert "rework_order" in s, "schema 缺 rework_order 字段"
+        assert "最多 3 次" in s or "3 轮" in s, "缺 3 轮上限条款"
+
+    def test_auditor_http_semantics_fifth_class(self):
+        from pathlib import Path
+        sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
+        s = sop.read_text(encoding="utf-8")
+        assert "HTTP 语义恒真" in s, "视角 B 缺第五类"
+        assert "两条件同时满足" in s, "缺强限定双条件"
+
+    def test_builder_full_evidence_clauses(self):
+        from pathlib import Path
+        sop = Path(__file__).resolve().parent.parent / "agents" / "evidence-builder.md"
+        s = sop.read_text(encoding="utf-8")
+        assert "全量取证硬约束" in s, "缺全量取证条款"
+        assert "claim_alignment" in s, "schema 缺 claim_alignment"
+        assert "secondary_observations" in s, "schema 缺 secondary_observations"
+        assert "http_semantics" in s, "schema 缺 http_semantics"
+        assert "log 全文" in s, "缺读全文要求"
+
+    def test_mine_rework_order_wiring(self):
+        from pathlib import Path
+        mine = Path(__file__).resolve().parent.parent / "commands" / "mine.md"
+        s = mine.read_text(encoding="utf-8")
+        assert "rework_order" in s and "rework_state" in s, "8e 缺打回工单消费说明/计数文件"
+        assert "最多 3 轮" in s or "3 轮" in s, "缺 3 轮上限"

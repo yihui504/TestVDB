@@ -69,9 +69,19 @@ Turn M:  Bash  touch ${SESSION_DIR}/evidence_chain/${defect_id}.json.done
 
 综合：四层全 PASS → DOC_VERIFIED；仅 FAIL 于可达性(domain_blocked 除外) → DOC_MISMATCH。
 
-### B. 执行证据审查（继承原 judge-evidence）
+### B. 执行证据审查（继承原 judge-evidence；2026-08-18 增全量取证条款——防漂移）
 
 Read 触发 log（`${SESSION_DIR}/${log_path}`）：
+
+**⛔ 全量取证硬约束（milvus_030 教训：链自洽但测错现象）**：
+1. **必须读 log 全文**（所有 REQ/RESP 对），不是只找第一个违规模式
+2. **必须对照候选声称**（派发 prompt 中的 raw_observation / claim）：识别**主违规观测**
+   （claim 指向的那条）——它是 execution_evidence.log_pattern 的主体；其余观测记入
+   `secondary_observations`
+3. log_pattern **必须引用主观测的原始行**（如 "c1: password='abcdefgh' → http=200, code=0"），
+   禁止只写聚合概括词（"VALIDATION_REJECTED" 这类——漂移在概括词下不可见）
+4. 自报 `claim_alignment`（auditor 会复核）：主观测被链覆盖=aligned；链审的是别的现象=drifted；
+   部分覆盖=partial
 
 - **日志模式**：`FAILED: Type1`/`VIOLATION` → Type1；`RuntimeFailure` → Type3；
   `StateViolation` → Type4；`Type2_PoorDiagnostics` → Type2。含 `TypeError`/`SCRIPT_ERROR`
@@ -79,6 +89,9 @@ Read 触发 log（`${SESSION_DIR}/${log_path}`）：
 - **可复现性**：Grep 其他 `output_*.log`，同 endpoint 多脚本触发同一模式 → "多脚本稳定触发"
   （grade 上调）；仅单脚本 → "单脚本"；部分 FAILED 部分 PASSED → "间歇"。
 - **grade**：多脚本复现=A；明确 Type1/Type3=B；Type4/间歇=C；PASSED/环境错误=D。
+- **HTTP 语义观测**：请求侧可判定的错误（非法参数/格式错误/越界）以 2xx+业务错误码返回时
+  （如 HTTP 200 + code:65535），记入 `http_semantics`（auditor 视角 B 第五类判据的输入）：
+  `{"client_error_returned_as": "HTTP 2xx + 业务错误码 | HTTP 4xx/5xx | N/A", "note": "..."}`
 
 ### C. 证据链追溯（新增，串联 A 与 B）
 
@@ -134,7 +147,10 @@ Read 触发 log（`${SESSION_DIR}/${log_path}`）：
     },
     "execution_evidence": {
       "grade": "A | B | C | D",
-      "log_pattern": "...",
+      "log_pattern": "...(主观测原始行，如 c1: password='abcdefgh' → http=200, code=0)",
+      "secondary_observations": ["...(次观测原文行，如 c3: length=1 → rejected)"],
+      "claim_alignment": "aligned | drifted | partial",
+      "http_semantics": {"client_error_returned_as": "HTTP 2xx + 业务错误码 | HTTP 4xx/5xx | N/A", "note": "..."},
       "reproducibility": "多脚本稳定触发 | 单脚本 | 间歇 | 环境问题",
       "script_error": false,
       "triggering_scripts": ["..."],
