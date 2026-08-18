@@ -124,6 +124,14 @@ Read 触发 log（`${SESSION_DIR}/${log_path}`）：
 
 源码片段写入 `source_excerpt`（含文件路径+行号，30-50 行，非空——除非 not_found）。
 
+**⛔ violates 声明自检（2026-08-18 E5 后改进 2——防语义保守判定）**：
+拟声明 `api_violates_assertion=false` 前，核对链内观测是否与该声明矛盾：
+若 claim 的现象是"非法值被静默接受"（观测含 200+code:0/success）而你引的 quote 含
+约束声称（must/should/range/valid），则 violates=False 意味着"约束没被违反"——
+此时要么观测的参数不在 quote 约束域内（**换约束引用**，约束引错了），要么值确实合规
+（violates=False 正确，note 说明）。禁止"值被接受了但大概不算违反"的模糊判定——
+如实二选一。归档时在 contract_grounding.note 记判定理由（一句话）。
+
 **⛔ 搜证充分性自检（2026-08-18 新增——防取证遗漏，v4 在 milvus_035/037 漏找校验代码）**：
 拟判 `not_found_in_source` 前，先机械 Grep 链内 claim 的参数名/错误码关键词跨 clone：
 ```bash

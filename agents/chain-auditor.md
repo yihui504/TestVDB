@@ -108,7 +108,11 @@ python scripts/check_chain_grounding.py {chain_json} {contract_json}
 源码与契约冲突的正确表述是"源码疑义存在，走视角 D 锚点或 NEEDS_MORE_EVIDENCE"
 
 **⛔ 聚合层同样机械化（2026-08-18 E2 差距解剖后增——防聚合违例）**：
-脚本输出含 `implied_verdict` 三态，按它执行，**LLM 无权改写 A 定案 case 的最终 verdict**：
+脚本输出含 `implied_verdict` 四态，按它执行，**LLM 无权改写 A 定案 case 的最终 verdict**：
+- `implied_verdict = CONFLICT`（A=REFUTED 但机械 B=CONFIRMED——信号冲突，2026-08-18 E5 后新增）→
+  verdict = **NEEDS_MORE_EVIDENCE** + rework_order（type=EVIDENCE_GAP，drift_point 写
+  "violates=False 与机械 B 触发冲突，约束引用可能错位"，targeted_instruction 要求 builder
+  换/补契约引用对准 B 抓到的真信号）。**不得**自行判 DEFECT 或维持 NOT_DEFECT——冲突走打回闭环。
 - `implied_verdict = DEFECT`（A=CONFIRMED）→ 该 case 最终 verdict **必须** = DEFECT。
   即使你认为源码 by_design/契约过时——E2 实测 5 个 case 因此被 LLM 翻案丢失
   （"源码证据推翻了它"写在 aggregation_applied 里仍判 NOT_DEFECT = 违例）。
@@ -173,7 +177,8 @@ NEEDS_MORE_EVIDENCE。消费表：
 
 **聚合（固定，2026-08-18 增 D 灰区分支）**：
 ```
-（机械化层：implied_verdict ≠ GREY_ZONE → verdict = implied_verdict，PERIOD，LLM 无权改写）
+（机械化层：implied_verdict ∈ {DEFECT, NOT_DEFECT} → verdict = implied_verdict，PERIOD；
+  implied_verdict == CONFLICT → verdict = NEEDS_MORE_EVIDENCE + rework 工单（信号冲突））
 以下仅当 implied_verdict == GREY_ZONE（A=NEUTRAL）：
   B==CONFIRMED                       → DEFECT
   D==SUPPORTS_DEFECT                 → DEFECT（链内须有实质违规观测非 grade D）

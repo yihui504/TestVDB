@@ -194,3 +194,29 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def check_violates_consistency(chain: dict) -> dict:
+    """violates 机械复核（2026-08-18 E5 后改进 2）。
+
+    builder 声明 api_violates_assertion=False（不违反）但链内有强违规观测时——
+    violates 判定存疑，应打回 builder 复核（rework 通道）。
+    模式：quote 含约束声称（must/should/>=/<）且 obs 有"值被接受"观测
+    （参数=值 + http=200/code=0），此时 violates=False 与观测矛盾。
+
+    返回 {"suspicious": bool, "evidence": str}。
+    """
+    cg = (chain.get("steps") or {}).get("contract_grounding") or {}
+    if cg.get("api_violates_assertion"):  # True 方向不复核（机械 A 已采信）
+        return {"suspicious": False, "evidence": None}
+    quote = str(cg.get("assertion_text_quoted") or "")
+    obs = _observations(chain)
+    has_claim = bool(re.search(r"must|should|>=|<=|<|>|valid|required|match", quote, re.IGNORECASE))
+    # 值被接受观测：参数=值 且同段含 200/code:0/success/accepted
+    accepted = re.search(
+        r"(\w+)\s*=\s*[^\s,)]+[^\n]*(?:http=200|code=0|success|accepted)",
+        obs, re.IGNORECASE)
+    if has_claim and accepted:
+        return {"suspicious": True,
+                "evidence": f"violates=False 但观测显示值被接受（{accepted.group(0)[:70]}）而 quote 含约束声称（{quote[:50]}）"}
+    return {"suspicious": False, "evidence": None}

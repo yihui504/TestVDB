@@ -447,6 +447,50 @@ class TestStabilization:
         assert "必读先验" in sop, "缺认知必读先验"
 
 
+
+    def test_grounding_conflict_state(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from check_chain_grounding import judge_grounding
+        ct = json.dumps({"constraints": [{"constraint_id": "c1", "assertion": "x must be valid"}]})
+        # A=REFUTED + 机械 B=CONFIRMED（HTTP语义） → CONFLICT
+        chain = {"steps": {
+            "contract_grounding": {"constraint_id": "c1", "assertion_text_quoted": "x must be valid", "api_violates_assertion": False},
+            "execution_evidence": {"log_pattern": "req x=bad -> http=200, code=65535 ('x is invalid')",
+                                    "secondary_observations": [],
+                                    "http_semantics": {"client_error_returned_as": "HTTP 2xx + 业务错误码"}},
+        }}
+        r = judge_grounding(chain, ct)
+        assert r["implied_verdict"] == "CONFLICT" and r["reason"] == "id+quote_ok_conflict"
+        # A=REFUTED 无冲突 → NOT_DEFECT 照旧
+        chain2 = {"steps": {
+            "contract_grounding": {"constraint_id": "c1", "assertion_text_quoted": "x must be valid", "api_violates_assertion": False},
+            "execution_evidence": {"log_pattern": "req ok -> http=200", "secondary_observations": [], "http_semantics": {}},
+        }}
+        r2 = judge_grounding(chain2, ct)
+        assert r2["implied_verdict"] == "NOT_DEFECT" and r2["reason"] == "id+quote_ok"
+
+    def test_check_violates_consistency(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from check_physical_constraints import check_violates_consistency
+        # violates=False + quote 约束 + 接受观测 → suspicious
+        chain = {"steps": {
+            "contract_grounding": {"constraint_id": "x", "assertion_text_quoted": "data field types match schema", "api_violates_assertion": False},
+            "execution_evidence": {"log_pattern": "insert int -> status=200, code=0 (accepted)", "secondary_observations": []},
+        }}
+        r = check_violates_consistency(chain)
+        assert r["suspicious"] is True and "violates=False" in r["evidence"]
+        # violates=True 不复核
+        chain2 = {"steps": {"contract_grounding": {**chain["steps"]["contract_grounding"], "api_violates_assertion": True}}}
+        assert check_violates_consistency(chain2)["suspicious"] is False
+        # 无接受观测不 suspicious
+        chain3 = {"steps": {
+            "contract_grounding": chain["steps"]["contract_grounding"],
+            "execution_evidence": {"log_pattern": "insert -> status=400 rejected", "secondary_observations": []},
+        }}
+        assert check_violates_consistency(chain3)["suspicious"] is False
+
     def test_auditor_sop_aggregation_mechanized(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
         assert "implied_verdict" in sop, "缺聚合机械化字段"
