@@ -457,3 +457,50 @@ class TestStabilization:
         sop = (Path(__file__).resolve().parent.parent / "agents" / "evidence-builder.md").read_text(encoding="utf-8")
         assert "搜证充分性自检" in sop, "缺充分性自检条款"
         assert "sufficiency_check" in sop, "缺自检留痕字段"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 机械 B 判定（E3 后稳定化扩展，2026-08-18）— 数值下界/HTTP语义/类型恒真
+# ═══════════════════════════════════════════════════════════════
+
+class TestMechanicalB:
+    def test_judge_physical_rules(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from check_physical_constraints import judge_physical
+
+        def chain(cg_quote, log_pattern, http_sem=None, api_viol=None):
+            return {"steps": {
+                "contract_grounding": {"constraint_id": "x", "assertion_text_quoted": cg_quote,
+                                        "api_violates_assertion": api_viol},
+                "execution_evidence": {"log_pattern": log_pattern,
+                                        "secondary_observations": [],
+                                        "http_semantics": http_sem or {}},
+            }}
+
+        # 规则1a：cg 断言 ef >= 1 + log ef=-1 被接受
+        r = judge_physical(chain("ef >= 1 (HNSW search parameter)", "REQ: search with ef=-1 -> http=200, code=0 (returned 1 result)"))
+        assert r["verdict_B"] == "CONFIRMED" and r["objective_constraint_class"] == "数值下界"
+        # 规则1b：计数词典负值裸触发（无 cg 断言）
+        r = judge_physical(chain("no assertion here", "POST schema with desiredCount=-1 -> http=200"))
+        assert r["verdict_B"] == "CONFIRMED" and r["objective_constraint_class"] == "数值下界"
+        # 规则2：HTTP 语义双条件
+        r = judge_physical(chain("deleted count <= 10000", "DELETE batch -> http=500",
+                                 http_sem={"client_error_returned_as": "HTTP 5xx",
+                                            "note": "Validation errors return HTTP 500"}))
+        assert r["verdict_B"] == "CONFIRMED" and r["objective_constraint_class"] == "HTTP语义恒真"
+        # 规则3：null 被接受 + must be 声称
+        r = judge_physical(chain("vectorIndexType must be one of allowed types",
+                                 "POST schema with distance=null -> http=200, stored distance=cosine"))
+        assert r["verdict_B"] == "CONFIRMED" and r["objective_constraint_class"] == "类型恒真"
+        # 不触发：无违规观测
+        r = judge_physical(chain("x >= 1", "POST ok -> http=200", api_viol=False))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+        # 不触发：ef=-1 sentinel（词典不含 ef；无 cg 下界断言）
+        r = judge_physical(chain("ef is a sentinel default", "POST with ef=-1 -> http=200"))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
+    def test_auditor_sop_mechanical_b(self):
+        sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
+        assert "check_physical_constraints.py" in sop, "缺机械 B 脚本引用"
+        assert "NOT_TRIGGERED" in sop, "缺机械 B 兜底分支"

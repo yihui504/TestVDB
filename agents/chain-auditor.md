@@ -120,14 +120,26 @@ python scripts/check_chain_grounding.py {chain_json} {contract_json}
 视角 D 的认知锚点吸收（维护者态度模式中有相关锚点时 D 给信号）；无锚点的契约疑义 →
 verdict 走 NEEDS_MORE_EVIDENCE 由主进程人工复核。
 
-**视角 B — 物理/语义约束（必须主动行使，RQ2 v3 执行缺陷修正）**：
+**视角 B — 物理/语义约束（2026-08-18 机械判定优先 + LLM 兜底）**：
+
+**第一步（机械，仅 GREY_ZONE case 需要）**：implied_verdict=GREY_ZONE 的每条链，先跑：
+```bash
+python scripts/check_physical_constraints.py {chain_json}
+```
+- 输出 `verdict_B=CONFIRMED`（数值下界/HTTP语义恒真/类型恒真三类肯定性触发）→ **采信，
+  verdict_B=CONFIRMED 不得改判**（聚合 B=CONFIRMED → DEFECT）。离线回测依据：触发 16 case
+  对 GT 方向一致率 0.875，模拟聚合后波动集 recall 0.414→0.586 / precision 0.857→0.895
+  （E4 前预注册口径）。
+- 输出 `NOT_TRIGGERED` → 按下方判据自行行使 B（LLM 兜底段）：
+
+**第二步（LLM 兜底，机械未触发的 case）**：
 **每一链都必须独立评估视角 B，禁止"沿用 A 的结论"或跳过**。客观约束判据：
-- 数值下界：计数/大小/并行度/limit 类参数 ≥1、≥0 的下界（groupSize=0/-1、shardNum=0、
-  ef=0、topK=0 均属此类——"接受负数/零计数"是客观违规，**不需要契约背书**）
+- 数值下界：计数/大小/并行度/limit 类参数 ≥1、≥0 的下界（"接受负数/零计数"是客观违规，
+  **不需要契约背书**；ef/nprobe 类 HNSW 参数注意 by-design 负值 sentinel 先例）
 - 枚举闭集：参数取值域是有限集（metricType/consistencyLevel 枚举），接受集合外值即违规
 - 互斥参数：文档/语义上互斥的参数被同时接受
 - 类型恒真：数字字段接受非数字、向量字段接受标量
-- HTTP 语义恒真（强限定，2026-08-18）：**仅当两条件同时满足**——①错误属请求侧可判定
+- HTTP 语义恒真（强限定）：**仅当两条件同时满足**——①错误属请求侧可判定
   （参数校验类：非法值/格式错误/越界）②契约或文档对错误响应形态有声称（文档示例错误
   响应为 4xx，或契约 assertion 明确 "invalid → reject"）——实测却是 2xx+业务错误码
   （如 200+code:65535）→ B=CONFIRMED（Type2_PoorDiagnostics 方向）。两条件缺一 → 仅在
