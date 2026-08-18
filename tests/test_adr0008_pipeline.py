@@ -500,6 +500,37 @@ class TestMechanicalB:
         r = judge_physical(chain("ef is a sentinel default", "POST with ef=-1 -> http=200"))
         assert r["verdict_B"] == "NOT_TRIGGERED"
 
+
+    def test_judge_physical_rule2_self_invalid_and_rule4(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        from check_physical_constraints import judge_physical
+
+        def chain(cg_quote, log_pattern, http_sem=None, excerpt=None):
+            return {"steps": {
+                "contract_grounding": {"constraint_id": "x", "assertion_text_quoted": cg_quote,
+                                        "api_violates_assertion": False},
+                "execution_evidence": {"log_pattern": log_pattern,
+                                        "secondary_observations": [],
+                                        "http_semantics": http_sem or {}},
+                "source_grounding": {"source_excerpt": excerpt or ""},
+            }}
+
+        # A1 规则2第三分支：服务器自证（错误消息自证值非法 + 2xx 返回）
+        r = judge_physical(chain("limit + offset < 16384",
+                                 "search with limit=0 -> http=200, code=65535 ('topk [0] is invalid, it should be in range [1, 16384]')",
+                                 http_sem={"client_error_returned_as": "HTTP 2xx + 业务错误码"}))
+        assert r["verdict_B"] == "CONFIRMED" and r["objective_constraint_class"] == "HTTP语义恒真"
+        # A2 规则4：挂起观测 + 源码无上界校验
+        r = judge_physical(chain("no assertion",
+                                 "PUT /collections payload={shard_number=2147483647} -> status=None (request timeout); GET / -> status=None",
+                                 excerpt="Validator (lower-bound only, u32 type): pub struct CreateCollection"))
+        assert r["verdict_B"] == "CONFIRMED" and r["objective_constraint_class"] == "资源边界"
+        # 规则4 单条件不触发：挂起但源码有上界
+        r = judge_physical(chain("no assertion", "PUT -> status=None (timeout)",
+                                 excerpt="Validator with min=1 and max=65536 both bounds"))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
     def test_auditor_sop_mechanical_b(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
         assert "check_physical_constraints.py" in sop, "缺机械 B 脚本引用"

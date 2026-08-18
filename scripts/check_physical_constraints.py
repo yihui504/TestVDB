@@ -62,6 +62,14 @@ COUNT_PARAMS = {
 # 规则3 类型恒真（null 版）：契约 quote 含 must be/required 声称
 MUST_BE_CLAIM = re.compile(r"must be|required", re.IGNORECASE)
 
+# 规则2 条件②第三分支（A1，2026-08-18）：服务器错误消息自证值非法（却以 2xx 返回）
+SERVER_SELF_INVALID = re.compile(r"is invalid|out of range|should be in range|must be in range", re.IGNORECASE)
+BIZ_CODE_MARK = re.compile(r"code[=:]\s*\d{4,}", re.IGNORECASE)
+
+# 规则4 资源边界（A2）：合法值触发服务端挂起 + 源码校验器只有下界无上界
+HANG_OBS = re.compile(r"status=None|timeout|hang|unresponsive|OOM", re.IGNORECASE)
+NO_UPPER_BOUND = re.compile(r"lower-bound only|no upper", re.IGNORECASE)
+
 
 def judge_physical(chain: dict) -> dict:
     """视角 B 机械判定。返回 verdict_B / objective_constraint_class / evidence，或 NOT_TRIGGERED。"""
@@ -110,16 +118,20 @@ def judge_physical(chain: dict) -> dict:
                     "trigger": f"计数参数 {param}={v}（负值）被接受（{line.strip()[:80]}）",
                 }
 
-    # ── 规则2 HTTP 语义（双条件：错误形态 + 契约应拒绝声称或观测注明 validation） ──
+    # ── 规则2 HTTP 语义（双条件：错误形态 + 契约应拒绝声称或观测注明 validation 或服务器自证） ──
     hs = ee.get("http_semantics") or {}
     code_mode = str(hs.get("client_error_returned_as") or "")
     hs_note = str(hs.get("note") or "")
     if code_mode in ("HTTP 2xx + 业务错误码", "HTTP 5xx") and (
-            REJECT_CLAIM.search(quote) or "validation" in hs_note.lower()):
+            REJECT_CLAIM.search(quote) or "validation" in hs_note.lower()
+            or SERVER_SELF_INVALID.search(obs)):
+        trigger = (f"服务器自证（{SERVER_SELF_INVALID.search(obs).group(0) if SERVER_SELF_INVALID.search(obs) else ''}）"
+                   if SERVER_SELF_INVALID.search(obs) else
+                   f"契约/观测声称应拒绝（{quote[:40]} | {hs_note[:30]}）")
         return {
             "verdict_B": "CONFIRMED",
             "objective_constraint_class": "HTTP语义恒真",
-            "trigger": f"{code_mode} 且契约/观测声称应拒绝（{quote[:50]} | {hs_note[:40]}）",
+            "trigger": f"{code_mode} 且 {trigger}",
         }
 
     # ── 规则3 类型恒真（null 被接受 + 契约 must be/required 声称） ──
@@ -135,6 +147,17 @@ def judge_physical(chain: dict) -> dict:
                     "objective_constraint_class": "类型恒真",
                     "trigger": f"{m.group(1)}=null 被接受且契约声称 must be/required（{line.strip()[:80]}）",
                 }
+
+    # ── 规则4 资源边界（A2，2026-08-18）：合法值触发挂起 + 源码校验器只有下界无上界 ──
+    sg = (chain.get("steps") or {}).get("source_grounding") or {}
+    excerpt = str(sg.get("source_excerpt") or "")
+    if (HANG_OBS.search(obs)
+            and (NO_UPPER_BOUND.search(excerpt) or "lower-bound" in excerpt.lower())):
+        return {
+            "verdict_B": "CONFIRMED",
+            "objective_constraint_class": "资源边界",
+            "trigger": f"合法值触发挂起（{HANG_OBS.search(obs).group(0)}）且源码校验器无上界",
+        }
 
     return {"verdict_B": "NOT_TRIGGERED", "objective_constraint_class": None, "trigger": None}
 
