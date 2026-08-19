@@ -491,6 +491,32 @@ class TestStabilization:
         }}
         assert check_violates_consistency(chain3)["suspicious"] is False
 
+
+    def test_anchor_conflict_fingerprints(self, tmp_path):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+        import check_anchor_conflict as cac
+        # 构造 cognition（fingerprints 显式声明）
+        intel = tmp_path / "milvus"
+        intel.mkdir(parents=True)
+        json.dump({"by_design_patterns": [
+            {"pattern": "shardsNum unconsumed top-level", "source_issues": [1], "fingerprints": ["shardsNum", "create"]},
+            {"pattern": "old anchor no fingerprints", "source_issues": [2]},
+        ]}, open(intel / "developer_cognition.json", "w", encoding="utf-8"))
+        def chain(did, phen):
+            return {"defect_id": did, "steps": {
+                "execution_evidence": {"log_pattern": phen, "secondary_observations": []},
+                "contract_grounding": {"assertion_text_quoted": ""}}}
+        # 指纹全命中
+        r = cac.detect_anchor_conflict(chain("milvus_x1", "create with shardsNum=0 -> http=200"), intel_root=tmp_path)
+        assert r["anchored_conflict"] is True
+        # 缺一指纹不命中
+        r2 = cac.detect_anchor_conflict(chain("milvus_x2", "create ok"), intel_root=tmp_path)
+        assert r2["anchored_conflict"] is False
+        # 无 fingerprints 旧锚点不参与
+        r3 = cac.detect_anchor_conflict(chain("milvus_x3", "old anchor"), intel_root=tmp_path)
+        assert r3["anchored_conflict"] is False
+
     def test_auditor_sop_aggregation_mechanized(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
         assert "implied_verdict" in sop, "缺聚合机械化字段"

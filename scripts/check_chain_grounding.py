@@ -62,6 +62,18 @@ def judge_grounding(chain: dict, contract_text: str) -> dict:
     norm = contract_text.replace('\\"', '"')
     if quote and (quote in contract_text or quote in norm):
         if cg.get("api_violates_assertion"):
+            # by_design 锚点感知冲突（v8 FP 侧 2026-08-20）：A=CONFIRMED 但链现象命中
+            # cognition 的 by_design 锚点（确定性关键词匹配）→ 降 CONFLICT 走打回闭环，
+            # 不直接翻 NOT_DEFECT（机械纪律保持——终判交闭环复核）
+            try:
+                from check_anchor_conflict import detect_anchor_conflict
+                ac = detect_anchor_conflict(chain)
+                if ac.get("anchored_conflict"):
+                    return {"verdict_A": "CONFIRMED", "reason": "id+quote_ok_anchor_conflict",
+                            "implied_verdict": "CONFLICT", "constraint_id": cid,
+                            "conflict_note": ac.get("anchor")}
+            except ImportError:
+                pass
             return {"verdict_A": "CONFIRMED", "reason": "id+quote_ok",
                     "implied_verdict": "DEFECT", "constraint_id": cid}
         # 信号冲突检测：violates=False 但机械 B 有独立 CONFIRMED 证据
