@@ -57,7 +57,10 @@ def judge_grounding(chain: dict, contract_text: str) -> dict:
         return {"verdict_A": "NEUTRAL", "reason": "constraint_absent",
                 "implied_verdict": "GREY_ZONE", "constraint_id": cid}
     quote = cg.get("assertion_text_quoted", "") or ""
-    if quote and quote in contract_text:
+    # JSON 转义规范化（2026-08-20 v8 考古案发现）：quote 含引号时，契约文件原文是 \" 形态
+    # 而链内 quote 是解析后的 "——两侧都试，命中即算逐字
+    norm = contract_text.replace('\\"', '"')
+    if quote and (quote in contract_text or quote in norm):
         if cg.get("api_violates_assertion"):
             return {"verdict_A": "CONFIRMED", "reason": "id+quote_ok",
                     "implied_verdict": "DEFECT", "constraint_id": cid}
