@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -71,8 +72,57 @@ HANG_OBS = re.compile(r"status=None|timeout|hang|unresponsive|OOM", re.IGNORECAS
 NO_UPPER_BOUND = re.compile(r"lower-bound only|no upper", re.IGNORECASE)
 
 
-def judge_physical(chain: dict) -> dict:
-    """视角 B 机械判定。返回 verdict_B / objective_constraint_class / evidence，或 NOT_TRIGGERED。"""
+# 规则4 源码 grep：校验注解模式（跨语言）
+MIN_ANNOT_RE = re.compile(r"range\s*\(\s*min|validate.*min|binding.*\bgt|binding.*\bgte", re.IGNORECASE)
+MAX_ANNOT_RE = re.compile(r"range\s*\(\s*[^)]*max|validate.*max|binding.*\blt|binding.*\blte", re.IGNORECASE)
+
+
+def _grep_bound_in_source(src_dir, files, param_names=None):
+    """读 files（相对 src_dir 的路径），grep 校验注解确认有无下界/上界。
+
+    param_names 提供时：只看目标参数字段定义行上方 3 行内的注解（精准，
+    不被同文件里其他参数的 max 注解污染）。未提供时退回全文 grep（粗）。
+    返回 (has_min, has_max, hit_files)。机械判定——不依赖 builder 措辞。
+    """
+    has_min = has_max = False
+    hit = 0
+    for rel in files:
+        p = os.path.join(src_dir, str(rel))
+        if not os.path.isfile(p):
+            continue
+        try:
+            txt = open(p, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        hit += 1
+        lines = txt.splitlines()
+        if not param_names:
+            if MIN_ANNOT_RE.search(txt):
+                has_min = True
+            if MAX_ANNOT_RE.search(txt):
+                has_max = True
+            continue
+        # 有参数名：定位字段定义行（行含参数名 + ':'），看上方 3 行注解
+        for i, line in enumerate(lines):
+            if ":" not in line:
+                continue
+            if not any(re.search(rf"\b{re.escape(pn)}\b", line) for pn in param_names):
+                continue
+            ctx = "\n".join(lines[max(0, i - 3):i + 1])
+            if MIN_ANNOT_RE.search(ctx):
+                has_min = True
+            if MAX_ANNOT_RE.search(ctx):
+                has_max = True
+    return has_min, has_max, hit
+
+
+def judge_physical(chain: dict, src_dir=None) -> dict:
+    """视角 B 机械判定。返回 verdict_B / objective_constraint_class / evidence，或 NOT_TRIGGERED。
+
+    src_dir（可选）：目标 DB 源码 clone 根目录。提供时规则4 直接 grep 源码确认
+    "校验器有下界无上界"（机械，不依赖 builder 的 source_excerpt 措辞）；未提供时
+    回退到旧 excerpt 逻辑（向后兼容）。
+    """
     cg = (chain.get("steps") or {}).get("contract_grounding") or {}
     quote = str(cg.get("assertion_text_quoted") or "")
     obs = _observations(chain)
@@ -149,15 +199,34 @@ def judge_physical(chain: dict) -> dict:
                 }
 
     # ── 规则4 资源边界（A2，2026-08-18）：合法值触发挂起 + 源码校验器只有下界无上界 ──
-    sg = (chain.get("steps") or {}).get("source_grounding") or {}
-    excerpt = str(sg.get("source_excerpt") or "")
-    if (HANG_OBS.search(obs)
-            and (NO_UPPER_BOUND.search(excerpt) or "lower-bound" in excerpt.lower())):
-        return {
-            "verdict_B": "CONFIRMED",
-            "objective_constraint_class": "资源边界",
-            "trigger": f"合法值触发挂起（{HANG_OBS.search(obs).group(0)}）且源码校验器无上界",
-        }
+    hang_match = HANG_OBS.search(obs)
+    if hang_match:
+        sg = (chain.get("steps") or {}).get("source_grounding") or {}
+        if src_dir:
+            # 机械路径：直接 grep 源码确认"有 min 无 max"（不依赖 builder 措辞）
+            files = sg.get("files_examined") or []
+            # 从 obs 提取参数名（精准定位字段定义，避免其他参数的 max 注解污染）
+            _stop = {"http", "code", "status", "req", "resp", "port", "id", "count", "limit", "size"}
+            param_names = [w for w in re.findall(r"(\w+)\s*[:=]\s*-?[\d.]+", obs)
+                           if w.lower() not in _stop]
+            param_names = list(dict.fromkeys(param_names))
+            has_min, has_max, hit = _grep_bound_in_source(src_dir, files, param_names or None)
+            if has_min and not has_max and hit > 0:
+                return {
+                    "verdict_B": "CONFIRMED",
+                    "objective_constraint_class": "资源边界",
+                    "trigger": f"合法值触发挂起（{hang_match.group(0)}）且源码 grep 证实 {param_names[:2]} 校验器有 min 无 max（{hit} 文件）",
+                }
+            # 源码未证实 → 不触发（保持机械性，不回退 excerpt）
+        else:
+            # 向后兼容：src_dir 未提供时用旧 excerpt 逻辑
+            excerpt = str(sg.get("source_excerpt") or "")
+            if NO_UPPER_BOUND.search(excerpt) or "lower-bound" in excerpt.lower():
+                return {
+                    "verdict_B": "CONFIRMED",
+                    "objective_constraint_class": "资源边界",
+                    "trigger": f"合法值触发挂起（{hang_match.group(0)}）且源码校验器无上界（excerpt）",
+                }
 
     return {"verdict_B": "NOT_TRIGGERED", "objective_constraint_class": None, "trigger": None}
 
