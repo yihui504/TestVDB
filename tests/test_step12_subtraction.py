@@ -71,6 +71,45 @@ class TestChunkContract:
         assert bigs[0]["chunk_id"] == "chunk_big-1of3"
         assert sum(b["unit_count"] for b in bigs) == 25
 
+    def test_constraints_dict_three_buckets(self):
+        """真实契约 schema：constraints 是 {type/range/state_constraints} 三桶 dict，
+        每桶 list。回归防护：dict 形状曾因非 list 被 build_chunks 静默跳过，
+        导致 type/range 约束（attack-boundary 主靶）从未进块。"""
+        c = {"constraints": {
+            "type_constraints": [
+                {"constraint_id": "t_1", "endpoint": "ep0", "assertion": "x"},
+                {"constraint_id": "t_2", "endpoint": "ep1", "assertion": "x"},
+            ],
+            "range_constraints": [
+                {"constraint_id": "r_1", "endpoint": "ep0", "assertion": "x"},
+                {"constraint_id": "r_2", "endpoint": "ep0", "assertion": "x"},
+            ],
+            "state_constraints": [
+                {"constraint_id": "s_1", "endpoint": "ep1", "assertion": "x"},
+            ],
+        }}
+        chunks = build_chunks(c, chunk_size=12)
+        by_ep = {c2["endpoints"][0]: c2 for c2 in chunks}
+        assert by_ep["ep0"]["unit_count"] == 3  # t_1 + r_1 + r_2
+        assert by_ep["ep1"]["unit_count"] == 2  # t_2 + s_1
+        refs = {u["unit_ref"] for c2 in chunks for u in c2["units"]}
+        assert "constraints::t_1" in refs
+        assert "constraints::r_2" in refs
+        assert "constraints::s_1" in refs
+        assert all(u["source"] == "constraints" for c2 in chunks for u in c2["units"])
+
+    def test_constraints_unexpected_shape_raises(self):
+        """非 list 非 dict 形状（如 str/int）报错而非静默跳过。"""
+        import pytest
+        with pytest.raises(ValueError):
+            build_chunks({"constraints": "corrupted"}, chunk_size=12)
+        with pytest.raises(ValueError):
+            build_chunks({"constraints": {"bucket": "not-a-list"}}, chunk_size=12)
+
+    def test_constraints_null_treated_as_empty(self):
+        chunks = build_chunks({"constraints": None}, chunk_size=12)
+        assert chunks == []
+
     def test_deterministic_order(self):
         a = build_chunks(self._contract(4, 3, 2), chunk_size=5)
         b = build_chunks(self._contract(4, 3, 2), chunk_size=5)

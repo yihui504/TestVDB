@@ -51,13 +51,35 @@ def _endpoint_of(unit: dict, endpoint_key: str) -> str:
     return GLOBAL_GROUP
 
 
+def _iter_units(field: str, items) -> list[dict]:
+    """归一化可攻单元列表。
+
+    constraints 在真实契约里是 dict 三桶（type/range/state_constraints 各为 list，
+    见 contract-formalizer 输出 schema）；其余字段（assertions 等）是平铺 list。
+    dict 形状按桶展开收集；其他非 list 形状报错（历史上被静默 continue 跳过，
+    导致 constraints 三桶从未进块——attack-boundary 的主靶缺席，2026-08-20 修复）。
+    """
+    if isinstance(items, dict):
+        units: list[dict] = []
+        for sub in items.values():
+            if isinstance(sub, list):
+                units.extend(sub)
+            elif sub is not None:
+                raise ValueError(
+                    f"contract['{field}'] 是 dict 但桶值非 list: {type(sub).__name__}")
+        return units
+    if isinstance(items, list):
+        return items
+    if items is None:
+        return []
+    raise ValueError(
+        f"contract['{field}'] 形状意外: {type(items).__name__}（期望 list 或 dict 三桶）")
+
+
 def build_chunks(contract: dict, chunk_size: int) -> list[dict]:
     groups: dict[str, list[dict]] = {}
     for field, id_key, ep_key in UNIT_SOURCES:
-        items = contract.get(field)
-        if not isinstance(items, list):
-            continue
-        for unit in items:
+        for unit in _iter_units(field, contract.get(field)):
             if not isinstance(unit, dict) or not unit.get(id_key):
                 continue
             groups.setdefault(_endpoint_of(unit, ep_key), []).append({
