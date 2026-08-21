@@ -155,7 +155,7 @@ rt.drop_collection(COLL)
 ### 核心 4 条（同 milvus）
 
 1. `from runtime import get_runtime; rt = get_runtime()`（`TESTVDB_TARGET=qdrant`）
-2. `rt.request(method, path_key, body, path_params=...)`，**禁止字面量路径**
+2. `rt.request(method, path_key, body, path_params=...)`，**禁止字面量路径**。返回值是**二元组** `(status, raw_text)`——`status, raw = rt.request(...)`（fullrun#4 实测教训：三元组解包 `s, body, raw = rt.request(...)` 会 ValueError；要解析 body 自己 `json.loads(raw)`）
 3. **禁止任何 status-based if**——按场景选 helper（同 milvus 决策树）：
    - 应被拒绝：`rt.expect_rejected(status, raw, setup_ok=ok)`
    - 应被接受：`rt.judge_200(status, raw, setup_ok=ok)`
@@ -194,7 +194,7 @@ ok, err = rt.setup_default(COLL, dim=128, metric="Cosine")  # PUT /collections/{
 ### 核心 5 条（4 条同 milvus/qdrant + 第 5 条 weaviate 专属）
 
 1. `from runtime import get_runtime; rt = get_runtime()`（`TESTVDB_TARGET=weaviate`）
-2. `rt.request(method, path_key, body, path_params=...)`，**禁止字面量路径**
+2. `rt.request(method, path_key, body, path_params=...)`，**禁止字面量路径**。返回值是**二元组** `(status, raw_text)`——`status, raw = rt.request(...)`（fullrun#4 实测教训：三元组解包 `s, body, raw = rt.request(...)` 会 ValueError；要解析 body 自己 `json.loads(raw)`）
 3. **禁止任何 status-based if**（verdict 判定场景）
 4. 末尾 `print(f"VERDICT: {v}")` + 按 v 退出
 5. **schema 类边界攻击（vectorIndexConfig / invertedIndexConfig / replicationConfig 字段非法值）必须用 `rt.judge_schema_attack(...)`，禁止用 `expect_rejected`**（详见下方"Weaviate 特定差异 · schema 类边界判定"）
