@@ -677,6 +677,15 @@ Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}
 ```
 **验证：** `ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -l`
 
+**⛔ summary.md 主进程实测门（2026-08-21 机制级修复——agent 自验证多次复现虚报）**：
+
+reporter 返回后，主进程**必须实测**（不采信回复文本）：
+```bash
+test -s "results/{target}/{version}/{timestamp}/summary.md" && echo SUMMARY-OK || echo SUMMARY-MISSING
+```
+- `SUMMARY-MISSING` → 重派 reporter 一次（派发词附"上轮 summary.md 未落盘，本次仅补写 summary.md + 结尾 Bash test -s 实测"）；仍缺失 → 主进程代写并在 summary 顶部标注 `⚠️ reporter-generated=false (main-process fallback)`，error_log 记录
+- 该门在 9b（生成 summary.md）之前执行也适用：Final Turn 路径同样实测
+
 **更新 pipeline_state**: `phase` = `"DEFECT_REVIEW"`, `phases_completed` 追加 `"REPORTING"`
 
 ### 8f.5. DEFECT_REVIEW — 逐缺陷审查
