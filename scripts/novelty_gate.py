@@ -442,7 +442,10 @@ def load_chain_verdicts(session_dir: Path) -> Optional[Dict]:
     （defect_id / script / param / defect_type 字段名不变，消费方 grade_candidate 无感）。
     NEEDS_MORE_EVIDENCE / NOT_DEFECT 不进终判（前者由主进程重派 builder，后者已归档线）。
     """
+    # 两个落点都找（同 injector：两段式转写落 debate_logs/，旧直写落 session 根）
     cv_path = session_dir / "debate_logs" / "chain_verdicts.json"
+    if not cv_path.is_file():
+        cv_path = session_dir / "chain_verdicts.json"
     cv = safe_read(cv_path)
     if not cv:
         return None
@@ -460,7 +463,7 @@ def load_chain_verdicts(session_dir: Path) -> Optional[Dict]:
             "fp_evidence_source": v.get("fp_evidence_source"),
         }
         for v in verdicts
-        if isinstance(v, dict) and v.get("verdict") == "DEFECT"
+        if isinstance(v, dict) and (v.get("verdict") or v.get("final_verdict")) == "DEFECT"
     ]
     return {
         "target": cv.get("target", ""),
