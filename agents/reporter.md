@@ -43,9 +43,12 @@ Turn 2-3: Write ${SESSION_DIR}/defects/defect-1.md（Turn 每写 2 个报告）
 Turn 4-5: Write 剩余 defect-N.md
 Turn 5: Write ${SESSION_DIR}/summary.md（⛔ **必须产出** — gate_summary_consistency 强制对账：含 `| Defects Confirmed (Debate Stage 2) | {N} |`，N 必须 **严格 ==** `defects/defect-*.md` 实际文件数。不产 summary.md → advance DONE 被 gate block exit 3）
 Turn 5: Bash  ls -la ${SESSION_DIR}/defects/defect-*.md
+Turn 5: Bash  test -s ${SESSION_DIR}/summary.md && echo SUMMARY-OK || echo SUMMARY-MISSING
 ```
 
 **只生成 endorsement=true 的缺陷报告。跳过 SCRIPT_ERROR 标记的条目。**
+
+⛔ **落盘自验证（2026-08-21 增补）**：上述最后一行 Bash（`test -s summary.md`）必须在结束前实际执行并输出 `SUMMARY-OK`。pilot 2026-08-20/21 两次出现 summary.md 在回复里"声称已写"但文件未落盘——完成判据是**文件系统的实测输出**，不是回复文本的叙述。输出 SUMMARY-MISSING → 回 Turn 5 重写。
 
 ---
 

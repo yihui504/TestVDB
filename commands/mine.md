@@ -368,6 +368,18 @@ Agent(subagent_type="testvdb:contract-formalizer", description="形式化 {targe
 ```
 **验证：** `ls -la results/{target}/{version}/structured_contract.json`
 
+**Step 5.5: spec 参数机械回填（机制化 2026-08-21，rerun pilot 手工 patch 的替代）**
+
+rerun pilot 实测：formalizer 对 raw_knowledge.md 的 "Spec-derived Endpoints" 骨架条目
+（Step 4.5 机械补全的端点）消费不可靠——65 端点 0 parameters。与其让 LLM 学会读
+骨架，formalizer 之后主进程确定性回填（同 Step 4.5 哲学——0 token，不编造，字段标
+`source: openapi (mechanical backfill)`）：
+
+```bash
+py -3 scripts/enrich_contract_from_spec.py results/{target}/{version} --fill-missing-fields
+# 退出 0 = 回填完成或 spec 不可用（先跑过 Step 4.5 fetch 才有 spec）；含 passport 重签
+```
+
 ### Step 6: 合同门控检查
 检查 `structured_contract.json` 的核心 CRUD 端点覆盖率 ≥ 90%。不通过 → 输出缺失端点 + 终止。
 

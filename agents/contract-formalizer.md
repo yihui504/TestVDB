@@ -401,6 +401,14 @@ tools:
 
 ---
 
+## Spec-derived 骨架条目处理（2026-08-21 声明）
+
+raw_knowledge.md 可能含主进程机械补全的 "Spec-derived Endpoints" 节（Source URL: openapi）。
+**你对这些骨架条目只需登记端点（path/method/category/source_url），不必提取参数**——
+参数由主进程 `enrich_contract_from_spec.py`（Step 5.5）从 OpenAPI spec 确定性回填。
+⛔ 禁止为骨架条目编造参数名/类型/约束（没看到就留空 parameters 数组，脚本会补）。
+LLM 提取的概念文档端点照常提取参数与约束。
+
 ## 输出验证
 
 生成 structured_contract.json 后自检：
