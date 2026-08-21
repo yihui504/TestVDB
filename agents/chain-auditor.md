@@ -207,7 +207,28 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
 
 ---
 
-## 输出（Write 到 ${SESSION_DIR}/debate_logs/chain_verdicts.json）
+## 输出模式（fullrun#4 起强制：文本判定行 + 主进程落盘）
+
+> **fullrun#4 实测教训（2026-08-21）**：harness 若设 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`（本机 6000），
+> 直接 Write 完整 chain_verdicts.json 会在"审计报告正文 + 大 JSON Write"叠加时超限
+> （12→6→3→1 链批次全超）。**固定改用两段式**：
+
+1. **auditor 只输出文本判定行**（每链一行，无其他内容）：
+   ```
+   verdict <defect_id> <DEFECT|NOT_DEFECT|NEEDS_MORE_EVIDENCE> fp=<doc|source|both|behavior|-> rationale="<≤60字>"
+   ```
+   完整四视角分析在思考内完成，不复述、不输出中间推理。
+2. **主进程机械转写落盘**：按判定行组装 chain_verdicts.json（schema 同下——perspective_analysis
+   由主进程按 aggregation 规则回填），summary 按 Counter 重算。判定 100% 出自 auditor，
+   主进程零判定权（转写错误可 diff 判定行 ↔ JSON 核对）。
+
+裁决边界不变：判定/取证标准照本规范执行；主进程仅做格式转换。
+
+---
+
+## 输出（Write 到 ${SESSION_DIR}/debate_logs/chain_verdicts.json）（fallback：无 token 限制环境或小批次）
+
+
 
 ```json
 {
