@@ -113,9 +113,11 @@ def find_log(session_dir: str | Path, script_name: str) -> Optional[Path]:
 def find_logs(session_dir: str | Path, script_name: str = "") -> list[Path]:
     """Find all output logs, optionally filtered by script name."""
     sd = Path(session_dir)
+    # rglob（fullrun#5 R1b 2026-08-21）：executor 产物归子目录（debate_logs/、
+    # vein_scripts/ 等），根目录 glob 会漏——递归搜索是原语义的超集
     if script_name:
-        return sorted(sd.glob(f"output_*{script_name}*.log"))
-    return sorted(sd.glob("output_*.log"))
+        return sorted(sd.rglob(f"output_*{script_name}*.log"))
+    return sorted(sd.rglob("output_*.log"))
 
 
 # ── File helpers ──────────────────────────────────────────────
