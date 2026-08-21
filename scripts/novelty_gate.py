@@ -414,6 +414,26 @@ def load_stage2_aggregation(session_dir: Path) -> Optional[Dict]:
     return safe_read(aggregation_files[0])
 
 
+def _meta_param(session_dir: Path, defect_id: str) -> str:
+    """param from the attack agent's .meta.json for defect_id (or "")."""
+    if not defect_id:
+        return ""
+    for sub in ("debate_logs", "vein_scripts"):
+        meta = safe_read(session_dir / sub / f"{defect_id}.meta.json")
+        if isinstance(meta, dict):
+            p = meta.get("param", "")
+            if p:
+                return str(p)
+            # Secondary extraction (pilot 2026-08-20): vein metas carry tested
+            # params in test_parameters dict even when param field is absent.
+            tp = meta.get("test_parameters")
+            if isinstance(tp, dict) and tp:
+                keys = [k for k in tp if not k.endswith("_type")]
+                if keys:
+                    return str(keys[0])
+    return ""
+
+
 def load_chain_verdicts(session_dir: Path) -> Optional[Dict]:
     """ADR-0008: chain-auditor 产出 → novelty gate 候选源（优先于旧 stage2_aggregation）。
 
@@ -431,7 +451,10 @@ def load_chain_verdicts(session_dir: Path) -> Optional[Dict]:
         {
             "defect_id": v.get("defect_id", ""),
             "script": v.get("defect_id", ""),
-            "param": v.get("param", ""),
+            # Fallback (pilot 2026-08-20): chain-auditor verdicts carry no param
+            # field; recover from the attack agent's .meta.json (same seam fix
+            # as gt_reach_injector._meta_param).
+            "param": v.get("param", "") or _meta_param(session_dir, v.get("defect_id", "")),
             "defect_type": v.get("defect_type", "unknown"),
             "chain_verdict": "DEFECT",
             "fp_evidence_source": v.get("fp_evidence_source"),

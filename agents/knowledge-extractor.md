@@ -337,7 +337,10 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 
 **执行**（仅 REST API 数据库：qdrant/milvus/weaviate，SQL 数据库 pgvector 跳过）：
 
-1. **定位 OpenAPI spec**：`.sourcedeps/{target}/{version}/docs/redoc/master/openapi.json`（如不存在，跳过本步并记录 `openapi_unavailable: true`）
+1. **定位 OpenAPI spec**（按序找）：
+   - `.sourcedeps/{target}/{version}/openapi.json`（主进程 Step 4.5 预取的合并 spec——**先查这个**）
+   - `.sourcedeps/{target}/{version}/docs/redoc/master/openapi.json`（weaviate 历史形态）
+   - 都不存在 → **不写 doc_coverage_pct**（禁止编造数字），记录 `openapi_unavailable: true` 并在 Document Coverage 节写 `doc_coverage_pct: N/A (spec unavailable)`。主进程预取（Step 4.5）先行，此处"不存在"应只在 fetch 失败/无规则 target 时发生。
 2. **解析端点 + 字段**：读 `/paths`（method + path）+ 主要 schema 字段（如 collection create body 的字段名）
 3. **对比 raw_knowledge.md**：
    - 端点覆盖率 = `raw_knowledge 已覆盖端点数 / OpenAPI 端点总数`
@@ -346,7 +349,7 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 4. **写报告到 raw_knowledge.md 末尾**：
    ```markdown
    ## Document Coverage (OpenAPI cross-check)
-   - doc_coverage_pct: {覆盖率百分比}
+   - doc_coverage_pct: {覆盖率百分比，分母=spec paths 真实计数}
    - openapi_version: {OpenAPI spec 版本/来源}
    - Missing Endpoints: [{列表}]
    - Missing Fields: [{列表，如 strict_mode_config}]
@@ -356,6 +359,12 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
    - 优先补爬对应文档页（如果文档站有该页）
    - **文档站无对应页时**（如 strict_mode_config 无单独文档页）→ 从 OpenAPI spec 的 `description` / schema 字段说明提取该字段的**语义**（标注 `source_url: openapi` + `source_note: OpenAPI cross-check fallback`），写入对应端点的 Parameters/Constraints。**注意**：仅提取"字段是什么、什么类型"（语义），**不提取"什么值合法/非法"（约束）**——约束仍从文档页提取（保持"文档为唯一契约源"原则）。
 6. **写 doc_coverage_pct 到 Document Metadata**
+
+**⛔ 反编造红线（2026-08-20 pilot 实测教训）**：pilot qdrant v1.18.2 的 raw_knowledge.md 自报
+`doc_coverage_pct: 100% (70/70 core endpoints)`，但契约实际只有 10 端点且 spec 从未被 fetch——
+"70/70"是幻觉分母。本步的分母必须是 spec paths 的真实计数；spec 不可用时不写数字。
+主进程 Step 4.5 的 `validate_doc_coverage.py` 会机械覆写本节数字（以 spec paths 为分母），
+两者冲突时以机械覆写为准。
 
 **原则边界**（重要）：OpenAPI 是公开 API reference（发布在 api.qdrant.tech 等），非源码。**仅用于 endpoint/field 发现**（"有哪些"），**约束提取仍从文档页**（"什么合法/非法"）。不违反"文档为唯一契约源"原则。
 

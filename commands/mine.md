@@ -335,6 +335,22 @@ fi
 
 **验证：** `ls -la results/{target}/{version}/raw_knowledge.md`
 
+**Step 4.5: OpenAPI spec 预取 + 机械覆盖率核对（根因修复 2026-08-20）**
+
+pilot qdrant v1.18.2 实测：extractor 只抓 12 端点页却自报 `doc_coverage_pct: 100% (70/70)`——Step 6b 的"spec 不存在则跳过"是无条件逃逸舱门（qdrant spec 从未被 fetch），且 LLM 自报覆盖率无校验。修复为主进程两步确定性动作：
+
+```bash
+# (a) 派 extractor 前预取 spec（qdrant/weaviate 有规则；其他 target 退出码 3 = 无规则不阻塞）
+python scripts/fetch_openapi_spec.py {target} {version}
+
+# (b) extractor 返回后机械核对：spec paths 做分母算覆盖率，覆写 LLM 自报数字，
+#     报告落盘 results/{target}/{version}/doc_coverage_report.json
+python scripts/validate_doc_coverage.py {target} {version}
+```
+
+- doc_coverage_report.json 的 `missing_endpoints` 是 extractor 补爬的确定性依据（喂给 extractor 的 retry prompt 或人工审查）
+- spec 缺失（fetch 退出码 1/3）→ 跳过核对并记录警告，不阻塞（保持原 Step 6b 语义，但"未 fetch"从静默变显式）
+
 **Task 4a：如果复用旧版本，在 Step 7 写入 mine_state.json 时标记 `KNOWLEDGE_DEGRADED`**：
 ```python
 if os.environ.get("KNOWLEDGE_DEGRADED") == "true":

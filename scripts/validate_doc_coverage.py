@@ -16,13 +16,17 @@ import re
 import sys
 from pathlib import Path
 
-# 默认排除的路径前缀（运维/internal 端点，非公开 API 面）
-DEFAULT_EXCLUDE_PREFIXES = ["/internal", "/admin", "/telemetry", "/metrics", "/healthz", "/cluster"]
+# 默认排除的路径前缀（运维/internal 端点，非公开 API 面）。
+# 注意 /cluster 不在此列（pilot 2026-08-20 修正）：GT bug 出现在 /cluster/recover
+# （standalone 500→4xx 可触发），排掉它会系统性低估 reach 分母。cluster 面的
+# "standalone 大多不可用"由 attack 侧对照组验证兜底，不靠覆盖率排除。
+DEFAULT_EXCLUDE_PREFIXES = ["/internal", "/admin", "/telemetry", "/metrics", "/healthz"]
 
 
 def load_openapi(target: str, version: str) -> dict | None:
     """定位并加载 OpenAPI spec。"""
     candidates = [
+        f".sourcedeps/{target}/{version}/openapi.json",
         f".sourcedeps/{target}/{version}/docs/redoc/master/openapi.json",
         f"intelligence/{target}/{version}_openapi.json",
         f"intelligence/{target}/v{version.lstrip('v')}_openapi.json" if not version.startswith("v") else None,
@@ -40,6 +44,8 @@ def extract_openapi_endpoints(openapi: dict, exclude_prefixes: list[str]) -> set
     """从 OpenAPI /paths 提取 (method, path)。"""
     out = set()
     for path, methods in (openapi.get("paths") or {}).items():
+        if not path or path == "/":
+            continue  # 根路径/空条目（qdrant spec 合并分片带入 GET /）
         if any(path.startswith(p) for p in exclude_prefixes):
             continue
         # path 参数归一化：{name} → {name}（保留，便于匹配 raw_knowledge）
@@ -154,6 +160,35 @@ def main():
     print(f"doc_coverage_pct: {ep_pct:.1f}% (endpoints)")
     if ep_pct < 90 or any("strict_mode" in p or "strict_mode" in f for f in missing_fields):
         print("\n⚠️  Coverage gap detected — knowledge-extractor Step 6b 应补全这些端点/字段")
+
+    # 机械写回 raw_knowledge.md 的 doc_coverage_pct（根因修复 2026-08-20：
+    # LLM 自报 100% (70/70) 无 spec 对照来源——分母是编的。此处用 spec paths
+    # 做分母覆盖写回，自报数字不再被采信；报告 JSON 落盘供主进程门控读。）
+    report = {
+        "target": target,
+        "version": version,
+        "spec_paths": len(oa_eps_norm),
+        "covered": len(covered_eps),
+        "doc_coverage_pct": round(ep_pct, 1),
+        "missing_endpoints": [f"{m} {p}" for m, p in missing_eps],
+        "missing_fields": missing_fields,
+        "llm_self_report_overridden": True,
+    }
+    rp = Path(f"results/{target}/{version}/doc_coverage_report.json")
+    if Path(f"results/{target}/{version}").exists():
+        rp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\nreport -> {rp}")
+        # 覆盖 raw_knowledge.md 里的自报行（若有）
+        if os.path.exists(raw_path):
+            txt = Path(raw_path).read_text(encoding="utf-8", errors="replace")
+            new_txt, n_sub = re.subn(
+                r"(- doc_coverage_pct:)[^\n]*",
+                rf"\g<1> {ep_pct:.1f}% ({len(covered_eps)}/{len(oa_eps_norm)} endpoints, machine-verified vs OpenAPI paths)",
+                txt,
+            )
+            if n_sub:
+                Path(raw_path).write_text(new_txt, encoding="utf-8")
+                print(f"raw_knowledge.md doc_coverage_pct 已机械覆写（{n_sub} 处）")
 
 
 if __name__ == "__main__":

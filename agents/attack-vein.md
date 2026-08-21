@@ -220,7 +220,19 @@ curl -s -o /tmp/resp.txt -w "HTTP %{http_code}\n" \
 
 **⛔ 强制**：脚本必须使用 `safe_request()` 包装所有 HTTP 调用（同 attack-boundary § 输出格式）。Stage 1 确定性分类器（`_classify_script_errors.py`）**仍扫 `vein_scripts/`**——5 类静态错误检测对 vein 脚本同样适用，attack-vein 自跑后产脚本仍可能漏 cleanup try/except 等。
 
-同时写 `vein_<condition_type>_<endpoint>_<counter>.meta.json`（同 attack-boundary § Metadata 产出契约：defect_id / endpoint / param / expected_defect_type / strategy=`vein_<type>`）。
+同时写 `vein_<condition_type>_<endpoint>_<counter>.meta.json`，**字段模板内联如下（P3-18b 契约；pilot 2026-08-20 实测引用式规范被跳过——agent 不跨文件读 attack-boundary，7/7 meta 缺 param 导致 novelty 全 UNVERIFIED）**：
+
+```json
+{
+  "defect_id": "<与 script_id 一致>",
+  "endpoint": "<被攻端点>",
+  "param": "<被测的具体参数名（如 hnsw_config.m / filter.match.value / exact）；纯行为类无具体参数填 null>",
+  "expected_defect_type": "<Type1/Type2/Type3/Type4>",
+  "strategy": "vein_<condition_type>"
+}
+```
+
+⛔ **强制步骤**：Write `vein_*.py` 后立即 Write 对应 `.meta.json`，`param` 字段**必填**（null 仅限纯行为类）——缺 param 会被 novelty_gate（查重标识）降级为 UNVERIFIED。
 
 ### Step 8: 写 vein_summary.json（机器可读）
 
