@@ -26,10 +26,20 @@ def req(base_and_prefix: str, method: str, path: str,
     path MUST come from runtime.PATHS — agent 不写字面量路径。
     """
     try:
-        r = requests.request(
-            method, f"{base_and_prefix}{path}",
-            headers=_auth_header(), json=body, timeout=timeout,
-        )
+        if isinstance(body, str):
+            # 已是 JSON 文本（如 graphql query）→ 原样发，避免 json= 双重编码
+            # （fullrun#4 weaviate 实测：json= str 会带引号发字符串，服务端
+            #  unmarshal models.GraphQLQuery 失败 400）
+            r = requests.request(
+                method, f"{base_and_prefix}{path}",
+                headers={**_auth_header(), "Content-Type": "application/json"},
+                data=body.encode("utf-8"), timeout=timeout,
+            )
+        else:
+            r = requests.request(
+                method, f"{base_and_prefix}{path}",
+                headers=_auth_header(), json=body, timeout=timeout,
+            )
         return r.status_code, r.text
     except Exception as e:
         return 0, str(e)
