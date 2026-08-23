@@ -71,6 +71,27 @@ BIZ_CODE_MARK = re.compile(r"code[=:]\s*\d{4,}", re.IGNORECASE)
 HANG_OBS = re.compile(r"status=None|timeout|hang|unresponsive|OOM", re.IGNORECASE)
 NO_UPPER_BOUND = re.compile(r"lower-bound only|no upper", re.IGNORECASE)
 
+# 规则5 同族同处置（2026-08-23 一致性元规则）：静默替换语义 + 观测行级拒绝标记
+# 设计依据 = 挖掘侧 generalization_shapes（参数族同处置）的判定侧镜像；
+# 信息源为链内对照观测，不经过被测案 issue/GT。测试先行：
+# tests/test_adr0008_pipeline.py::TestMechanicalBConsistencyRules
+SUBSTITUTE_SEMANTICS = re.compile(
+    r"substitut|coerce|fallback|replaced with default|default value", re.IGNORECASE)
+REJECT_MARK = re.compile(r"rejected|denied|http=4\d\d|http=5\d\d|unsupported", re.IGNORECASE)
+
+# 规则6 接口面对称（2026-08-23）：接口面标记（builder 对照取证义务保证行内可得）
+FACE_RE = re.compile(r"\b(grpc|rest|sdk)\b", re.IGNORECASE)
+
+# 观测行参数名提取（排除协议字段，供规则5/6 对照判定）
+_OBS_PARAM_RE = re.compile(r"\b([A-Za-z_]\w*)\s*=")
+_OBS_PARAM_STOP = {"http", "code", "status", "port", "req", "resp"}
+
+
+def _line_params(line: str) -> set[str]:
+    """提取观测行内的参数名（小写，排除协议字段）。"""
+    return {m.group(1).lower() for m in _OBS_PARAM_RE.finditer(line)
+            if m.group(1).lower() not in _OBS_PARAM_STOP}
+
 
 # 规则4 源码 grep：校验注解模式（跨语言）
 MIN_ANNOT_RE = re.compile(r"range\s*\(\s*min|validate.*min|binding.*\bgt|binding.*\bgte", re.IGNORECASE)
@@ -226,6 +247,57 @@ def judge_physical(chain: dict, src_dir=None) -> dict:
                     "verdict_B": "CONFIRMED",
                     "objective_constraint_class": "资源边界",
                     "trigger": f"合法值触发挂起（{hang_match.group(0)}）且源码校验器无上界（excerpt）",
+                }
+
+    # ── 规则5 同族同处置（2026-08-23）：静默替换接受 + 同族其他参数被拒对照 ──
+    # 触发形态：同端点上同类违规值，一族被拒绝、另一族被静默替换为默认值且
+    # 返回成功——处置不一致即缺陷信号（无契约背书也可判，同规则1b 哲学）。
+    # 护栏：①接受侧行须含替换语义原文 + 接受标记（防误伤"非法值回退默认"
+    # 整体风格——无同族拒绝对照即无"服务器认为该类值非法"的证据）；
+    # ②拒绝对照行的参数须不同于接受侧（同参数一拒一收=间歇观测，非族）。
+    obs_lines = [ln for ln in obs.splitlines() if ln.strip()]
+    sub_accept = None  # (params, line)
+    reject_pool: list[tuple[set[str], str]] = []
+    for ln in obs_lines:
+        acc = ACCEPT_MARK.search(ln)
+        ps = _line_params(ln)
+        if acc and SUBSTITUTE_SEMANTICS.search(ln):
+            sub_accept = (ps, ln)
+        if REJECT_MARK.search(ln) and not acc:
+            reject_pool.append((ps, ln))
+    if sub_accept:
+        for rps, rln in reject_pool:
+            extra = rps - sub_accept[0]
+            if rps and extra:  # 对照参数不同（族不同处置）
+                return {
+                    "verdict_B": "CONFIRMED",
+                    "objective_constraint_class": "同族不一致",
+                    "trigger": f"{sorted(sub_accept[0])} 静默替换被接受 vs 同族 {sorted(extra)} 被拒"
+                               f"（{rln.strip()[:80]}）",
+                }
+
+    # ── 规则6 接口面对称（2026-08-23）：同参数跨接口面一拒一收 ──
+    # 触发形态：同参数同违规值，A 面拒绝、B 面接受（方向无关）——面间不对称
+    # 即缺陷信号。契约明示的面间差异不触发（qdrant_010 payload-only 先例）——
+    # 该护栏由 auditor 复核（机械层纯现象，trigger 内提示）。
+    # 靶面依赖 builder 对照取证义务（观测行须含 grpc/rest/sdk 面标记原文）。
+    face_lines = []
+    for ln in obs_lines:
+        faces = frozenset(m.group(1).lower() for m in FACE_RE.finditer(ln))
+        if faces:
+            face_lines.append((ln, faces, _line_params(ln)))
+    for aln, afaces, aps in face_lines:
+        if not aps or not ACCEPT_MARK.search(aln):
+            continue
+        for rln, rfaces, rps in face_lines:
+            if rln is aln or afaces == rfaces or not (aps & rps):
+                continue
+            if REJECT_MARK.search(rln):
+                return {
+                    "verdict_B": "CONFIRMED",
+                    "objective_constraint_class": "接口不对称",
+                    "trigger": f"{sorted(aps & rps)} 于 {sorted(afaces)} 被接受但 {sorted(rfaces)} "
+                               f"被拒（{rln.strip()[:80]}）；契约明示面间差异由 auditor 复核",
                 }
 
     return {"verdict_B": "NOT_TRIGGERED", "objective_constraint_class": None, "trigger": None}

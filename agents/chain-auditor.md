@@ -143,6 +143,11 @@ python scripts/check_physical_constraints.py {chain_json}
 - 枚举闭集：参数取值域是有限集（metricType/consistencyLevel 枚举），接受集合外值即违规
 - 互斥参数：文档/语义上互斥的参数被同时接受
 - 类型恒真：数字字段接受非数字、向量字段接受标量
+- 同族不一致（机械规则5，2026-08-23）：同端点上同类违规值，一族被拒、另一族被
+  静默替换为默认值且返回成功——处置不一致即缺陷信号，无需契约背书
+- 接口不对称（机械规则6，2026-08-23）：同参数同违规值跨接口面（REST/gRPC/SDK）
+  一拒一收——面间不对称即缺陷信号；**契约明示的面间差异不触发**（qdrant_010
+  payload-only 先例），机械 trigger 已带提示，你须复核契约后再聚合
 - HTTP 语义恒真（强限定）：**仅当两条件同时满足**——①错误属请求侧可判定
   （参数校验类：非法值/格式错误/越界）②契约或文档对错误响应形态有声称（文档示例错误
   响应为 4xx，或契约 assertion 明确 "invalid → reject"）——实测却是 2xx+业务错误码
@@ -242,7 +247,7 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
       "fp_evidence_source": "doc | source | both | behavior | null",
       "perspective_analysis": {
         "contract": {"verdict_A": "CONFIRMED|REFUTED|NEUTRAL", "agent_suspects_contract_wrong": false},
-        "physical": {"verdict_B": "CONFIRMED|REFUTED|NEUTRAL", "objective_constraint_class": "数值下界|枚举闭集|互斥参数|类型恒真|无"},
+        "physical": {"verdict_B": "CONFIRMED|REFUTED|NEUTRAL", "objective_constraint_class": "数值下界|枚举闭集|互斥参数|类型恒真|HTTP语义恒真|资源边界|同族不一致|接口不对称|无"},
         "behavioral": {"verdict_C": "CONFIRMED|REFUTED|WEAK_REFUTED"},
         "cognition": {"verdict_D": "SUPPORTS_DEFECT|SUPPORTS_NOT_DEFECT|NO_SIGNAL",
                        "matched_pattern": "pattern_id 或 blindspot 摘要",

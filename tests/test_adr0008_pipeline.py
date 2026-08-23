@@ -605,3 +605,127 @@ class TestMechanicalB:
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
         assert "check_physical_constraints.py" in sop, "缺机械 B 脚本引用"
         assert "NOT_TRIGGERED" in sop, "缺机械 B 兜底分支"
+
+
+# ═══════════════════════════════════════════════════════════════
+# 机械 B 规则 5/6 — 一致性元规则（2026-08-23，测试先行）
+#
+# 设计依据（元逻辑，非 GT 驱动；先写测试锁死设计再实现）：
+#   规则5 同族同处置 = 挖掘侧 generalization_shapes（参数族同处置）
+#                     的判定侧镜像：同端点上同类违规值，一族被拒、
+#                     另一族被静默替换接受 → 处置不一致即缺陷信号。
+#   规则6 接口面对称 = 挖掘侧 interface_parity 策略的判定侧实体化：
+#                     同参数同违规值，A 接口面拒绝、B 接口面接受
+#                     → 面间不对称即缺陷信号（契约明示差异由 auditor
+#                     复核，机械层纯现象）。
+#   两规则的信息源均为链内对照观测（不经过被测案 issue/GT），
+#   依赖 builder 对照取证义务（观测行须含面标记/替换语义原文）。
+# ═══════════════════════════════════════════════════════════════
+
+class TestMechanicalBConsistencyRules:
+    def _chain(self, log_pattern, secondary=None):
+        return {"steps": {
+            "contract_grounding": {"constraint_id": "x", "assertion_text_quoted": "no assertion",
+                                    "api_violates_assertion": False},
+            "execution_evidence": {"log_pattern": log_pattern,
+                                    "secondary_observations": secondary or [],
+                                    "http_semantics": {}},
+        }}
+
+    # ── 规则5 同族同处置 ──
+
+    def test_rule5_family_inconsistent_treatment(self):
+        """同族枚举外值：一族被拒、另一族被静默替换接受 → CONFIRMED。
+
+        原型形态（milvus_033 型现象结构）：idType 枚举外值 400 拒绝，
+        vectorFieldType 枚举外值 200 且替换为默认值——同族不同处置。
+        """
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: vectorFieldType='not_an_enum' -> http=200, code=0 (silently substituted default value)",
+            ["c2: idType='not_an_enum' -> http=400 rejected ('invalid idType value')"]))
+        assert r["verdict_B"] == "CONFIRMED"
+        assert r["objective_constraint_class"] == "同族不一致"
+
+    def test_rule5_substitution_without_reject_control(self):
+        """护栏：只有静默替换、无同族拒绝对照 → 不触发。
+
+        防误伤'非法值回退默认'整体风格（若无同类参数被拒，
+        无对照证据表明服务器认为该类值非法）。
+        """
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: vectorFieldType='not_an_enum' -> http=200 (substituted default)"))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
+    def test_rule5_reject_without_substitution(self):
+        """护栏：只有拒绝对照、无静默替换接受 → 不触发。"""
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: idType='not_an_enum' -> http=400 rejected",
+            ["c2: metric='L_x' -> http=400 rejected"]))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
+    def test_rule5_same_param_intermittent(self):
+        """护栏：同参数一拒一收 = 间歇观测，非同族不一致 → 不触发。"""
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: vectorFieldType='foo' -> http=200 (substituted default)",
+            ["c2: vectorFieldType='foo' -> http=400 rejected"]))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
+    def test_rule5_substitution_without_accept_mark(self):
+        """护栏：替换语义行无接受标记（非 2xx 成功）→ 不触发。"""
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: vectorFieldType='foo' -> http=400 (substituted default, rejected)",
+            ["c2: idType='foo' -> http=400 rejected"]))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
+    # ── 规则6 接口面对称 ──
+
+    def test_rule6_interface_parity_triggers(self):
+        """同参数同值：gRPC 拒绝、REST 接受 → CONFIRMED。
+
+        原型形态（milvus_038 型现象结构）：group_by_field 作用于
+        向量字段，gRPC 返回 unsupported data type，REST 返回 200。
+        """
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: REST group_by_field='vector_col' -> http=200, code=0 accepted",
+            ["c2: gRPC group_by_field='vector_col' -> rejected ('unsupported data type')"]))
+        assert r["verdict_B"] == "CONFIRMED"
+        assert r["objective_constraint_class"] == "接口不对称"
+
+    def test_rule6_reverse_direction_triggers(self):
+        """方向无关：REST 拒绝、gRPC 接受同样触发。"""
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: gRPC consistencyLevel='Bogus' -> accepted (code=0)",
+            ["c2: REST consistencyLevel='Bogus' -> http=422 rejected"]))
+        assert r["verdict_B"] == "CONFIRMED"
+        assert r["objective_constraint_class"] == "接口不对称"
+
+    def test_rule6_same_face_no_trigger(self):
+        """护栏：同面（都 REST）一拒一收 = 间歇/同族问题，非接口不对称。"""
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: REST group_by_field='c1' -> http=200 accepted",
+            ["c2: REST group_by_field='c1' -> http=422 rejected"]))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
+    def test_rule6_no_face_marker_no_trigger(self):
+        """护栏：无面标记（靶面缺失，builder 未做对照取证）→ 不触发。"""
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: group_by_field='vector_col' -> http=200 accepted",
+            ["c2: group_by_field='vector_col' -> rejected unsupported"]))
+        assert r["verdict_B"] == "NOT_TRIGGERED"
+
+    def test_rule6_different_params_cross_face_no_trigger(self):
+        """护栏：面不同但参数不同 → 接口面功能差（合法），非同参数不对称。"""
+        from check_physical_constraints import judge_physical
+        r = judge_physical(self._chain(
+            "c1: REST group_by_field='vector_col' -> http=200 accepted",
+            ["c2: gRPC output_fields='secret' -> rejected unsupported"]))
+        assert r["verdict_B"] == "NOT_TRIGGERED"

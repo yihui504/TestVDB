@@ -92,6 +92,12 @@ Read 触发 log（`${SESSION_DIR}/${log_path}`）：
 - **HTTP 语义观测**：请求侧可判定的错误（非法参数/格式错误/越界）以 2xx+业务错误码返回时
   （如 HTTP 200 + code:65535），记入 `http_semantics`（auditor 视角 B 第五类判据的输入）：
   `{"client_error_returned_as": "HTTP 2xx + 业务错误码 | HTTP 4xx/5xx | N/A", "note": "..."}`
+- **对照取证义务（机械规则 5/6 靶面，2026-08-23）**：主观测为"值被静默替换为默认值
+  且接受"或该行为存在另一接口面（REST/gRPC/SDK）或同族参数（同类型域/同枚举闭集）时，
+  **必须补对照观测**——对同族其他参数 / 另一接口面发同值请求，把两侧处置差异记入
+  `secondary_observations`（每行保留面标记 grpc/rest/sdk 与 substituted/default 原词——
+  判定层机械规则按行级原文匹配，概括改写会让规则失明）。对照不可得（如沙箱只有单面）
+  时如实记 `face_unavailable`，禁止编造对照行
 
 ### C. 证据链追溯（新增，串联 A 与 B）
 
