@@ -145,6 +145,15 @@
           "type": "boolean",
           "default": true,
           "description": "true=轮内 confirmation（Step 8f 照常，产品行为）。false=实验特化：跳过轮内 8f/8f.5，candidates.jsonl 累积 + 跨轮去重照常，会话终止后统一判定。"
+        },
+        "exploration": {
+          "type": "object",
+          "description": "探索模式预算（ADR-0009 §2-§4）。",
+          "properties": {
+            "probe_batch_size": { "type": "integer", "minimum": 1, "maximum": 32, "default": 8 },
+            "batches_per_round": { "type": "integer", "minimum": 1, "maximum": 16, "default": 4 },
+            "stall_rounds": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 }
+          }
         }
       }
     },

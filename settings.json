@@ -62,7 +62,13 @@
   },
   "mining": {
     "confirm_per_round": true,
-    "_confirm_per_round_comment": "true=产品行为（轮内 confirmation，Step 8f 照常）。false=实验特化（ADR-0009 §6：跳过轮内 8f/8f.5，candidates.jsonl 累积 + 跨轮去重照常，会话终止后统一判定）。读法：python scripts/get_setting.py mining.confirm_per_round"
+    "_confirm_per_round_comment": "true=产品行为（轮内 confirmation，Step 8f 照常）。false=实验特化（ADR-0009 §6：跳过轮内 8f/8f.5，candidates.jsonl 累积 + 跨轮去重照常，会话终止后统一判定）。读法：python scripts/get_setting.py mining.confirm_per_round",
+    "exploration": {
+      "probe_batch_size": 8,
+      "batches_per_round": 4,
+      "stall_rounds": 3,
+      "_exploration_comment": "ADR-0009 §2-§4 探索模式预算：每批探针上限 N=probe_batch_size（沙箱批量执行）；每探索轮批数 M=batches_per_round；连续 stall_rounds 轮零信号命中 -> 会话终止。切换判定用 scripts/exploration_phase.py"
+    }
   },
   "intelligence": {
     "enabled": true,

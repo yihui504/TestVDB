@@ -276,6 +276,52 @@ inject_to_judge_agents 配置废弃。threat_model_injector.py 仅 --mode attack
 
 策略由 `scripts/strategy_injector.py {target} --text-only` 生成，在 Attack Agent prompt 中注入。
 
+#### 8a.5 阶段评估（两阶段调度，ADR-0009 §2）
+
+每轮 8b 派发前，用 Bash 机械判定当前阶段（确定性，替代 LLM 目测）：
+
+```bash
+python scripts/exploration_phase.py switch --round {R} --chunks {N} --no-defect {X} --cov-delta {D} --phase {phase}
+# N=len(chunks.json)；X=mine_state.consecutive_no_defect_rounds；D=本轮 coverage 增量
+```
+
+- 输出 `switch=false` → 照旧走 8b（阶段一：契约分块枚举派发）。
+- 输出 `switch=true`（条件其一：契约块耗尽 R>N；平台期=连续≥2 轮无新缺陷且 Δcoverage≤0）
+  → `mine_state` 标记 `phase=exploration`，后续轮次全部走 **8b-expl 探索模式派发**；
+  **进入后不回退**（原"轮数>块数则循环重扫"废止——空转改为有意义探索）。
+- **探索僵局**：每探索轮结束评估 `python scripts/exploration_phase.py stalled --zero-rounds {Z}`
+  （Z=连续零信号命中轮数）；连续 K 轮（settings `mining.exploration.stall_rounds`，默认 3）
+  零命中 → 会话终止（探索不是永动机）。
+
+#### 8b-expl. 探索模式派发（阶段二，ADR-0009 §3-§4）
+
+**不分块**：目标面 = 全契约面 + OpenAPI 原始面；endpoint 优先级 = coverage.json
+覆盖缺口优先（不消费 bug-shape/intel——GT-free 纪律）。三 attack agent 轮转承接，
+reflection_context 继续注入（探索经验进经验环）。
+
+派发 prompt 按规范注入**四算子菜单**（R12：派发词内容即本节定义，不多给）：
+
+| 算子 | 行为 |
+|---|---|
+| ① 异常响应追踪 | 非 2xx / 超时 / 字段形态异常 → 触发深挖 |
+| ② 参数空间组合扰动 | 契约外参数、类型混淆、显式空值、边界交叉 |
+| ③ 状态序列扰动 | 并发/交错/删除后操作 |
+| ④ 行为一致性对照 | 同族参数异处置、同参数跨接口对照 |
+
+**目标信号定义**（探针命中判据，executor 信号摘要按此标记）：
+`non_2xx | timeout | field_anomaly | inconsistent_disposition | semantic_mismatch`
+
+**沙箱小循环（批量探针协议）**：attack agent 单次产出一批探针
+（≤ `mining.exploration.probe_batch_size`，默认 8，命名 `probe_{seq}_{operator}.py`，
+头部注释标 operator 与 target_endpoint）→ docker-executor 批量执行 → per-probe
+信号摘要回喂 → 命中则下一批聚焦该 endpoint 深挖（算子内变异邻域），未命中则
+算子/endpoint 轮转。每探索轮 M 批（默认 4）。**禁止 agent 自行执行脚本或 curl**
+（沙箱纪律，vein 自跑路径已废止）。
+
+**产出规范**：探针脚本与枚举产出同链——Stage 1 分类 + docker-executor 执行 +
+evidence-builder/chain-auditor 全链（无捷径）；候选必须写明缺陷主张（判定层
+exploratory 通道 has_claim 依赖，ADR-0009 §5）。
+
 #### 8b. 并发出动 Attack Trio（boundary + state + semantic；attack-vein 已按 ADR-0009 移除，其纵深探索职能由两阶段调度的探索模式承接）
 
 **契约分块派发（ADR-0008，每轮一块）**：派发前先确定性分块：

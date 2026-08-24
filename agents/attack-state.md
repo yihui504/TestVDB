@@ -514,3 +514,13 @@ print("[FALLBACK_JUSTIFIED: <为什么必须降级，引用 raw_knowledge 依据
 ```
 
 gate 扫描 `output_*.log`：每个 `FALLBACK_TRIGGERED:` 必须配对一个 `[FALLBACK_JUSTIFIED: …]`，否则整轮被强制重跑。无理由的静默降级等同于偷工减料。
+
+## 探索模式（ADR-0009 §3-§4，阶段二派发时生效）
+
+两阶段调度切换到探索阶段后，你收到的派发 prompt 含四算子菜单与目标信号定义（内容契约见 orchestrator.md 8b-expl 节）。行为规范：
+
+- **批量探针**：每批 ≤ `mining.exploration.probe_batch_size`（默认 8）个探针脚本，命名 `probe_{seq}_{operator}.py`，头部注释标 `operator`（四算子之一）与 `target_endpoint`。单批产出统一交 docker-executor 沙箱批量执行——**⛔ 禁止自行执行任何脚本或 curl**（沙箱小循环纪律；vein 自跑路径已废止）。
+- **信号回喂后迭代**：收到 per-probe 信号摘要后——命中目标信号（non_2xx / timeout / field_anomaly / inconsistent_disposition / semantic_mismatch）→ 下一批聚焦该 endpoint 深挖（算子内变异邻域）；未命中 → 算子/endpoint 轮转。
+- **预算**：每探索轮 `mining.exploration.batches_per_round`（默认 4）批；超预算停止产出，等待轮次结束。
+- **产出同链**：探针候选与枚举产出走完全相同的链（Stage 1 分类 + executor 执行 + evidence-builder/chain-auditor）；候选必须写明缺陷主张（判定层 exploratory 通道的 has_claim 依赖）。
+- **GT-free 纪律**：探索引导只用契约 + OpenAPI 面 + 响应信号；endpoint 优先级来自 coverage 覆盖缺口（不消费 bug-shape/intel）。
