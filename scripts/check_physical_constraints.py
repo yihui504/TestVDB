@@ -257,12 +257,15 @@ def judge_physical(chain: dict, src_dir=None) -> dict:
     # ②拒绝对照行的参数须不同于接受侧（同参数一拒一收=间歇观测，非族）。
     obs_lines = [ln for ln in obs.splitlines() if ln.strip()]
     sub_accept = None  # (params, line)
+    silent_accepts: list[tuple[set[str], str]] = []  # 规则5近似形态（ADR-0009 §5）
     reject_pool: list[tuple[set[str], str]] = []
     for ln in obs_lines:
         acc = ACCEPT_MARK.search(ln)
         ps = _line_params(ln)
         if acc and SUBSTITUTE_SEMANTICS.search(ln):
             sub_accept = (ps, ln)
+        elif acc and ps:
+            silent_accepts.append((ps, ln))
         if REJECT_MARK.search(ln) and not acc:
             reject_pool.append((ps, ln))
     if sub_accept:
@@ -300,7 +303,24 @@ def judge_physical(chain: dict, src_dir=None) -> dict:
                                f"被拒（{rln.strip()[:80]}）；契约明示面间差异由 auditor 复核",
                 }
 
-    return {"verdict_B": "NOT_TRIGGERED", "objective_constraint_class": None, "trigger": None}
+    # ── 规则5 近似形态（ADR-0009 §5）：同族对照拒绝 + 无自述静默接受 ──
+    # 触发形态：接受侧行无服务器替换自述（严格规则5 条件①不满足），但同族
+    # 对照行有拒绝对照——"前后对照推断替换/静默回退"形态（milvus_033 型）。
+    # 输出 exploratory_signal 提示 auditor 标注通道；**不参与 verdict_B**
+    # （strict 判定零改动；词表形态学通用，非单案回调）。
+    result = {"verdict_B": "NOT_TRIGGERED", "objective_constraint_class": None,
+              "trigger": None}
+    for aps, aln in silent_accepts:
+        for rps, rln in reject_pool:
+            fam = (aps & rps) or {p for p in aps if p in rln.lower()}
+            if fam:
+                result["exploratory_signal"] = {
+                    "form": "inference_consistency",
+                    "detail": (f"{sorted(aps)} 静默接受（无服务器替换自述）vs 同族 "
+                               f"{sorted(fam)} 对照被拒（{rln.strip()[:80]}）"),
+                }
+                return result
+    return result
 
 
 def scan_all(root: Path) -> dict:

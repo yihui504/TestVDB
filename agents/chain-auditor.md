@@ -210,6 +210,26 @@ verdict = DEFECT 时填 null。`root_cause_if_fp` 按词表填：
 env_noise | concurrency_race | eventual_consistency | request_param_typo |
 mundane_api_semantics | non_deterministic_unreproducible | script_error`
 
+**candidate_class 标注（ADR-0009 §5 exploratory 候选通道）**：verdict 保持二值不变
+（strict 判定层零改动）；每条 verdict 附带三态标注，判定规则：
+
+- `verdict = DEFECT` → `candidate_class = strict_defect`（exploratory 字段填 null）。
+- `verdict = NOT_DEFECT` 且**三条件全满足** → `candidate_class = exploratory_candidate`：
+  ① has_claim——链内有明确缺陷主张可评估；
+  ② has_inferential_support——三形态之一在链内有可指认证据：
+    `inference_consistency`（同族/接口面对称的推断性不一致）、
+    `competing_explanation`（主张与源码级 by-design 平行解释并存，无法裁决）、
+    `behavioral_anomaly`（行为异常但契约无断言）；
+  ③ below_strict——机械 A/B 未定案（灰区路径，非机械 REFUTED 定案）。
+- 其余 NOT_DEFECT（含机械 REFUTED 定案、三条件缺一）→ `candidate_class = rejected`。
+- **排除项**：violates=false 且无机械信号且链内无主张的旧链一律 rejected——
+  零信号≠低强度，此类不由通道兜底（交端到端重挖）。
+
+机械辅助：机械预跑输出的 `exploratory_signal`（规则5 近似形态：同族对照拒绝 +
+无自述静默接受）作为 `exploratory.signal = "rule5_approx_match"` 的采信依据，
+form 照抄 `inference_consistency`——但三条件仍须你逐条自查（机械信号是提示
+不是定论）。手动认定形态填 `signal = "manual"` 并在 rationale 指认链内证据。
+
 ---
 
 ## 输出模式（fullrun#4 起强制：文本判定行 + 主进程落盘）
@@ -256,6 +276,10 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
       },
       "chain_broken_at": null,
       "root_cause_if_fp": null,
+      "candidate_class": "strict_defect | exploratory_candidate | rejected",
+      "exploratory": {"form": "inference_consistency|competing_explanation|behavioral_anomaly|null",
+                       "signal": "rule5_approx_match|manual|null",
+                       "rationale": "≤1 句或 null"},
       "rationale": "≤3 句，必须引用链内具体证据",
       "rework_order": null
     }
@@ -263,7 +287,8 @@ mundane_api_semantics | non_deterministic_unreproducible | script_error`
   "summary": {
     "total": 0, "defect": 0, "not_defect": 0, "needs_more_evidence": 0,
     "fp_evidence_source_distribution": {"doc": 0, "source": 0, "both": 0, "behavior": 0},
-    "root_cause_distribution": {}
+    "root_cause_distribution": {},
+    "candidate_class_distribution": {"strict_defect": 0, "exploratory_candidate": 0, "rejected": 0}
   }
 }
 ```
