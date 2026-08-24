@@ -38,7 +38,6 @@
     "./agents/attack-boundary.md",
     "./agents/attack-state.md",
     "./agents/attack-semantic.md",
-    "./agents/attack-vein.md",
     "./agents/docker-executor.md",
     "./agents/evidence-builder.md",
     "./agents/chain-auditor.md",

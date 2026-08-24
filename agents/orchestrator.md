@@ -76,7 +76,7 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 □ [Step 7] 初始化 mine_state.json + 设置 TESTVDB_SESSION_ID 环境变量
 □ [Step 8] 开始挖掘循环（最多 max_rounds 轮）：
   □ 8a. 注入 reflection_context + threat_model + cognitive_blindspots 到 Attack Agents
-  □ 8b. 并发出动 Attack Trio + Vein（boundary + state + semantic + vein）
+  □ 8b. 并发出动 Attack Trio（boundary + state + semantic）
   □ 8c. Orchestrator 自行执行辩论 Stage 1（交叉审查 + 去重）
   □ 8d. 派 Executor 在沙箱中执行通过辩论的脚本（容器保持运行）
   □ 8e. 候选机械提取 + L1 闸门 → evidence-builder 并发 fan-out → chain-auditor 收口（ADR-0008）
@@ -276,18 +276,18 @@ inject_to_judge_agents 配置废弃。threat_model_injector.py 仅 --mode attack
 
 策略由 `scripts/strategy_injector.py {target} --text-only` 生成，在 Attack Agent prompt 中注入。
 
-#### 8b. 并发出动 Attack Trio + Vein（v2.5 — attack-vein 作为第 4 个并发 agent）
+#### 8b. 并发出动 Attack Trio（boundary + state + semantic；attack-vein 已按 ADR-0009 移除，其纵深探索职能由两阶段调度的探索模式承接）
 
 **契约分块派发（ADR-0008，每轮一块）**：派发前先确定性分块：
 ```bash
 python scripts/chunk_contract.py ${SESSION_DIR}/../structured_contract.json --session-dir $SESSION_DIR
 # 产出 chunks.json（按 endpoint 分组，每块 ≤12 可攻单元）
 ```
-第 R 轮派发 `chunks[R-1]`（round 1 → chunk 1，round 2 → chunk 2，…，轮数 > 块数则循环）。派发 prompt 中指定 `本轮块={chunk_id}` + 块内 unit_ref 清单——attack agents 只攻该块内单元（策略覆盖目标驱动，见各 agent 规范的"强制输出要求"）。vein agent 不受分块约束（其 endpoint 选择由 condition-richness 自主决定，与块机制互补）。
+第 R 轮派发 `chunks[R-1]`（round 1 → chunk 1，round 2 → chunk 2，…，轮数 > 块数则循环）。派发 prompt 中指定 `本轮块={chunk_id}` + 块内 unit_ref 清单——attack agents 只攻该块内单元（策略覆盖目标驱动，见各 agent 规范的"强制输出要求"）。
 
 **完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S1 --phase-data '{"ATTACK_GEN": {"scripts_generated": N, "agents_completed": [...], "chunk_id": "{chunk_id}"}}'`
 
-**并发（非顺序）** 派四个 Attack Agent（boundary + state + semantic + vein），**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
+**并发（非顺序）** 派三个 Attack Agent（boundary + state + semantic），**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
 
 > **派发者说明（v2.1.2）**：实际由**主进程**（`commands/mine.md`）直接派发这三个 attack agent，**orchestrator 不嵌套派孙 agent**（嵌套派发不可靠，见 `commands/mine.md:18` 与 memory `nested-agent-dispatch-limitation`）。本节描述的是派发的**内容契约**，不是 orchestrator 自行派发。⚠️ 派发依赖环境原生 Task 工具；若当前环境未暴露（非标准 provider），主进程须降级为单 agent 串行执行，或换到支持原生 Task 的环境——此为平台层限制，非代码 bug。
 
@@ -297,10 +297,7 @@ python scripts/chunk_contract.py ${SESSION_DIR}/../structured_contract.json --se
 Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}", prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}", prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}", prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Agent(subagent_type="testvdb:attack-vein", description="Vein-mining 纵深攻击 {target} v{version}", prompt="按照 agents/attack-vein.md 规范，为 {target} v{version} 做 condition-space 纵深挖掘。contract=results/{target}/{version}/structured_contract.json, threat_model=intelligence/{target}/threat_model.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}。**自己跑脚本**（curl 真 DB via Bash，DB URL from env TESTVDB_DB_URL），single-turn discover-then-deepen 按 condition-richness 选 top-3 endpoint 纵深挖掘 8 类通用 condition，finding-feedback loop 启发相邻 condition。产出 vein_scripts/*.py（strategy=vein_<type>）走标准 Stage 1+2+Judge。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
 ```
-
-> **attack-vein 特殊性**（v2.5）：与 Trio 不同——它**自己跑脚本**（破坏"只生成"边界，路径 2），目的是 single-turn discover-then-deepen 得即时反馈（不等 docker-executor）。但它产出的 `vein_scripts/*.py` 仍走完整 Stage 1 + evidence-builder/chain-auditor 链（自跑只是发现机制，不是判定机制，ADR-0008）。Stage 1 确定性分类器仍扫 `vein_scripts/`（attack-vein 也可能产 SCRIPT_ERROR 模式）。
 
 **自动化输出验证**：每轮 Attack Trio 完成后，使用 Bash 工具执行以下命令验证子 agent 产出：
 ```bash
@@ -320,7 +317,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
 **完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EXECUTION --phase-data '{"DEBATE_S1": {"approved_count": N, "rejected_count": M}}'`
 
-收集四个 Agent（boundary + state + semantic + vein）产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
+收集三个 Agent（boundary + state + semantic）产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
 
 **自动化审查步骤**：
 
@@ -378,7 +375,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
    # 从攻击 Agent 输出目录收集脚本（非 debate_logs/——攻击 Agent 直接写入这些目录）
    # 同时保留 script_{id}.py 在根目录做兜底
    # v2.2: 脚本统一存放在按来源命名的子目录中，不再复制到根目录（避免 Executor 重复扫描）
-   for dir in boundary_scripts state_scripts scripts vein_scripts; do
+   for dir in boundary_scripts state_scripts scripts; do
      [ ! -d "${SESSION_DIR}/${dir}" ] && continue
      for src in "${SESSION_DIR}/${dir}"/*.py; do
        [ ! -f "$src" ] && continue
@@ -386,7 +383,6 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
        case "$B" in
          boundary_*) cp "$src" "${SESSION_DIR}/boundary_scripts/$B" ;;
          state_*)    cp "$src" "${SESSION_DIR}/state_scripts/$B" ;;
-         vein_*)     cp "$src" "${SESSION_DIR}/vein_scripts/$B" ;;
          semantic_*|*) cp "$src" "${SESSION_DIR}/scripts/$B" ;;
        esac
      done
