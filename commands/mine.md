@@ -661,6 +661,10 @@ python scripts/dedup_defects.py "results/{target}/{version}/{timestamp}"
 
 ### 8f. REPORTING — 派 Reporter
 
+**confirm_per_round 开关（ADR-0009 §6）**：进入本步前执行 `python scripts/get_setting.py mining.confirm_per_round`。
+- `true`（默认）→ 照常执行 8f/8f.5。
+- `false`（实验特化）→ **跳过 8f 与 8f.5**：candidates.jsonl 继续累积（8e.5 跨轮去重照常），`pipeline_state` 标记 `phase=MINING_DEFER_CONFIRM`；会话终止后对全部累积候选执行统一判定（evidence-builder + chain-auditor 批量 + novelty 终判 + Reporter 一次性收口，同 ADR-0008 规范）。
+
 ```
 Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}",
   prompt="按照 agents/reporter.md 规范，为以下 Debate-Confirmed 缺陷生成报告：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}")

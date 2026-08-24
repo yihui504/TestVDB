@@ -466,6 +466,13 @@ Agent(subagent_type="testvdb:chain-auditor", description="证据链审计 {targe
 
 #### 8f. 派 Reporter
 
+**confirm_per_round 开关（ADR-0009 §6）**：进入本步前先用 Bash 确定性读取开关：
+```bash
+python scripts/get_setting.py mining.confirm_per_round
+```
+- 输出 `true`（默认）→ 照常执行本步与 8f.5（产品行为：轮内 confirmation）。
+- 输出 `false`（实验特化）→ **跳过 8f 与 8f.5**：不派 Reporter，缺陷审查与 Pre-Submit Gate 延后；candidates.jsonl 继续累积（8e.5 跨轮去重照常执行），容器保持运行（生命周期管理规则不变，仍由 8j 统一处理）；`pipeline_state` 标记 `phase=MINING_DEFER_CONFIRM`。会话终止（时间到/轮数到/僵局终止）后，对累积的全部候选执行**统一判定**：evidence-builder + chain-auditor 批量（机械预跑 + SOP 聚合，与轮内路径同一规范，ADR-0008）→ novelty 终判 → Reporter + Pre-Submit Gate 一次性收口。
+
 **完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEFECT_REVIEW`
 
 **必须使用 Agent 工具派生 reporter 子 agent**：

@@ -60,6 +60,10 @@
     "hash_algorithm": "sha256",
     "reject_on_tamper": true
   },
+  "mining": {
+    "confirm_per_round": true,
+    "_confirm_per_round_comment": "true=产品行为（轮内 confirmation，Step 8f 照常）。false=实验特化（ADR-0009 §6：跳过轮内 8f/8f.5，candidates.jsonl 累积 + 跨轮去重照常，会话终止后统一判定）。读法：python scripts/get_setting.py mining.confirm_per_round"
+  },
   "intelligence": {
     "enabled": true,
     "base_dir": "intelligence",

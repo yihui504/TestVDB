@@ -137,6 +137,17 @@
         "reject_on_tamper": { "type": "boolean", "default": true }
       }
     },
+    "mining": {
+      "type": "object",
+      "description": "挖掘循环行为配置（ADR-0009 §6）。",
+      "properties": {
+        "confirm_per_round": {
+          "type": "boolean",
+          "default": true,
+          "description": "true=轮内 confirmation（Step 8f 照常，产品行为）。false=实验特化：跳过轮内 8f/8f.5，candidates.jsonl 累积 + 跨轮去重照常，会话终止后统一判定。"
+        }
+      }
+    },
     "intelligence": {
       "type": "object",
       "description": "v2.1 Phase 0 战略情报采集层配置。控制历史 Issue 挖掘、Bug Shape 提取和威胁模型构建。",
