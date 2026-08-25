@@ -19,11 +19,14 @@ def _auth_header() -> dict:
 
 
 def req(base_and_prefix: str, method: str, path: str,
-        body: dict | None = None, timeout: int = 30) -> tuple[int, str]:
+        body: dict | None = None, timeout: int = 30,
+        params: dict | None = None) -> tuple[int, str]:
     """Single HTTP exit for all REST runtimes. Returns (status, raw_text).
 
     base_and_prefix e.g. 'http://host:19530/v2/vectordb'.
     path MUST come from runtime.PATHS — agent 不写字面量路径。
+    params = URL query string 参数（如 qdrant ?timeout=X）。query 参数禁止塞 body —
+    服务端会 silent-drop，攻击探针无效（v34 R1 S1 教训：timeout 放 body 复发）。
     """
     try:
         if isinstance(body, str):
@@ -33,12 +36,12 @@ def req(base_and_prefix: str, method: str, path: str,
             r = requests.request(
                 method, f"{base_and_prefix}{path}",
                 headers={**_auth_header(), "Content-Type": "application/json"},
-                data=body.encode("utf-8"), timeout=timeout,
+                data=body.encode("utf-8"), timeout=timeout, params=params,
             )
         else:
             r = requests.request(
                 method, f"{base_and_prefix}{path}",
-                headers=_auth_header(), json=body, timeout=timeout,
+                headers=_auth_header(), json=body, timeout=timeout, params=params,
             )
         return r.status_code, r.text
     except Exception as e:

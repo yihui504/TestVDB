@@ -61,8 +61,12 @@ _BASE = os.environ.get("TESTVDB_DB_URL", "").rstrip("/")
 
 
 def request(method: str, path_key: str, body: dict | None = None,
-            path_params: dict | None = None, timeout: int = 30) -> tuple[int, str]:
+            path_params: dict | None = None, timeout: int = 30,
+            query_params: dict | None = None) -> tuple[int, str]:
     """path_key 必须在 PATHS 里。path_params 替换模板 {field}。
+
+    query_params 进 URL query string（如 ?timeout=X）——qdrant 的 wait/timeout 类
+    阻塞参数是 query 参数，禁止塞 body（会被 silent-drop，探针无效；v34 R1 S1 教训）。
 
     返回 (status, raw_text)。qdrant 用标准 HTTP status，直接用 _common generic judge。
     """
@@ -79,7 +83,7 @@ def request(method: str, path_key: str, body: dict | None = None,
                 f"path_key={path_key!r} template {path!r} missing param {e}; "
                 f"got path_params={path_params}"
             ) from e
-    return req(_BASE, method, path, body, timeout=timeout)
+    return req(_BASE, method, path, body, timeout=timeout, params=query_params)
 
 
 def setup_default(name: str, dim: int, metric: str = "Cosine",

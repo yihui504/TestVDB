@@ -45,7 +45,7 @@ class TestRequestPathParams:
     def test_path_params_replaces_name(self, monkeypatch):
         captured = {}
 
-        def fake_req(base, method, path, body=None, timeout=30):
+        def fake_req(base, method, path, body=None, timeout=30, params=None):
             captured["path"] = path
             captured["method"] = method
             captured["body"] = body
@@ -67,6 +67,42 @@ class TestRequestPathParams:
             qdrant.request("POST", "search", {},
                            path_params={"wrong_param": "x"})
 
+    def test_query_params_passed_through(self, monkeypatch):
+        """v34 R1 S1 教训固化：query 参数走 query_params= 通道（requests params=），
+        不塞 body——塞 body 会被服务端 silent-drop，探针无效。"""
+        captured = {}
+
+        def fake_req(base, method, path, body=None, timeout=30, params=None):
+            captured.update(path=path, body=body, params=params)
+            return 400, '{"status":"error"}'
+
+        monkeypatch.setattr("runtime.qdrant.req", fake_req)
+        s, _ = qdrant.request("POST", "update_aliases", {"actions": []},
+                              query_params={"timeout": -1})
+        assert s == 400
+        assert captured["params"] == {"timeout": -1}
+        assert "timeout" not in (captured["body"] or {})
+
+    def test_common_req_forwards_params(self, monkeypatch):
+        """_common.req params= 透传到 requests.request（两个分支都检查 str body 路径）。"""
+        import runtime._common as c
+
+        captured = {}
+
+        class FakeResp:
+            status_code = 200
+            text = '{"ok":true}'
+
+        def fake_request(method, url, **kw):
+            captured.update(url=url, kw=kw)
+            return FakeResp()
+
+        monkeypatch.setattr(c.requests, "request", fake_request)
+        c.req("http://h:6333", "POST", "/collections/aliases",
+              body='{"actions":[]}', params={"timeout": "5"})
+        assert captured["url"] == "http://h:6333/collections/aliases"
+        assert captured["kw"]["params"] == {"timeout": "5"}
+
 
 @pytest.mark.unit
 class TestSetupDefault:
@@ -76,7 +112,7 @@ class TestSetupDefault:
         assert "unsupported metric" in err
 
     def test_create_fail_returns_false(self, monkeypatch):
-        def fake_req(base, method, path, body=None, timeout=30):
+        def fake_req(base, method, path, body=None, timeout=30, params=None):
             return 500, '{"status":"error","detail":"internal"}'
 
         monkeypatch.setattr("runtime.qdrant.req", fake_req)
@@ -87,7 +123,7 @@ class TestSetupDefault:
     def test_create_success(self, monkeypatch):
         captured = {}
 
-        def fake_req(base, method, path, body=None, timeout=30):
+        def fake_req(base, method, path, body=None, timeout=30, params=None):
             captured["body"] = body
             return 200, '{}'
 
@@ -98,7 +134,7 @@ class TestSetupDefault:
         assert captured["body"]["vectors"]["distance"] == "Cosine"
 
     def test_409_idempotent(self, monkeypatch):
-        def fake_req(base, method, path, body=None, timeout=30):
+        def fake_req(base, method, path, body=None, timeout=30, params=None):
             return 409, '{"status":"already exists"}'
 
         monkeypatch.setattr("runtime.qdrant.req", fake_req)

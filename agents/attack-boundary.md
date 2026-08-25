@@ -196,6 +196,11 @@ replication_factor / ef_construct / m / max_optimization_threads / indexing_thre
 
 ### 策略 1: 边界值攻击（针对 range_constraints）
 
+**⛔ 参数放置核对（先于测试值选择）**：每个待攻击参数按 openapi spec 的 `in` 字段确定放置位置——
+`in: query` → 用 `rt.request(..., query_params={"p": val})` 传（runtime 已支持）；`in: path` → path_params；`in: body` → 才进 body dict。
+**禁止把 query 参数塞 body**：服务端会 silent-drop，探针实际未生效，测出的"200 接受"是参数未被解析的假信号
+（v34 R1 教训：qdrant `timeout` 是 query 参数被塞 body，探针全部无效）。qdrant 常见 query 参数：`timeout`、`wait`、`consistency`。
+
 对每条 range_constraint，生成以下边界测试：
 
 | 边界类型 | 测试值 | 预期结果 | 缺陷类型 |
