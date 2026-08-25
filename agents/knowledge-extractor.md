@@ -340,21 +340,24 @@ Step 4 的产出写入同目录 `results/{target}/{version}/deployment_meta.json
    - 端点覆盖率 = `raw_knowledge 已覆盖端点数 / OpenAPI 端点总数`
    - 缺失端点列表 = `OpenAPI 有 / raw_knowledge 无`
    - 缺失字段列表 = `OpenAPI schema 有 / raw_knowledge 无`（如 strict_mode_config）
-4. **写报告到 raw_knowledge.json 末尾**：
-   ```markdown
-   ## Document Coverage (OpenAPI cross-check)
-   - doc_coverage_pct: {覆盖率百分比，分母=spec paths 真实计数}
-   - openapi_version: {OpenAPI spec 版本/来源}
-   - Missing Endpoints: [{列表}]
-   - Missing Fields: [{列表，如 strict_mode_config}]
-   - source: openapi cross-check
+4. **写覆盖率结果到 `openapi_coverage` 字段**（JSON 对象，非 markdown 追加）：
+   ```json
+   "openapi_coverage": {
+     "doc_coverage_pct": 95.2,
+     "spec_paths": 63,
+     "covered": 60,
+     "missing_endpoints": ["GET /collections/{name}/points/{id}"],
+     "missing_fields": ["strict_mode_config"],
+     "openapi_version": "{OpenAPI spec 版本/来源}",
+     "source": "openapi cross-check"
+   }
    ```
 5. **补全缺失项**（覆盖率 < 100% 时）：
    - 优先补爬对应文档页（如果文档站有该页）
    - **文档站无对应页时**（如 strict_mode_config 无单独文档页）→ 从 OpenAPI spec 的 `description` / schema 字段说明提取该字段的**语义**（标注 `source_url: openapi` + `source_note: OpenAPI cross-check fallback`），写入对应端点的 Parameters/Constraints。**注意**：仅提取"字段是什么、什么类型"（语义），**不提取"什么值合法/非法"（约束）**——约束仍从文档页提取（保持"文档为唯一契约源"原则）。
-6. **写 doc_coverage_pct 到 Document Metadata**
+6. **doc_coverage_pct 一律写 `openapi_coverage.doc_coverage_pct`**（主进程 `validate_doc_coverage.py` 会以 spec paths 为分母机械覆写自报数字——LLM 自报值不被采信）
 
-**⛔ 反编造红线（2026-08-20 pilot 实测教训）**：pilot qdrant v1.18.2 的 raw_knowledge.json 自报
+**⛔ 反编造红线（2026-08-20 pilot 实测教训）**：pilot qdrant v1.18.2 的 raw_knowledge.md（当时格式）自报
 `doc_coverage_pct: 100% (70/70 core endpoints)`，但契约实际只有 10 端点且 spec 从未被 fetch——
 "70/70"是幻觉分母。本步的分母必须是 spec paths 的真实计数；spec 不可用时不写数字。
 主进程 Step 4.5 的 `validate_doc_coverage.py` 会机械覆写本节数字（以 spec paths 为分母），
@@ -370,7 +373,7 @@ Step 4 的产出写入同目录 `results/{target}/{version}/deployment_meta.json
 
 - **Crawl4AI 不可用** → 自动检查并启动：`docker compose -f docker/crawl4ai.yml up -d`，等待就绪后重试。如果 Docker 完全不可用，降级为 WebFetch
 - 文档抓取失败 → 先尝试 Crawl4AI，再尝试 WebFetch，最多重试 5 次（5s 递增退避）
-- 某个端点页面不可访问 → 跳过该端点，在 raw_knowledge.json 末尾记录 `## Missing Endpoints`
+- 某个端点页面不可访问 → 跳过该端点，追加到顶层 `missing_endpoints` 数组（endpoint + url + 原因）
 - Docker Hub API 不可达 → 标记 `available_tags: []`，由 Executor 镜像预检时验证
 - 网络不可用 → 报错退出，不降级处理
 

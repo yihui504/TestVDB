@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Document coverage cross-check: raw_knowledge.md vs OpenAPI spec.
+"""Document coverage cross-check: raw_knowledge.json vs OpenAPI spec.
 
-诊断脚本（不阻塞主流程）。读 raw_knowledge.md 已覆盖的端点/字段，
+诊断脚本（不阻塞主流程）。读 raw_knowledge.json 已覆盖的端点/字段，
 对比 OpenAPI spec 的 /paths + 主要 schema 字段，输出覆盖率报告 + 缺失列表。
+（v3.4 §A：md → json 迁移；md 解析路径已删，旧 md 缓存需重新生成。）
 
 用法：
     py -3 scripts/validate_doc_coverage.py {target} {version}
@@ -10,6 +11,8 @@
 
 原则：OpenAPI 仅用于发现（"有哪些"），不提取约束。约束从文档页提取。
 """
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -69,30 +72,49 @@ def extract_openapi_fields(openapi: dict) -> set[str]:
     return out
 
 
-def extract_raw_knowledge_endpoints(raw_path: str) -> set[tuple[str, str]]:
-    """从 raw_knowledge.md 提取已覆盖端点（Method: X / Path: Y 模式 + | METHOD | path | 表格）。"""
+def _load_raw_knowledge(raw_path: str) -> dict | None:
+    """加载 raw_knowledge.json（v3.4 §A：md → json）。缺失/解析失败返回 None（诊断脚本不阻塞）。"""
     if not os.path.exists(raw_path):
-        return set()
-    txt = Path(raw_path).read_text(encoding="utf-8", errors="replace")
+        return None
+    try:
+        return json.loads(Path(raw_path).read_text(encoding="utf-8"))
+    except Exception as e:
+        print(f"  warn: {raw_path} parse fail: {e}", file=sys.stderr)
+        return None
+
+
+def extract_raw_knowledge_endpoints(raw: dict) -> set[tuple[str, str]]:
+    """从 raw_knowledge.json 的 api_endpoints[] 提取已覆盖端点。"""
     out = set()
-    # 模式 1: "- Method: GET\n- Path: /collections/{name}"
-    for m in re.finditer(r"-\s*Method:\s*(GET|POST|PUT|PATCH|DELETE)\s*\n\s*-\s*Path:\s*(\S+)", txt, re.I):
-        out.add((m.group(1).upper(), m.group(2).rstrip("/")))
-    # 模式 2: 表格 "| GET | /collections/{name} |"
-    for m in re.finditer(r"\|\s*(GET|POST|PUT|PATCH|DELETE)\s*\|\s*(/[^\s|]+)\s*\|", txt, re.I):
-        out.add((m.group(1).upper(), m.group(2).rstrip("/").rstrip(",")))
+    for ep in (raw.get("api_endpoints") or []):
+        method = str(ep.get("method") or "").upper()
+        path = str(ep.get("path") or "").rstrip("/")
+        if method in ("GET", "POST", "PUT", "PATCH", "DELETE", "SQL") and path:
+            out.add((method, path))
     return out
 
 
-def extract_raw_knowledge_fields(raw_path: str) -> set[str]:
-    """从 raw_knowledge.md 提取已提及的字段名（粗粒度 — 参数名、config 字段）。"""
-    if not os.path.exists(raw_path):
-        return set()
-    txt = Path(raw_path).read_text(encoding="utf-8", errors="replace")
-    # 提取 "strict_mode_config" 这类 snake_case 标识符（出现在 code/json 上下文）
+def _iter_strings(obj):
+    """递归收集 JSON 内全部字符串值（字段名发现的粗粒度 token 源）。"""
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _iter_strings(v)
+
+
+def extract_raw_knowledge_fields(raw: dict) -> set[str]:
+    """从 raw_knowledge.json 全部字符串值提取已提及字段名（粗粒度 — 参数名、config 字段）。
+
+    与旧 md 版语义等价：正文 token 集对应 json 的 description/assertion/constraints 字符串。
+    """
     fields = set()
-    for m in re.finditer(r"\b([a-z][a-z0-9_]{4,})\b", txt):
-        fields.add(m.group(1))
+    for s in _iter_strings(raw):
+        for m in re.finditer(r"\b([a-z][a-z0-9_]{4,})\b", s):
+            fields.add(m.group(1))
     return fields
 
 
@@ -120,9 +142,14 @@ def main():
     oa_eps = extract_openapi_endpoints(openapi, exclude)
     oa_fields = extract_openapi_fields(openapi)
 
-    raw_path = f"results/{target}/{version}/raw_knowledge.md"
-    rk_eps = extract_raw_knowledge_endpoints(raw_path)
-    rk_fields = extract_raw_knowledge_fields(raw_path)
+    raw_path = f"results/{target}/{version}/raw_knowledge.json"
+    raw = _load_raw_knowledge(raw_path)
+    if raw is None:
+        print(f"raw_knowledge.json not found/unparseable: {raw_path}（旧 md 缓存或未生成）")
+        print("跳过覆盖率自检（knowledge 缺失）")
+        sys.exit(0)
+    rk_eps = extract_raw_knowledge_endpoints(raw)
+    rk_fields = extract_raw_knowledge_fields(raw)
 
     # 端点对比（path 归一化后匹配）
     oa_eps_norm = {(m, norm_path(p)) for m, p in oa_eps}
@@ -161,9 +188,9 @@ def main():
     if ep_pct < 90 or any("strict_mode" in p or "strict_mode" in f for f in missing_fields):
         print("\n⚠️  Coverage gap detected — knowledge-extractor Step 6b 应补全这些端点/字段")
 
-    # 机械写回 raw_knowledge.md 的 doc_coverage_pct（根因修复 2026-08-20：
-    # LLM 自报 100% (70/70) 无 spec 对照来源——分母是编的。此处用 spec paths
-    # 做分母覆盖写回，自报数字不再被采信；报告 JSON 落盘供主进程门控读。）
+    # 机械写回 raw_knowledge.json 的 openapi_coverage（根因修复 2026-08-20；
+    # v3.4 §A 格式迁移：md 正则行覆写 → JSON 字段覆写。LLM 自报数字不被采信，
+    # 分母 = spec paths 真实计数；报告 JSON 落盘供主进程门控读。）
     report = {
         "target": target,
         "version": version,
@@ -178,17 +205,16 @@ def main():
     if Path(f"results/{target}/{version}").exists():
         rp.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nreport -> {rp}")
-        # 覆盖 raw_knowledge.md 里的自报行（若有）
-        if os.path.exists(raw_path):
-            txt = Path(raw_path).read_text(encoding="utf-8", errors="replace")
-            new_txt, n_sub = re.subn(
-                r"(- doc_coverage_pct:)[^\n]*",
-                rf"\g<1> {ep_pct:.1f}% ({len(covered_eps)}/{len(oa_eps_norm)} endpoints, machine-verified vs OpenAPI paths)",
-                txt,
-            )
-            if n_sub:
-                Path(raw_path).write_text(new_txt, encoding="utf-8")
-                print(f"raw_knowledge.md doc_coverage_pct 已机械覆写（{n_sub} 处）")
+        raw["openapi_coverage"] = {
+            "doc_coverage_pct": round(ep_pct, 1),
+            "spec_paths": len(oa_eps_norm),
+            "covered": len(covered_eps),
+            "missing_endpoints": [f"{m} {p}" for m, p in missing_eps],
+            "missing_fields": missing_fields,
+            "source": "machine-verified vs OpenAPI paths",
+        }
+        Path(raw_path).write_text(json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        print("raw_knowledge.json openapi_coverage 已机械覆写")
 
 
 if __name__ == "__main__":
