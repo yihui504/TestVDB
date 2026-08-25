@@ -34,7 +34,7 @@ PATHS = {
     "count":               "/collections/{name}/points/count",
     "update_collection":   "/collections/{name}",
     "update_aliases":      "/collections/aliases",
-    "list_aliases":        "/collections/aliases",
+    "list_aliases":        "/aliases",
     "list_snapshots":      "/collections/{name}/snapshots",
     "create_snapshot":     "/collections/{name}/snapshots",
     "get_snapshot":        "/collections/{name}/snapshots/{snapshot_name}",
