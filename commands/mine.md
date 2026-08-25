@@ -310,30 +310,31 @@ print(json.dumps({
 
 ```
 # 先检查是否有旧版本 knowledge 可复用
-OLD_VERSION=$(find results/{target} -maxdepth 2 -name "raw_knowledge.md" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d" " -f2- | sed 's|/raw_knowledge.md||')
+OLD_VERSION=$(find results/{target} -maxdepth 2 -name "raw_knowledge.json" -printf "%T@ %p\n" 2>/dev/null | sort -rn | head -1 | cut -d" " -f2- | sed 's|/raw_knowledge.json||')
 
-if [ -n "$OLD_VERSION" ] && [ -f "$OLD_VERSION/raw_knowledge.md" ]; then
+if [ -n "$OLD_VERSION" ] && [ -f "$OLD_VERSION/raw_knowledge.json" ]; then
   OLD_VER=$(basename "$OLD_VERSION" | sed 's/^v//')
   echo "[Knowledge Extractor] 降级：复用旧版本 v${OLD_VER} knowledge（glm proxy 下 agent 频繁 HTTP 400）"
   # Task 4a: 复用旧版本 + 强制标记
-  cp "$OLD_VERSION/raw_knowledge.md" "results/{target}/{version}/raw_knowledge.md"
+  cp "$OLD_VERSION/raw_knowledge.json" "results/{target}/{version}/raw_knowledge.json"
+  [ -f "$OLD_VERSION/deployment_meta.json" ] && cp "$OLD_VERSION/deployment_meta.json" "results/{target}/{version}/deployment_meta.json"
   # 标记 KNOWLEDGE_DEGRADED（后续写入 mine_state.json）
   export KNOWLEDGE_DEGRADED="true"
   export OLD_KNOWLEDGE_VERSION="$OLD_VER"
 else
   # 无旧版本可复用，正常派发
   Agent(subagent_type="testvdb:knowledge-extractor", description="提取 {target} {version} 文档知识",
-    prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识。将结果写入 results/{target}/{version}/raw_knowledge.md")
+    prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识。将结果写入 results/{target}/{version}/raw_knowledge.json（SDK/Docker 信息单独写 deployment_meta.json，v3.4 §B）")
 
-  # 派发后检查是否成功（检查 raw_knowledge.md 是否被创建/更新）
-  if [ ! -f "results/{target}/{version}/raw_knowledge.md" ] || [ ! -s "results/{target}/{version}/raw_knowledge.md" ]; then
+  # 派发后检查是否成功（检查 raw_knowledge.json 是否被创建/更新）
+  if [ ! -f "results/{target}/{version}/raw_knowledge.json" ] || [ ! -s "results/{target}/{version}/raw_knowledge.json" ]; then
     echo "[Knowledge Extractor] 失败：无法提取 knowledge，且无旧版本可复用"
     exit 1
   fi
 fi
 ```
 
-**验证：** `ls -la results/{target}/{version}/raw_knowledge.md`
+**验证：** `ls -la results/{target}/{version}/raw_knowledge.json results/{target}/{version}/deployment_meta.json`
 
 **Step 4.5: OpenAPI spec 预取 + 机械覆盖率核对（根因修复 2026-08-20）**
 
@@ -364,7 +365,7 @@ if os.environ.get("KNOWLEDGE_DEGRADED") == "true":
 ### Step 5: 派 Contract Formalizer
 ```
 Agent(subagent_type="testvdb:contract-formalizer", description="形式化 {target} v{version} API 契约",
-  prompt="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.md 转换为 structured_contract.json。将结果写入 results/{target}/{version}/structured_contract.json")
+  prompt="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.json 转换为 structured_contract.json（每条约束标 level 分级，规则 2.7；v3.4）。将结果写入 results/{target}/{version}/structured_contract.json")
 ```
 **验证：** `ls -la results/{target}/{version}/structured_contract.json`
 
@@ -387,6 +388,13 @@ py -3 scripts/enrich_contract_from_spec.py results/{target}/{version} --fill-mis
 ```bash
 python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
 ```
+
+**Step 6.5: 策略预绑定（v3.4 D2，确定性主进程步骤——0 LLM）**：
+```bash
+python scripts/bind_strategies.py "results/{target}/{version}/structured_contract.json"
+```
+- exit 1（level lint 失败：契约缺 `level` 字段）→ 重派 contract-formalizer（规则 2.7 未执行）
+- 正常 → 契约各约束带 `bound_strategies` + 顶层 `_strategy_binding` 汇总；attack agents 按绑定清单直接生成（不再自行匹配策略）
 
 ### Step 7: 初始化状态
 

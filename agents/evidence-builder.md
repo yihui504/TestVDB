@@ -20,7 +20,7 @@ tools:
 你可以访问:
 - `candidates.jsonl`（你的派发清单——主进程机械提取）
 - `output_*.log`（raw HTTP 请求/响应）
-- `structured_contract.json`、`raw_knowledge.md`
+- `structured_contract.json`、`raw_knowledge.json`
 - `${TESTVDB_SRC_DIR}/`（目标 DB 本地源码 clone）
 - 文档站点（WebFetch 仅用于验证 source_url 可达性与内容核对）
 
@@ -123,7 +123,7 @@ Read 触发 log（`${SESSION_DIR}/${log_path}`）：
 4. 判定 verification_outcome：
    - 源码有该校验 + API 仍接受非法值 → `validation_absent` 不成立，看下一条
    - 源码没做 contract 要求的校验 → `validation_absent`（真缺陷信号）
-   - 源码显式 by-design（default 逻辑/idempotent/注释）→ `by_design_in_source`
+   - 源码**明示** by-design（v3.4 拍板2 收紧）→ `by_design_in_source`：source_excerpt 必须含明示意图证据——代码注释/docstring（如 `// intentionally` / `by design` / `we don't guarantee`）或维护者明示引用；仅"实现如此/未见校验/无注释的沉默行为"**禁止**标 by_design_in_source（→ `validation_absent` 或 `not_found_in_source`）——RQ2 7 TP 误筛的主通道即此处口径过宽
    - 完全找不到 → `not_found_in_source`（如实记录）
    - clone 不可用走 WebFetch 单 URL → `webfetch_shallow`
 5. 平凡解释排除：环境/并发 race/缓存延迟/请求参数笔误/by-design，排除不了的记入 surviving

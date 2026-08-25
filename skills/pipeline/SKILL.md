@@ -19,12 +19,12 @@ version: 1.1.0
 3. 降级使用 WebSearch + WebFetch
 4. 提取端点、参数、约束
 5. 提取 SDK 版本和 Docker tags
-6. 输出 `raw_knowledge.md`
+6. 输出 `raw_knowledge.json`（v3.4）+ `deployment_meta.json`
 
 ### Phase 2: 契约形式化
 
 1. Orchestrator 派 Contract Formalizer Agent
-2. 读取 `raw_knowledge.md`
+2. 读取 `raw_knowledge.json`
 3. 按 JSON Schema 转换为结构化契约
 4. 生成 endpoint_registry（含 source_url, doc_version, doc_quote）
 5. 输出 `structured_contract.json`

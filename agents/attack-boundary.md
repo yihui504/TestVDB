@@ -60,13 +60,17 @@ Milvus target 必读 [`agents/_target_api_reference.md` § "强制 runtime 协�
 
 ---
 
-## ⛔ 脚本 bootstrap 三层 fallback + Oracle 强制（run2r-01 X1/S3 修正 + v3.4 D3a）
+## ⛔ 脚本 bootstrap 三层 fallback + 策略预绑定消费 + Oracle 强制（X1/S3/D2/D3a）
 
 **bootstrap 三层 fallback（X1：R1 五轮穿透根因）— 每个生成脚本必须内嵌**：
 1. env：`os.environ.get("TESTVDB_SCRIPTS_DIR")` / `os.environ.get("TESTVDB_TARGET")` / `os.environ.get("TESTVDB_DB_URL")`
 2. 向上遍历：env 缺失时从脚本自身路径向上定位含 `structured_contract.json` 的目录
 3. 契约读 target：读该契约 `target` 字段
 → 三层全失败才 `VERDICT: SCRIPT_ERROR`；⛔ 禁止硬编码路径/端口/目标名后静默继续。
+
+**策略预绑定消费（D2，v3.4）**：约束带非空 `bound_strategies` 时**直接按绑定清单生成**
+（不再按策略触发规则自行匹配——匹配环节已取消）；`bound_strategies` 为空（system 级约束
+或无确定策略）→ 按下方"覆盖目标驱动"流程，system 级走通用场景正反两面 + 基本原则构造。
 
 **Oracle 配套生成（D3a）— 测试用例与 oracle 同步产出，禁止无预期判读**：
 1. 每个脚本 docstring 必须有 `Oracle:` 行（紧跟 `Attack:` 行）：一行预期行为声明，如 `Oracle: limit=0 → 4xx reject (constraint xxxx_001)`——预期须与所测约束的 assertion 对齐
@@ -506,7 +510,7 @@ if __name__ == "__main__":
 
 ### 强制步骤（不可跳过）
 
-1. **先 Read 知识源**：在用 Write 写 `analyzed_documents_boundary.md` **之前**，必须先用 Read 工具打开 `${session_dir}/raw_knowledge.md`。
+1. **先 Read 知识源**：在用 Write 写 `analyzed_documents_boundary.md` **之前**，必须先用 Read 工具打开 `${session_dir}/raw_knowledge.json`。
 2. **定位表格**：搜索 `## Document Sources`，找到其下的 Markdown 表格（`| # | URL | Doc Version | ...`）。
 3. **逐字复制 URL**：将表格中 `URL` 列的每一个链接**逐字符原样复制**到输出文件中。不要改写、不要缩短、不要用"看起来差不多"的替代 URL。
 
@@ -514,7 +518,7 @@ if __name__ == "__main__":
 
 ```markdown
 ## Analyzed Documents — boundary
-- <逐字复制 raw_knowledge.md ## Document Sources 表第 1 行 URL>
+- <逐字复制 raw_knowledge.json document_sources 数组第 1 条的 url 值>
 - <逐字复制第 2 行 URL>
 - <逐字复制第 3 行 URL>
 - <逐字复制第 4 行 URL>
@@ -522,14 +526,14 @@ if __name__ == "__main__":
 ```
 
 规则：
-1. URL **必须**是 `raw_knowledge.md` 中 `## Document Sources` 表格 `URL` 列的**逐字符完全一致**的副本。
+1. URL **必须**是 `raw_knowledge.json` 中 `document_sources[].url` 字段的**逐字符完全一致**的副本。
 2. 段落标题固定为 `## Analyzed Documents — boundary`。
 3. **gate 做精确字符串比对（不是模糊匹配）**。`https://weaviate.io/developers/weaviate` ≠ `https://docs.weaviate.io/weaviate`，前者的覆盖率 = 0%。
 4. `scripts/hooks/pipeline_gate.py`（Stop hook）汇总三个 attack agent 的清单，与 Document Sources 全集做**精确交集**；覆盖率 < 60% 时返回 `exit 2`，强制你补分析遗漏文档后再结束本轮。
 
 ### 自检（写完文件后执行）
 
-> 我刚写的 URL 中，每一个都能在 `raw_knowledge.md` 的 `## Document Sources` 表格里找到**逐字符完全一致**的行吗？如果有一个不是，gate 会拦截本轮。
+> 我刚写的 URL 中，每一个都能在 `raw_knowledge.json` 的 `document_sources` 数组里找到**逐字符完全一致**的行吗？如果有一个不是，gate 会拦截本轮。
 
 ## 降级声明契约（Stop hook gate 强制 — 症状②）
 

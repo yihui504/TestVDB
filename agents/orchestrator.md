@@ -17,7 +17,7 @@ tools:
 
 ## 数据访问级别: redacted
 
-你只能访问所有 Agent 的产出文件（structured_contract.json, raw_knowledge.md, pipeline_state.json,
+你只能访问所有 Agent 的产出文件（structured_contract.json, raw_knowledge.json, pipeline_state.json,
 debate_logs/*.json, execution_summary.txt, output_*.log, defect-*.md, experience_handoff.json,
 coverage.json, mine_state.json, strategy_registry/*.json）。
 
@@ -61,7 +61,7 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 ```
 □ [Step 1] 解析参数（target, version, max_rounds, min_defects）
 □ [Step 2] 前置条件检查（Docker/Python/磁盘/网络）
-□ [Step 3] 检查缓存（raw_knowledge.md + structured_contract.json，含 TTL 计算）
+□ [Step 3] 检查缓存（raw_knowledge.json + structured_contract.json，含 TTL 计算）
 □ [Step 3.6] 如 intelligence.enabled=true：历史情报采集（issue-miner → bug-shape-extractor → threat-modeler）
 □ [Step 3.65] bug-shape 确定性核验（v2.4，fail-fast + bounded retry + v2.5.2 降级）：
   - 跑 `python scripts/_validate_bug_shapes.py intelligence/{target}/bug_shapes.json`
@@ -73,6 +73,7 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 □ [Step 4] 如缓存未命中：派 Knowledge Extractor 获取文档
 □ [Step 5] 如缓存未命中：派 Contract Formalizer 生成契约
 □ [Step 6] 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）+ 确定性核验（v2.4，fail-fast）：`python scripts/_validate_contract.py results/{target}/{version}/structured_contract.json`；exit 1 → 读 contract_validation_report.json → 重派 contract-formalizer（反系统性 source_verified 幻觉）
+□ [Step 6.5] 策略预绑定（v3.4 D2）：`python scripts/bind_strategies.py results/{target}/{version}/structured_contract.json`；exit 1 = level lint 失败 → 重派 contract-formalizer（规则 2.7）
 □ [Step 7] 初始化 mine_state.json + 设置 TESTVDB_SESSION_ID 环境变量
 □ [Step 8] 开始挖掘循环（最多 max_rounds 轮）：
   □ 8a. 注入 reflection_context + threat_model + cognitive_blindspots 到 Attack Agents
@@ -160,7 +161,7 @@ TTL 从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取（默认 168h）�
 
 > 完整 agent 派发 prompt 见 `commands/contract.md` Step 3-5。
 
-- **Step 4**: `Agent(subagent_type="testvdb:knowledge-extractor")` → `results/{target}/{version}/raw_knowledge.md`
+- **Step 4**: `Agent(subagent_type="testvdb:knowledge-extractor")` → `results/{target}/{version}/raw_knowledge.json`
 - **Step 5**: `Agent(subagent_type="testvdb:contract-formalizer")` → `results/{target}/{version}/structured_contract.json`
 - **Step 6**: 合同门控 — `scripts/validate_contract.py`（schema 合法性）+ 核心 CRUD 端点覆盖率 ≥ 90%。不通过 → 输出缺失端点 + 终止会话。
   - 核心 CRUD：collections create/list/get/delete、points insert/get/update/delete、search/recommend
@@ -713,7 +714,7 @@ Orchestrator
   │     │           ▼
   │     │     threat_model.json (attack priorities + cognitive blindspots)
   │     │
-  ├──▶ Knowledge Extractor ──▶ raw_knowledge.md
+  ├──▶ Knowledge Extractor ──▶ raw_knowledge.json
   │                                      │
   ├──▶ Contract Formalizer ◀─────────────┘
   │           │
@@ -764,7 +765,7 @@ results/{target}/{version}/{timestamp}/
 ├── summary.md          # 本轮汇总
 ├── debate_logs/        # 辩论日志 (stage1.json, stage2.json)
 ├── structured_contract.json  # 契约
-├── raw_knowledge.md    # 原始知识
+├── raw_knowledge.json    # 原始知识
 ├── mine_state.json     # 状态快照
 ├── coverage.json       # 覆盖率跟踪
 ├── session_metadata.json     # 会话元数据

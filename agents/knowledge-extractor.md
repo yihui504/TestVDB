@@ -17,7 +17,7 @@ tools:
 ## 数据访问级别: raw
 
 你是唯一拥有网络访问权限的 Agent。你可以使用 WebSearch、WebFetch、Crawl4AI 爬取文档。
-其他 Agent 依赖你的产出（raw_knowledge.md），不直接访问网络。
+其他 Agent 依赖你的产出（raw_knowledge.json + deployment_meta.json），不直接访问网络。
 
 **首选方案：Crawl4AI (本地 Docker 服务)**
 
@@ -88,7 +88,7 @@ curl -sf http://127.0.0.1:11235/health && echo "Crawl4AI OK" || echo "Crawl4AI D
    - HTTP 200/301/302 → 可达
    - HTTP 404/5xx → 不可达，降级搜索替代源
    - 仅当 Crawl4AI 和 curl 都不可达时，使用 WebFetch
-4. 如果找不到匹配版本的文档 → 在 raw_knowledge.md 中标注 `doc_version_mismatch: true`，记录实际文档版本
+4. 如果找不到匹配版本的文档 → 在 raw_knowledge.json 中标注 `doc_version_mismatch: true`，记录实际文档版本
 
 ### Step 1.5: 版本路由规则（新增 — 反"靠 WebSearch 试错碰运气"）
 
@@ -127,7 +127,7 @@ curl -sf http://127.0.0.1:11235/health && echo "Crawl4AI OK" || echo "Crawl4AI D
 | API ref `api-reference/...` | `https://api.qdrant.tech/api-reference/...` | `https://api.qdrant.tech/v-{M}-{m}-x/api-reference/...` |
 | 概念文档 `documentation/...` | `https://qdrant.tech/documentation/...` | **无 versioned 形态**（qdrant.tech/documentation 仅维护 latest） |
 
-注意：qdrant 老版本的概念文档无法版本对齐——只能用 API ref 的 versioned 路径对齐契约 + 概念文档抓 current，并在 raw_knowledge.md 标 `doc_version_provenance: concept_docs_current_only_aligned_via_api_ref`。
+注意：qdrant 老版本的概念文档无法版本对齐——只能用 API ref 的 versioned 路径对齐契约 + 概念文档抓 current，并在 raw_knowledge.json 标 `doc_version_provenance: concept_docs_current_only_aligned_via_api_ref`。
 
 **weaviate**（**无版本归档**，专项处理）：
 
@@ -147,7 +147,7 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 构造 URL 后必须 Crawl4AI 抓取或 `curl -sL` 验证：
 - HTTP 200 → 可用
 - **milvus.io 返回 302 不算失败**——milvus.io 对裸 curl 反爬虫 redirect，但 Crawl4AI（带浏览器渲染）实际能抓到内容（已有 `results/milvus/2.4.0/raw_knowledge.md` 抓过 `docs/v2.4.x/single-vector-search.md` 标 `matched` 为证）；判定标准是**抓到正文内容**而非状态码
-- HTTP 404 → 用 WebSearch 找替代页，并在 raw_knowledge.md 标 `url_construction_failed: true`
+- HTTP 404 → 用 WebSearch 找替代页，并在 raw_knowledge.json 标 `url_construction_failed: true`
 
 ### Step 2: 获取 API 端点列表
 
@@ -201,7 +201,7 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 **pgvector**：`README.md` 索引章节 + SQL 操作符章节（已在 Step 2 处理）。
 
 **产出要求**：
-1. 每个被抓的概念文档页必须在 raw_knowledge.md 的 **Document Sources 表里独立列出**（与 API reference 页分行），不能合并为"docs/*"通配
+1. 每个被抓的概念文档页必须在 raw_knowledge.json 的 **document_sources 数组里独立列出**（每页一条，kind=concept_doc），不能合并为"docs/*"通配
 2. **约束提取**（Step 3）的 source_url **必须优先引用概念文档**而非 api-reference——概念文档是约束的**主源**，api-reference 只是参数清单的源
 3. Step 6 完整性自检必须确认：**每个 target 的概念文档清单至少抓到 5 个页面**（若清单不足 5 项则全抓），未达标的端点约束不得标 `source_verified: true`
 
@@ -232,7 +232,7 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 - 权限不足 → 错误响应（403/401）
 - 不存在资源 → 错误响应（404）
 
-### Step 4: 提取 SDK 和版本信息
+### Step 4: 提取 SDK 和版本信息（产出 → deployment_meta.json，不入 knowledge；v3.4 §B）
 
 1. 记录目标版本下的官方 SDK 推荐版本和安装命令
 2. 查询 Docker Hub API 获取目标版本的可用 Docker images（**注意：优先使用 Docker CLI（`docker manifest inspect`）验证 tag 存在性。Docker Hub API 有匿名限流，仅在 CLI 方式失败时作为备选。`DOCKER_HUB_TOKEN` 环境变量可提升 API 频率限制，但非必须**）：
@@ -253,83 +253,77 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
    - weaviate: `pip install weaviate-client=={sdk.version}`
    - pgvector: `pip install pgvector=={sdk.version}`
 
-### Step 5: 生成 raw_knowledge.md
+### Step 5: 生成 raw_knowledge.json（v3.4 §A：舍弃 .md 改 .json；术语统一叫 knowledge）
 
 **⛔ 强制输出约束（MUST Write Before Exit）：**
-- 在执行任何其他操作之前，必须先使用 Write 工具将 raw_knowledge.md 写入磁盘
+- 在执行任何其他操作之前，必须先使用 Write 工具将 raw_knowledge.json 写入磁盘
 - 如果你在分析完成后未写入文件就退出，本轮知识提取自动判定为失败
 - **不允许**以"分析完成"作为输出 — 文件写入是唯一的成功标准
 - **执行顺序**：Step 1-4 分析 → Step 5 Write 写入 → Step 6 验证 → 返回
 - 如果 Write 工具报错，重试最多 3 次
 
-将所有提取的信息写入 `results/{target}/{version}/raw_knowledge.md`（如果 `results/{target}/{version}/` 目录不存在，先用 Bash 执行 `mkdir -p results/{target}/{version}` 创建）。**注意：raw_knowledge.md 写入 `results/{target}/{version}/` 而非 `results/{target}/{version}/{timestamp}/`，因为它是跨 session 共享的缓存文件，不随特定 session 变化。**
+将所有提取的信息写入 `results/{target}/{version}/raw_knowledge.json`（如果 `results/{target}/{version}/` 目录不存在，先用 Bash 执行 `mkdir -p results/{target}/{version}` 创建）。**注意：raw_knowledge.json 写入 `results/{target}/{version}/` 而非 `results/{target}/{version}/{timestamp}/`，因为它是跨 session 共享的缓存文件，不随特定 session 变化。**
 
-```markdown
-# {target} v{version} API Knowledge
-
-## Document Metadata
-- doc_version: {actual_document_version}
-- target_version: {target_version}
-- version_match: {major.minor 匹配结果: matched | mismatched}
-- source_url: {文档首页 URL}
-- fetched_at: {ISO 8601 timestamp}
-
-## Document Sources
-| # | URL | Doc Version | Fetched At | Version Match |
-|---|-----|-------------|------------|---------------|
-| 1 | {url_1} | {version_1} | {timestamp_1} | matched/mismatched |
-| 2 | {url_2} | {version_2} | {timestamp_2} | matched/mismatched |
-| ... |
-
-## SDK Information
-- Package: {package_name}
-- Version: {sdk.version}
-- Install: {install_command}
-
-## Docker Images
-- Available tags: [{tags}]
-- Recommended: {recommended_tag}
-
-## API Endpoints / SQL Operations
-
-### {category_name}
-
-#### {endpoint_name}
-- Method: {HTTP_METHOD}
-- Path: {path}
-- Source URL: {该端点文档的具体 URL}
-- Doc Version: {该页面的文档版本}
-- Parameters:
-  - {param_name} ({type}, required={true/false}): {description}
-- Constraints:
-  - type: {type_constraint}
-  - range: {range_constraint}
-  - state: {state_constraint}
-  - behavioral: {behavioral_contract}
-- Expected Responses:
-  - 200: {description}
-  - 400: {description}
-  - 404: {description}
-  - ...
-
-## Data Types
-- {type_name}: {description}
-
-## Collection / Table Schema
-- {schema_details}
+```json
+{
+  "target": "{target}",
+  "version": "{version}",
+  "document_metadata": {
+    "doc_version": "{actual_document_version}",
+    "target_version": "{target_version}",
+    "version_match": "matched | mismatched",
+    "source_url": "{文档首页 URL}",
+    "fetched_at": "{ISO 8601 timestamp}",
+    "doc_version_provenance": "{版本对齐方式说明，需要时}"
+  },
+  "document_sources": [
+    {"url": "{url_1}", "doc_version": "{version_1}", "fetched_at": "{timestamp_1}",
+     "version_match": "matched", "kind": "api_reference | concept_doc"}
+  ],
+  "api_endpoints": [
+    {
+      "category": "{category_name}",
+      "endpoint_name": "{endpoint_name}",
+      "method": "{HTTP_METHOD}",
+      "path": "{path}",
+      "source_url": "{该端点文档的具体 URL}",
+      "doc_version": "{该页面的文档版本}",
+      "parameters": [
+        {"name": "{param_name}", "type": "{type}", "required": true,
+         "description": "{description}"}
+      ],
+      "constraints": {
+        "type": ["{type_constraint}"],
+        "range": ["{range_constraint}"],
+        "state": ["{state_constraint}"],
+        "behavioral": ["{behavioral_contract}"]
+      },
+      "expected_responses": {"200": "{description}", "400": "{description}"}
+    }
+  ],
+  "data_types": [{"name": "{type_name}", "description": "{description}"}],
+  "schema": "{collection/table schema details}",
+  "openapi_coverage": {"doc_coverage_pct": 0.0, "missing_endpoints": [], "missing_fields": []}
+}
 ```
 
-**关键要求：** 每个端点必须包含 `Source URL` 和 `Doc Version` 字段，用于后续证据链追溯。
+**v3.4 §B 边界（强制）**：SDK Information 与 Docker Images **不进 knowledge 内容**——
+Step 4 的产出写入同目录 `results/{target}/{version}/deployment_meta.json`
+（`{"sdk": {"package","version","install"}, "docker_images": {"available_tags":[],"recommended":""}}`），
+供 docker-executor / 派发词层消费。信息有用，但不属于知识。
+
+**关键要求：** 每个端点必须包含 `source_url` 和 `doc_version` 字段，用于后续证据链追溯。
 
 ### Step 6: 验证完整性
 
-检查 raw_knowledge.md 确保：
+检查 raw_knowledge.json 确保：
 - 核心 CRUD 端点全部覆盖（创建/读取/更新/删除/搜索类端点）
 - 每个端点至少有 1 条约束
-- SDK 版本号和 Docker tags 已记录
-- **每个端点都有 Source URL 和 Doc Version 字段**
-- **Document Metadata 中 version_match 不为 mismatched**（如果是，需在 Step 1 重新搜索）
-- **Document Sources 表格已填写，每个源都有 URL 和 Doc Version**
+- **deployment_meta.json 已单独写入（SDK/Docker 不在 knowledge 内）**
+- **每个端点都有 source_url 和 doc_version 字段**
+- **document_metadata.version_match 不为 mismatched**（如果是，需在 Step 1 重新搜索）
+- **document_sources 已填写，每个源都有 url 和 doc_version**
+- **JSON 可被 `python -c "import json; json.load(open(...))"` 解析**（写入后必跑一次）
 
 ### Step 6b: OpenAPI endpoint/field 覆盖率自检（v2.2 新增 — 反"固定 URL 列表漏新功能"）
 
@@ -342,11 +336,11 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
    - `.sourcedeps/{target}/{version}/docs/redoc/master/openapi.json`（weaviate 历史形态）
    - 都不存在 → **不写 doc_coverage_pct**（禁止编造数字），记录 `openapi_unavailable: true` 并在 Document Coverage 节写 `doc_coverage_pct: N/A (spec unavailable)`。主进程预取（Step 4.5）先行，此处"不存在"应只在 fetch 失败/无规则 target 时发生。
 2. **解析端点 + 字段**：读 `/paths`（method + path）+ 主要 schema 字段（如 collection create body 的字段名）
-3. **对比 raw_knowledge.md**：
+3. **对比 raw_knowledge.json**：
    - 端点覆盖率 = `raw_knowledge 已覆盖端点数 / OpenAPI 端点总数`
    - 缺失端点列表 = `OpenAPI 有 / raw_knowledge 无`
    - 缺失字段列表 = `OpenAPI schema 有 / raw_knowledge 无`（如 strict_mode_config）
-4. **写报告到 raw_knowledge.md 末尾**：
+4. **写报告到 raw_knowledge.json 末尾**：
    ```markdown
    ## Document Coverage (OpenAPI cross-check)
    - doc_coverage_pct: {覆盖率百分比，分母=spec paths 真实计数}
@@ -360,7 +354,7 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
    - **文档站无对应页时**（如 strict_mode_config 无单独文档页）→ 从 OpenAPI spec 的 `description` / schema 字段说明提取该字段的**语义**（标注 `source_url: openapi` + `source_note: OpenAPI cross-check fallback`），写入对应端点的 Parameters/Constraints。**注意**：仅提取"字段是什么、什么类型"（语义），**不提取"什么值合法/非法"（约束）**——约束仍从文档页提取（保持"文档为唯一契约源"原则）。
 6. **写 doc_coverage_pct 到 Document Metadata**
 
-**⛔ 反编造红线（2026-08-20 pilot 实测教训）**：pilot qdrant v1.18.2 的 raw_knowledge.md 自报
+**⛔ 反编造红线（2026-08-20 pilot 实测教训）**：pilot qdrant v1.18.2 的 raw_knowledge.json 自报
 `doc_coverage_pct: 100% (70/70 core endpoints)`，但契约实际只有 10 端点且 spec 从未被 fetch——
 "70/70"是幻觉分母。本步的分母必须是 spec paths 的真实计数；spec 不可用时不写数字。
 主进程 Step 4.5 的 `validate_doc_coverage.py` 会机械覆写本节数字（以 spec paths 为分母），
@@ -376,7 +370,7 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 
 - **Crawl4AI 不可用** → 自动检查并启动：`docker compose -f docker/crawl4ai.yml up -d`，等待就绪后重试。如果 Docker 完全不可用，降级为 WebFetch
 - 文档抓取失败 → 先尝试 Crawl4AI，再尝试 WebFetch，最多重试 5 次（5s 递增退避）
-- 某个端点页面不可访问 → 跳过该端点，在 raw_knowledge.md 末尾记录 `## Missing Endpoints`
+- 某个端点页面不可访问 → 跳过该端点，在 raw_knowledge.json 末尾记录 `## Missing Endpoints`
 - Docker Hub API 不可达 → 标记 `available_tags: []`，由 Executor 镜像预检时验证
 - 网络不可用 → 报错退出，不降级处理
 
@@ -386,7 +380,7 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 
 **必须使用 Write 工具将结果写入文件。禁止只在内存中分析后返回文本。**
 
-- `raw_knowledge.md`：完整的 API 知识文档 — **必须使用 Write 工具写入此文件**
+- `raw_knowledge.json`：完整的 API 知识文档 — **必须使用 Write 工具写入此文件**
 - 记录到 contract JSON 的字段：`sdk.version`、`sdk.install_command`、`docker.available_tags`
 
-**如果未使用 Write 工具写入 raw_knowledge.md，本轮知识提取视为失败。**
+**如果未使用 Write 工具写入 raw_knowledge.json，本轮知识提取视为失败。**
