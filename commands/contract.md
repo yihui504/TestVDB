@@ -67,17 +67,17 @@ python scripts/check_cache.py contract "results/{target}/{version}" {target} {ve
 ```
 Agent(subagent_type="testvdb:knowledge-extractor",
   description="提取 {target} {version} 文档知识",
-  prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识。将结果写入 results/{target}/{version}/raw_knowledge.md")
+  prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识。将结果写入 results/{target}/{version}/raw_knowledge.json（SDK/Docker 信息单独写 deployment_meta.json，v3.4 §B）")
 ```
 
-**验证：** `ls -la results/{target}/{version}/raw_knowledge.md`
+**验证：** `ls -la results/{target}/{version}/raw_knowledge.json results/{target}/{version}/deployment_meta.json`
 
 ### Step 4: 派 Contract Formalizer
 
 ```
 Agent(subagent_type="testvdb:contract-formalizer",
   description="形式化 {target} v{version} API 契约",
-  prompt="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.md 转换为 structured_contract.json。将结果写入 results/{target}/{version}/structured_contract.json")
+  prompt="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.json 转换为 structured_contract.json（每条约束标 level 分级，规则 2.7；v3.4）。将结果写入 results/{target}/{version}/structured_contract.json")
 ```
 
 **验证：** `ls -la results/{target}/{version}/structured_contract.json`
@@ -98,6 +98,13 @@ python scripts/validate_contract.py "results/{target}/{version}/structured_contr
 ```bash
 python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
 ```
+
+### Step 5.5: 策略预绑定（v3.4 D2，确定性主进程步骤——0 LLM）
+```bash
+python scripts/bind_strategies.py "results/{target}/{version}/structured_contract.json"
+```
+- exit 1（level lint 失败：契约缺 `level` 字段）→ 重派 contract-formalizer（规则 2.7 未执行）
+- 正常 → 契约各约束带 `bound_strategies` + 顶层 `_strategy_binding` 汇总（attack agents 按绑定清单直接生成）
 
 ### Step 6: 输出
 

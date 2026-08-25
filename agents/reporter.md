@@ -223,7 +223,8 @@ results/
             │   ├── stage1.json
             │   └── stage2.json
             ├── structured_contract.json
-            ├── raw_knowledge.md
+            ├── raw_knowledge.json
+            ├── deployment_meta.json
             ├── summary.md
             ├── mine_state.json
             ├── coverage.json

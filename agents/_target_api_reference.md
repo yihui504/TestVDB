@@ -259,7 +259,7 @@ v = rt.judge_schema_attack(status, raw, CLS,
 
 | target | API 方式 | 原因 |
 |--------|---------|------|
-| **chroma** | **chromadb SDK (`chromadb.HttpClient`)** | Chroma 是 SDK-first；v1 REST API 已废弃（返回 405）；`raw_knowledge.md` 明确记载 "Chroma is primarily a Python SDK-based vector database"。连接代码: `client = chromadb.HttpClient(host='localhost', port=8000)` |
+| **chroma** | **chromadb SDK (`chromadb.HttpClient`)** | Chroma 是 SDK-first；v1 REST API 已废弃（返回 405）；`raw_knowledge.json` 明确记载 "Chroma is primarily a Python SDK-based vector database"。连接代码: `client = chromadb.HttpClient(host='localhost', port=8000)` |
 | **milvus** | REST API v2 (`/v2/vectordb/`) | Milvus 同时支持 REST v2 + gRPC；REST v2 更稳定。仅在动态 schema 操作时用 pymilvus SDK |
 | **qdrant** | REST API (`requests`) | 标准 REST API，端点路径从 contract 取 |
 | **weaviate** | REST API (`requests`) | 标准 REST API，搜索用 GraphQL |
