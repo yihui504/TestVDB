@@ -126,7 +126,7 @@ class TestBindContract:
         meta = out["_strategy_binding"]
         assert meta["bound_constraints"] == 3
         assert meta["bound_via_builtin"] == 3
-        assert meta["bound_via_registry"] == 1
+        assert meta["bound_via_registry"] == 2  # t1(type) + r1(range) 两条约束经 registry 绑定
         assert meta["unbound_endpoint_constraints"] == 0
         assert meta["system_constraints_skipped"] == 1
         assert meta["distinct_strategies_bound"] == 4
