@@ -3,6 +3,7 @@
 mock `req` 验证 path_params 替换 + setup_default 失败 + PATHS 模板完整性。
 不连真实 qdrant。
 """
+import os
 import sys
 from pathlib import Path
 
@@ -196,3 +197,33 @@ class TestJudgeSchemaAttackQdrant:
         self._stub_request(monkeypatch, describe_body={"foo": "bar"})
         v = qdrant.judge_schema_attack(200, "", "X", ["opt"], -1)
         assert v == "SCRIPT_ERROR"
+
+
+@pytest.mark.unit
+class TestRuntimeFallback:
+    def test_fallback_target_from_contract(self, tmp_path, monkeypatch):
+        """v3.4 bootstrap 层 2/3：env 缺失时从脚本位置向上找契约读 target。"""
+        import json as _json
+        import subprocess
+        deep = tmp_path / "results" / "qdrant" / "v1.18.0" / "sess" / "debate_logs"
+        deep.mkdir(parents=True)
+        (deep.parent.parent.parent / "structured_contract.json").write_text(
+            _json.dumps({"target": "qdrant"}), encoding="utf-8")
+        probe = deep / "probe.py"
+        probe.write_text(
+            "import sys\n"
+            "sys.path.insert(0, r'%s')\n"
+            "from runtime import get_runtime\n"
+            "rt = get_runtime()\n"
+            "print(rt.__name__)\n" % str(SCRIPTS), encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k != "TESTVDB_TARGET"}
+        out = subprocess.run([sys.executable, str(probe)], capture_output=True,
+                             text=True, env=env, cwd=str(deep))
+        assert "runtime.qdrant" in out.stdout, out.stdout + out.stderr
+
+    def test_fallback_no_contract_raises(self, tmp_path, monkeypatch):
+        """向上 6 级无契约 → 仍抛 unsupported（fail fast 而非猜 target）。"""
+        monkeypatch.delenv("TESTVDB_TARGET", raising=False)
+        from runtime import _fallback_target_from_contract
+        monkeypatch.setattr("runtime.sys.argv", [str(tmp_path / "nowhere.py")])
+        assert _fallback_target_from_contract() == ""
