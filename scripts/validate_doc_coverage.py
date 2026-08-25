@@ -19,6 +19,11 @@ import re
 import sys
 from pathlib import Path
 
+# Windows GBK 控制台下中文 print 会炸（cp1252 charmap encode）
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # 默认排除的路径前缀（运维/internal 端点，非公开 API 面）。
 # 注意 /cluster 不在此列（pilot 2026-08-20 修正）：GT bug 出现在 /cluster/recover
 # （standalone 500→4xx 可触发），排掉它会系统性低估 reach 分母。cluster 面的

@@ -112,22 +112,24 @@ class TestBindContract:
         by_id = {c["constraint_id"]: c for g in ("type_constraints", "range_constraints",
                                                  "state_constraints")
                  for c in out["constraints"][g]}
-        # t1: type + *+create → boundary_type_invalid（experimental/零战绩被门槛挡住）
-        assert by_id["t1"]["bound_strategies"] == ["boundary_type_invalid"]
-        # t2: type + entities+upsert → 无 *+upsert 匹配 → 空
-        assert by_id["t2"]["bound_strategies"] == []
-        # r1: range + * 通配 → boundary_range_oob
-        assert by_id["r1"]["bound_strategies"] == ["boundary_range_oob"]
-        # s1: system → 一律不绑
+        # t1: type + *+create → builtin + registry（experimental/零战绩被门槛挡住）
+        assert by_id["t1"]["bound_strategies"] == ["boundary_type_invalid", "builtin:type_boundary"]
+        # t2: type + entities+upsert → 无 registry 匹配但 builtin 基线兜底
+        assert by_id["t2"]["bound_strategies"] == ["builtin:type_boundary"]
+        # r1: range + * 通配 → builtin + registry
+        assert by_id["r1"]["bound_strategies"] == ["boundary_range_oob", "builtin:boundary_value"]
+        # s1: system → 一律不绑（含 builtin——state 无内置基线）
         assert by_id["s1"]["bound_strategies"] == []
 
     def test_summary_meta(self, contract, registry):
         out = bind_contract(contract, [registry], ["global_strategies.json"])
         meta = out["_strategy_binding"]
-        assert meta["bound_constraints"] == 2
-        assert meta["unbound_endpoint_constraints"] == 1
+        assert meta["bound_constraints"] == 3
+        assert meta["bound_via_builtin"] == 3
+        assert meta["bound_via_registry"] == 1
+        assert meta["unbound_endpoint_constraints"] == 0
         assert meta["system_constraints_skipped"] == 1
-        assert meta["distinct_strategies_bound"] == 2
+        assert meta["distinct_strategies_bound"] == 4
         assert meta["registry_files"] == ["global_strategies.json"]
 
     def test_input_not_mutated(self, contract, registry):
@@ -165,8 +167,8 @@ class TestCli:
         by_id = {c["constraint_id"]: c for g in ("type_constraints", "range_constraints",
                                                  "state_constraints")
                  for c in raw["constraints"][g]}
-        assert by_id["t1"]["bound_strategies"] == ["boundary_type_invalid"]
-        assert by_id["r1"]["bound_strategies"] == ["boundary_range_oob"]
+        assert by_id["t1"]["bound_strategies"] == ["boundary_type_invalid", "builtin:type_boundary"]
+        assert by_id["r1"]["bound_strategies"] == ["boundary_range_oob", "builtin:boundary_value"]
         assert "_strategy_binding" in raw
         assert "written" in capsys.readouterr().out
 

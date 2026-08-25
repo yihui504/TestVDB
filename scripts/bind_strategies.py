@@ -40,6 +40,24 @@ _GROUPS = (
     ("state_constraints", "state"),
 )
 
+# 内置策略基线（v3.4 D2）：attack agents 规范内建的确定性映射——仅收录
+# "策略相对确定、清晰"的两条（导师点名 Boundary Value / Type Boundary，
+# 且 attack-boundary.md 规范原文即声明"针对 range_constraints / type_constraints"）。
+# state/semantic 内置策略无约束形态级确定映射，不预绑（防"全绑退化"——
+# 预绑定的价值在分流，绑一切等于没绑）。builtin: 前缀供 attack agents
+# 按内置策略章节直接生成。
+BUILTIN_BASELINE = {
+    "type": [
+        {"strategy_id": "builtin:type_boundary", "agent": "boundary",
+         "ref": "attack-boundary.md 策略 2: 类型边界攻击（针对 type_constraints）"},
+    ],
+    "range": [
+        {"strategy_id": "builtin:boundary_value", "agent": "boundary",
+         "ref": "attack-boundary.md 策略 1: 边界值攻击（针对 range_constraints）"},
+    ],
+    "state": [],
+}
+
 
 class LevelMissingError(Exception):
     """契约存在缺 level 字段的约束（规则 2.7 未执行）。"""
@@ -114,6 +132,7 @@ def bind_contract(contract: dict, registries: list, registry_names=None) -> dict
                 by_id[sid] = s
 
     bound = unbound_endpoint = system_skipped = 0
+    builtin_bound = registry_bound = 0
     strategies_used = set()
     for group, tag in _GROUPS:
         for c in (out.setdefault("constraints", {}).setdefault(group, []) or []):
@@ -121,13 +140,19 @@ def bind_contract(contract: dict, registries: list, registry_names=None) -> dict
                 c["bound_strategies"] = []
                 system_skipped += 1
                 continue
-            sids = sorted(
+            builtin = [b["strategy_id"] for b in BUILTIN_BASELINE.get(tag, [])]
+            registry = sorted(
                 sid for sid, s in by_id.items()
                 if _strategy_binds(s, tag, c.get("endpoint", "")))
+            sids = sorted(set(builtin) | set(registry))
             c["bound_strategies"] = sids
             if sids:
                 bound += 1
                 strategies_used.update(sids)
+                if builtin:
+                    builtin_bound += 1
+                if registry:
+                    registry_bound += 1
             else:
                 unbound_endpoint += 1
 
@@ -136,6 +161,8 @@ def bind_contract(contract: dict, registries: list, registry_names=None) -> dict
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "registry_files": list(registry_names or []),
         "bound_constraints": bound,
+        "bound_via_builtin": builtin_bound,
+        "bound_via_registry": registry_bound,
         "unbound_endpoint_constraints": unbound_endpoint,
         "system_constraints_skipped": system_skipped,
         "distinct_strategies_bound": len(strategies_used),
@@ -214,19 +241,21 @@ def _self_check() -> int:
         expect("qdrant_range_entities_search_001" in e.missing_ids,
                "lint lists the offending constraint_id")
 
-    # ── 绑定：endpoint 级匹配 + system 跳过 + experimental 不绑 ──
+    # ── 绑定：builtin 基线 + endpoint 级 registry 匹配 + system 跳过 + experimental 不绑 ──
     bound = bind_contract(contract, [registry], ["global_strategies.json"])
     tc = bound["constraints"]["type_constraints"][0]
-    expect(tc["bound_strategies"] == ["boundary_type_invalid"],
-           f"endpoint type constraint binds ok strategy, got {tc['bound_strategies']}")
+    expect(tc["bound_strategies"] == ["boundary_type_invalid", "builtin:type_boundary"],
+           f"type constraint binds builtin + registry, got {tc['bound_strategies']}")
     rc = bound["constraints"]["range_constraints"][0]
-    expect(rc["bound_strategies"] == [],
-           f"range constraint NOT bound to experimental/zero-track, got {rc['bound_strategies']}")
+    expect(rc["bound_strategies"] == ["builtin:boundary_value"],
+           f"range constraint binds builtin only (experimental/zero-track blocked), got {rc['bound_strategies']}")
     sc = bound["constraints"]["state_constraints"][0]
     expect(sc["bound_strategies"] == [], "system constraint skipped (no binding)")
     meta = bound["_strategy_binding"]
-    expect(meta["bound_constraints"] == 1 and meta["unbound_endpoint_constraints"] == 1
-           and meta["system_constraints_skipped"] == 1, f"summary counts sane: {meta}")
+    expect(meta["bound_constraints"] == 2 and meta["unbound_endpoint_constraints"] == 0
+           and meta["system_constraints_skipped"] == 1
+           and meta["bound_via_builtin"] == 2 and meta["bound_via_registry"] == 1,
+           f"summary counts sane: {meta}")
     expect(contract["constraints"]["type_constraints"][0].get("bound_strategies") is None,
            "input contract not mutated (immutable)")
 
@@ -251,7 +280,7 @@ def _self_check() -> int:
         expect(rc_code == 0, f"bind exit 0, got {rc_code}")
         after = _load_json(cpath)
         expect(after["constraints"]["type_constraints"][0]["bound_strategies"]
-               == ["boundary_type_invalid"], "file round-trip binding persisted")
+               == ["boundary_type_invalid", "builtin:type_boundary"], "file round-trip binding persisted")
         expect("_strategy_binding" in after, "summary written to file")
 
         # lint 失败：exit 1
