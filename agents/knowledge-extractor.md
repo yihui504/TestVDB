@@ -314,6 +314,11 @@ Step 4 的产出写入同目录 `results/{target}/{version}/deployment_meta.json
 
 **关键要求：** 每个端点必须包含 `source_url` 和 `doc_version` 字段，用于后续证据链追溯。
 
+**迁移兼容字段**（`scripts/migrate_raw_knowledge.py` 从旧 .md 转换的产物才有，新生成不写）：
+`migrated_from_md: true`、`migrated_at`、端点级 `raw_block`（该端点 md 原文块——formalizer
+正常消费，参数/约束细节以块内原文为准）、`category_notes`（category 间散行）、`sections[]`
+（非模板章节保真）。formalizer 读到这些字段时按正常知识内容处理。
+
 ### Step 6: 验证完整性
 
 检查 raw_knowledge.json 确保：
