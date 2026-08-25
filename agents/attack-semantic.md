@@ -43,6 +43,7 @@ tools:
 3. 如果只剩 3 turns，立即停止生成，Write 已完成的脚本。
 4. 脚本写入 `${session_dir}/debate_logs/`（规范目录 — 下游 gate 只扫此目录，写别处脚本变不可见）。
 5. 本轮覆盖清单（策略 × 约束）写进脚本 docstring 的 `Attack:` 行（下游统计消费）。
+6. **每个脚本 docstring 必须有 `Oracle:` 行**（紧跟 `Attack:` 行）：一行预期行为声明，预期须与所测约束 assertion 对齐（v3.4 D3a；C3 实测埋中部段时三 agent 集体漏执行，故提级至此——缺 Oracle 行 = C3 打回）。
 
 参考原 `semantic_gen.rs` + `metamorphic_gen.rs` 生成器策略，但不受其代码限制。
 

@@ -42,6 +42,7 @@ tools:
 2. **Round 2+ 策略**：跳过 reflection_context 中已覆盖的端点，聚焦 top-5 高价值新端点。如果只剩 3 turns，立即停止生成，Write 已完成的脚本。
 3. 脚本写入 `${session_dir}/debate_logs/`（规范目录 — 下游 gate 只扫此目录，写别处脚本变不可见）。
 4. 本轮覆盖清单（策略 × 约束）写进脚本 docstring 的 `Attack:` 行（下游统计消费）。
+5. **每个脚本 docstring 必须有 `Oracle:` 行**（紧跟 `Attack:` 行）：一行预期行为声明，预期须与所测约束 assertion 对齐（v3.4 D3a；C3 实测埋中部段时集体漏执行，故提级至此——缺 Oracle 行 = C3 打回）。
 
 参考原 `boundary_gen.rs` 生成器策略，但不受其代码限制。
 
