@@ -205,18 +205,18 @@ def check_m4_shortcut_pipeline(session_dir: str) -> dict:
         "debate_logs/stage2_novelty.json.done",
         "debate_logs/stage2_severity.json.done",
     ]
-    has_new = os.path.exists(
-        os.path.join(session_dir, "debate_logs", "chain_verdicts.json.done"))
+    # J5(run2r-01): 分轮命名 chain_verdicts_r*.json.done — glob 兼容两种形式
+    has_new = bool(list(Path(session_dir).glob(
+        "debate_logs/chain_verdicts*.json.done")))
     has_old = os.path.exists(
         os.path.join(session_dir, "debate_logs", "stage2_doc.json.done"))
 
     if has_new or not has_old:
-        required_done = [
-            "debate_logs/stage1.json.done",
-            "debate_logs/chain_verdicts.json.done",
-        ]
+        required_done = ["debate_logs/stage1.json.done"]
+        require_chain = True  # chain_verdicts 用 has_new glob 结果判定（含 _r* 分轮名）
     else:
         required_done = _old_five
+        require_chain = False
 
     # 仅在有管道执行痕迹时才检查
     debate_logs_dir = os.path.join(session_dir, "debate_logs")
@@ -237,6 +237,8 @@ def check_m4_shortcut_pipeline(session_dir: str) -> dict:
         full_path = os.path.join(session_dir, f)
         if not os.path.exists(full_path):
             missing.append(f)
+    if require_chain and not has_new:
+        missing.append("debate_logs/chain_verdicts*.json.done")
 
     if missing:
         return {
@@ -270,12 +272,13 @@ def check_m5_script_bug_as_defect(session_dir: str, defect_id: str) -> dict:
         return {"mode": "M5", "passed": True, "detail": "No defect file"}
 
     defect_type = ""
-    m = re.search(r'Type:\s*(Type\d_\w+)', content)
+    # J5: 容 markdown 粗体 **Type:** 形式（字符类含 * 吃掉闭合粗体）
+    m = re.search(r'Type:[\s:*]*(Type\d_\w+)', content)
     if m:
         defect_type = m.group(1)
 
     if "Type1" in defect_type:
-        has_2xx = re.search(r'HTTP Response["\s:]*["\s]*2\d{2}', content)
+        has_2xx = re.search(r'HTTP Response["\s:*]*["\s]*2\d{2}', content)
         if not has_2xx:
             return {
                 "mode": "M5",
@@ -286,8 +289,8 @@ def check_m5_script_bug_as_defect(session_dir: str, defect_id: str) -> dict:
     elif "Type2" in defect_type:
         # Type2 should quote the unclear/ambiguous error message
         has_error_msg = (
-            re.search(r'(?:error|Error|ERROR)[\s:]*["\'].+?["\']', content)
-            or re.search(r'(?:message|Message)[\s:]*["\'].+?["\']', content)
+            re.search(r'(?:error|Error|ERROR)[\s:*]*["\'].+?["\']', content)
+            or re.search(r'(?:message|Message)[\s:*]*["\'].+?["\']', content)
         )
         if not has_error_msg:
             return {
@@ -299,7 +302,7 @@ def check_m5_script_bug_as_defect(session_dir: str, defect_id: str) -> dict:
     elif "Type3" in defect_type:
         # Type3 should have 5xx response or crash traceback
         has_crash_evidence = (
-            re.search(r'HTTP Response["\s:]*["\s]*5\d{2}', content)
+            re.search(r'HTTP Response["\s:*]*["\s]*5\d{2}', content)
             or re.search(r'Traceback|Segmentation fault|panic|SIGSEGV', content)
             or re.search(r'(?:crash|CRASH|timeout|TIMEOUT)', content)
         )
@@ -312,7 +315,7 @@ def check_m5_script_bug_as_defect(session_dir: str, defect_id: str) -> dict:
             }
     elif "Type4" in defect_type:
         # Type4 should show 2xx (operation succeeded) + unexpected state change
-        has_2xx = re.search(r'HTTP Response["\s:]*["\s]*2\d{2}', content)
+        has_2xx = re.search(r'HTTP Response["\s:*]*["\s]*2\d{2}', content)
         # ponytail: 剥离 Type 行再做 state_desc 检查，避免 "Type4_StateLogic"
         # 中的 "State" 假匹配（self-check 发现的 latent bug）
         content_no_type_line = re.sub(r'^Type:.*$', '', content, flags=re.MULTILINE)
@@ -529,6 +532,14 @@ def _self_check() -> int:
         expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
                "Type4 with both → pass")
 
+        # J5: markdown 粗体形式（run2 defect md 实际形态）
+        write_defect("**Type:** Type1_IllegalSuccess\n**HTTP Response:** 200 OK")
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "Type1 markdown bold → pass")
+        write_defect('**Type:** Type2_PoorDiagnostics\n**error:** "ambiguous msg"')
+        expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
+               "Type2 markdown bold → pass")
+
         # 无 Type → 默认 pass
         write_defect("no type field here")
         expect(check_m5_script_bug_as_defect(td, "defect-1")["passed"] is True,
@@ -552,6 +563,15 @@ def _self_check() -> int:
             (open(os.path.join(debate_dir, f + ".done"), "w").close())
         expect(check_m4_shortcut_pipeline(empty)["passed"] is True,
                "M4 all .done → pass（新管线 stage1 + chain_verdicts）")
+
+        # J5: 分轮命名 chain_verdicts_r*.json.done 兼容
+        r_dir = os.path.join(empty, "m4_rounds")
+        debate_r = os.path.join(r_dir, "debate_logs")
+        os.makedirs(debate_r)
+        (open(os.path.join(debate_r, "stage1.json.done"), "w").close())
+        (open(os.path.join(debate_r, "chain_verdicts_r1.json.done"), "w").close())
+        expect(check_m4_shortcut_pipeline(r_dir)["passed"] is True,
+               "M4 分轮 chain_verdicts_r*.json.done → pass")
 
         # ADR-0008 旧会话兼容：仅旧五件套 → 仍按旧清单 pass
         old_dir = os.path.join(empty, "m4_old")

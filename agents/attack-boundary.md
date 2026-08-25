@@ -60,6 +60,21 @@ Milvus target 必读 [`agents/_target_api_reference.md` § "强制 runtime 协�
 
 ---
 
+## ⛔ 脚本 bootstrap 三层 fallback + Oracle 强制（run2r-01 X1/S3 修正 + v3.4 D3a）
+
+**bootstrap 三层 fallback（X1：R1 五轮穿透根因）— 每个生成脚本必须内嵌**：
+1. env：`os.environ.get("TESTVDB_SCRIPTS_DIR")` / `os.environ.get("TESTVDB_TARGET")` / `os.environ.get("TESTVDB_DB_URL")`
+2. 向上遍历：env 缺失时从脚本自身路径向上定位含 `structured_contract.json` 的目录
+3. 契约读 target：读该契约 `target` 字段
+→ 三层全失败才 `VERDICT: SCRIPT_ERROR`；⛔ 禁止硬编码路径/端口/目标名后静默继续。
+
+**Oracle 配套生成（D3a）— 测试用例与 oracle 同步产出，禁止无预期判读**：
+1. 每个脚本 docstring 必须有 `Oracle:` 行（紧跟 `Attack:` 行）：一行预期行为声明，如 `Oracle: limit=0 → 4xx reject (constraint xxxx_001)`——预期须与所测约束的 assertion 对齐
+2. 判定必须"先声明预期、再比对实测"：优先用 runtime 判定 helpers（`expect_rejected` / `expect_records` / `judge_schema_attack`）；手写判定必须显式 expected vs actual 比对
+3. ⛔ 禁止模糊判读："2xx 即成功/即异常"的裸 status 检查、无预期 print 后人工判，均按判读粗糙打回（S3 两案实测教训）
+
+---
+
 ## 输入
 
 1. `structured_contract.json`：当前 DB 的契约文件

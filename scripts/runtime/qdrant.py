@@ -159,10 +159,14 @@ def drop_collection(name: str) -> None:
         pass
 
 
+# ponytail: global paths (no collection name) — 模块级供 _self_check 与 tests 共用
+# （run2r-01 R1' 修复后测试与实现豁免集漂移过一次，上提根除）
+_NAMELESS = {"list_collections", "update_aliases", "list_aliases",
+             "cluster_status", "get_cluster", "root", "healthz", "metrics"}
+
+
 def _self_check() -> None:
     """ponytail: 静态自检 PATHS 模板 + path_params 替换 + bad key 抛 KeyError。"""
-    # ponytail: global paths (no collection name)
-    _NAMELESS = {"list_collections", "update_aliases", "list_aliases", "cluster_status", "get_cluster", "root", "healthz", "metrics"}
     for k, v in PATHS.items():
         if k in _NAMELESS:
             assert "{name}" not in v, f"{k} should not have {{name}}"

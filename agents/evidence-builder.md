@@ -181,7 +181,7 @@ outcome（命中文件里可能就有你结论需要的校验代码）。零命�
     },
     "contract_grounding": {
       "constraint_id": "...",
-      "assertion_text_quoted": "<contract 原文>",
+      "assertion_text_quoted": "<contract 原文逐字引用 — 禁止拼接括号注记/改写/省略（J6：run2 两案 A=NEUTRAL 根因，注记写入 detail）>",
       "api_violates_assertion": true,
       "evidence_source": "doc"
     },

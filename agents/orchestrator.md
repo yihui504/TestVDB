@@ -452,7 +452,7 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 **必须使用 Agent 工具派生 docker-executor 子 agent**，禁止自己直接执行：
 
 ```
-Agent(subagent_type="testvdb:docker-executor", description="执行 {target} v{version} 攻击脚本", prompt="按照 agents/docker-executor.md 规范，在 Docker 沙箱中执行攻击脚本。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, session_id={session_id}。⛔ 立即执行 Step 1 命令，不要分析、不要检查、不要读取脚本内容。脚本位于 SESSION_DIR 下的 boundary_scripts/、state_scripts/、scripts/ 子目录和 script_*.py 文件中。所有脚本已通过语法验证，无需再检查。")
+Agent(subagent_type="testvdb:docker-executor", description="执行 {target} v{version} 攻击脚本", prompt="按照 agents/docker-executor.md 规范，在 Docker 沙箱中执行攻击脚本。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, session_id={session_id}。四件套环境变量（X1 修正：R1 五轮穿透根因，必须在 Step 1 前设置）：export TESTVDB_SCRIPTS_DIR=<插件 cache scripts 绝对路径> TESTVDB_TARGET={target} TESTVDB_DB_URL={db_url} TESTVDB_SESSION_ID={session_id}。⛔ 立即执行 Step 1 命令，不要分析、不要检查、不要读取脚本内容。脚本位于 SESSION_DIR 下的 boundary_scripts/、state_scripts/、scripts/ 子目录和 script_*.py 文件中。所有脚本已通过语法验证，无需再检查。")
 ```
 
 每个脚本一个独立沙箱执行，并发处理。
