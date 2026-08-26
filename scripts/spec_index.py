@@ -222,9 +222,14 @@ def _op_response_schema(op: dict):
     return sch
 
 
-def build_index(openapi_path: str, db: str = "", version: str = "") -> dict:
-    raw = open(openapi_path, "rb").read()
-    spec = json.loads(raw.decode("utf-8"))
+def build_index(openapi_path, db: str = "", version: str = "") -> dict:
+    """openapi_path 可为路径（str/Path）或已加载的 spec dict（enrich 复用）。"""
+    if isinstance(openapi_path, dict):
+        spec = openapi_path
+        raw = json.dumps(spec, sort_keys=True).encode("utf-8")
+    else:
+        raw = open(openapi_path, "rb").read()
+        spec = json.loads(raw.decode("utf-8"))
     schemas = spec.get("components", {}).get("schemas", {})
     endpoints = {}
     for path, ops in (spec.get("paths") or {}).items():

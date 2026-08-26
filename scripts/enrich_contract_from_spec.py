@@ -115,6 +115,49 @@ def spec_op_for(ep: dict, spec_paths: dict) -> dict | None:
     return None
 
 
+def enrich_spec_shapes(contract: dict, spec: dict) -> int:
+    """D3b v3.4 物化：response_shape / request_required_paths / description_conflict。
+
+    全部 optional 字段（旧契约消费方零影响）；与 _preverify_spec_shape 共用
+    spec_index（单一 ground truth）。description_conflict 只打标不静默改写——
+    agent 规范声明冲突时以 spec 派生字段为准（exists 案：契约转述 "200 {result:
+    true|false}" vs spec result=object）。
+    """
+    import spec_index as si
+    idx = si.build_index(spec, db="", version="")
+    op2key = {}
+    for spath, methods in (spec.get("paths") or {}).items():
+        for m, op in (methods or {}).items():
+            if isinstance(op, dict) and m.lower() in ("get", "put", "post", "delete", "patch"):
+                op2key[id(op)] = f"{m.upper()} {spath}"
+    n = 0
+    for ep in contract.get("api_endpoints", []):
+        op = spec_op_for(ep, spec.get("paths") or {})
+        key = op2key.get(id(op))
+        if not key:
+            continue
+        entry = idx.get("endpoints", {}).get(key) or {}
+        lat = (entry.get("responses", {}).get("200", {}) or {}).get("shape_lattice")
+        if lat:
+            ep["response_shape"] = lat
+            ep["description_conflict"] = _desc_conflicts_shape(ep.get("description", ""), lat)
+            n += 1
+        rp = (entry.get("request") or {}).get("required_paths")
+        if rp:
+            ep["request_required_paths"] = rp
+    return n
+
+
+def _desc_conflicts_shape(desc: str, lattice: dict) -> bool:
+    """契约 description 的字面形状转述与 spec lattice 矛盾时打标。"""
+    import re
+    if not desc or "result" not in lattice:
+        return False
+    declared = lattice.get("result")
+    m = re.search(r"\{\s*result\s*:\s*(true|false)", desc)
+    return bool(m) and declared in ("object", "array")
+
+
 def enrich(contract: dict, spec: dict, fill_missing_fields: bool = False) -> tuple[dict, int, int]:
     schemas = spec.get("components", {}).get("schemas", {})
     paths = spec.get("paths", {})
@@ -184,6 +227,8 @@ def main() -> int:
         return 1
 
     contract, n_eps, n_fields = enrich(contract, spec, args.fill_missing_fields)
+    n_shapes = enrich_spec_shapes(contract, spec)
+    print(f"[enrich] spec-shape materialized: {n_shapes} endpoints (response_shape/request_required_paths/description_conflict)")
     rehash(contract)
     contract_path.write_text(json.dumps(contract, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[enrich] {n_eps} endpoints patched, {n_fields} fields backfilled "
