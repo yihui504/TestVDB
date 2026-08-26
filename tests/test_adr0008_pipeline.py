@@ -225,13 +225,40 @@ BAD_SCRIPTS = {
         'def run():\n'
         '    safe_request("GET", "/x")\n'
     ),
-    # 干净脚本 — 不应报错
+    # 干净脚本 — 不应报错（D3b 后需带 Oracle 行）
     "ok_001.py": (
+        '"""\nAttack: smoke x fixture\nOracle: DELETE /c/x returns 2xx or 4xx without 5xx (constraint fixture_001)\n"""\n'
         'import requests\n'
         'def safe_request(*a, **k):\n    return requests.get(*a, **k)\n'
         'def run():\n'
         '    try:\n'
         '        safe_request("DELETE", "/c/x")\n'
+        '    except Exception:\n'
+        '        pass\n'
+        '    print("VERDICT: NO_DEFECT")\n'
+    ),
+    # D3b：transport 假存活（012 形态——业务端点探针 + alive 结论）
+    "tprobe_001.py": (
+        '"""\nAttack: boundary x fixture\nOracle: probe returns 4xx reject (constraint fixture_002)\n"""\n'
+        'import requests\n'
+        'def safe_request(*a, **k):\n    return requests.get(*a, **k)\n'
+        'def run():\n'
+        '    try:\n'
+        '        s, b, r = safe_request("PUT", "/collections/big?timeout=5", timeout=60)\n'
+        '    except requests.exceptions.ReadTimeout:\n'
+        '        h, hb, hr = safe_request("GET", "/collections", timeout=8)\n'
+        '        print("NOTE: transport failure but server alive - long-running create")\n'
+        '        print("VERDICT: NO_DEFECT")\n'
+        '        return\n'
+        '    print("VERDICT: NO_DEFECT")\n'
+    ),
+    # D3b：无 Oracle 行
+    "nooracle_001.py": (
+        'import requests\n'
+        'def safe_request(*a, **k):\n    return requests.get(*a, **k)\n'
+        'def run():\n'
+        '    try:\n'
+        '        safe_request("GET", "/c")\n'
         '    except Exception:\n'
         '        pass\n'
         '    print("VERDICT: NO_DEFECT")\n'
@@ -263,7 +290,29 @@ class TestClassifyScriptErrors:
         assert "safe_request_unused" in by_id.get("unused_001", set())
         assert "cleanup_unwrapped" in by_id.get("clean_001", set())
         assert "verdict_missing" in by_id.get("noverd_001", set())
+        # D3b 类（v3.4）：transport 假存活（012 形态）+ 无 oracle 行
+        assert "transport_probe_wrong" in by_id.get("tprobe_001", set())
+        assert "oracle_missing" in by_id.get("nooracle_001", set())
         assert "ok_001" not in by_id
+
+    def test_legacy_mode_replay_skips_d3b(self, tmp_path):
+        """legacy 回放模式（TESTVDB_PREVERIFY=NONE）跳过 D3b 类——R1-R3 语料回归护栏。"""
+        import os
+        import subprocess as sp
+        sd = self._mk(tmp_path)
+        env = {**os.environ, "TESTVDB_PREVERIFY": "NONE"}
+        r = sp.run([sys.executable, str(SCRIPTS_DIR / "_classify_script_errors.py"), str(sd)],
+                   capture_output=True, text=True, encoding="utf-8", timeout=60, env=env)
+        data = json.loads((sd / "script_errors.json").read_text(encoding="utf-8"))
+        by_id = {e["script_id"]: set(e["error_classes"]) for e in data["errors"]}
+        # legacy：D3b 类零出现（tprobe/nooracle 不报）
+        assert "tprobe_001" not in by_id
+        assert "nooracle_001" not in by_id
+        for e in data["errors"]:
+            assert not ({"oracle_missing", "oracle_degenerate", "transport_probe_wrong"}
+                        & set(e["error_classes"]))
+        for e in data["errors"]:
+            assert "severities" not in e  # legacy 输出与旧版逐字节一致（无新字段）
 
     def test_clean_session_exit_zero(self, tmp_path):
         import subprocess

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import datetime
+import os
 import json
 import py_compile
 import re
@@ -53,6 +54,27 @@ TEARDOWN_NAMES = {
 # 内、裸语句都算；AST 检测 print 字符串太脆，KISS 用文本扫描）。
 VERDICT_RE = re.compile(r"VERDICT:\s+(DEFECT_FOUND|NO_DEFECT|SCRIPT_ERROR)\b")
 
+# ---- D3b 预验证（v3.4，2026-08-26；R4+ 生效，legacy 模式跳过）----
+
+PREVERIFY_VERSION = "D3b-R4.0"
+
+# legacy 回放模式：跳过新类（R1-R3 语料与旧版逐字节一致的回归护栏）
+LEGACY_MODE = os.environ.get("TESTVDB_PREVERIFY", "") == "NONE"
+
+# Oracle 行（D3a 的打回机械化——R1/R2/R3 三连漏靠主进程手动打回，本类进 retry 闭环）
+ORACLE_LINE_RE = re.compile(r"^\s*Oracle:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+# oracle 内容锚词：跨 DB 通用可证伪词汇（红线：不含 DB 特定答案）
+ORACLE_ANCHOR_RE = re.compile(r"(?<!\d)\d{3}(?!\d)|\b(timeout|reject|error|crash|throw|panic|denied|conflict|missing|accepted|equal|match|absent|present|empty|exist)\w*\b", re.IGNORECASE)
+
+# transport-failure 分支（R2 boundary_012 靶标：业务端点濒死仍响应 → 假存活 → 假阴性）
+TRANSPORT_EXC_NAMES = {"ReadTimeout", "ConnectTimeout", "Timeout", "ConnectionError",
+                       "RequestException"}
+# 存活结论字样（分支内字符串常量文本搜）
+ALIVE_CONCLUSION_RE = re.compile(r"(server[ _-]?alive|still[ _-]?alive|liveness|NO_DEFECT)",
+                                 re.IGNORECASE)
+# 轻量健康端点（spec_index.HEALTH_DEFAULTS 同源；独立常量避免 import 耦合）
+HEALTH_PATHS = {"/", "/health", "/healthz", "/livez", "/readyz", "/ready", "/ping", "/status"}
+
 # feedback_hints：通用规则（非 DB 特定答案），按 error_class
 FEEDBACK_HINTS: dict[str, str] = {
     "syntax_error": (
@@ -75,6 +97,21 @@ FEEDBACK_HINTS: dict[str, str] = {
     "verdict_missing": (
         "Script has no line matching `^VERDICT: <DEFECT_FOUND|NO_DEFECT|SCRIPT_ERROR>$`. "
         "Add exactly one VERDICT line at script end (in `finally:` if wrapped in try/except)."
+    ),
+    "oracle_missing": (
+        "Script docstring must declare an explicit 'Oracle:' line stating the expected "
+        "observable behavior (expected status codes, response shape, or timing) before any "
+        "verdict is derived. Regenerate with the oracle line; do not alter the test target itself."
+    ),
+    "oracle_degenerate": (
+        "The 'Oracle:' line exists but is too vague to falsify — state concrete expected "
+        "observables (status codes, response shape, counts, timing) aligned with the tested constraint."
+    ),
+    "transport_probe_wrong": (
+        "A transport-failure branch (timeout / connection error / negative status) derives "
+        "'server alive' or NO_DEFECT from a business endpoint response. Re-verify liveness via a "
+        "lightweight health endpoint (the target's documented health/ready path), and treat business-"
+        "endpoint responsiveness as inconclusive about server liveness."
     ),
 }
 
@@ -276,6 +313,114 @@ def _safe_request_defined(tree: ast.AST) -> bool:
 
 # ---------------- 单脚本分类 ----------------
 
+# ---------------- D3b 检查实现 ----------------
+
+def _check_oracle_missing(tree):
+    """REJECT=无 Oracle 行；WARN=退化（过短/无锚词）；None=通过。"""
+    doc = ast.get_docstring(tree) or ""
+    m = ORACLE_LINE_RE.search(doc)
+    if not m:
+        return "REJECT"
+    content = m.group(1).strip()
+    if len(content) < 15 or not ORACLE_ANCHOR_RE.search(content):
+        return "WARN"
+    return None
+
+
+def _iter_str_constants(node):
+    """节点子树内全部字符串常量拼接（分支文本面搜存活结论用）。"""
+    parts = []
+    for n in ast.walk(node):
+        if isinstance(n, ast.Constant) and isinstance(n.value, str):
+            parts.append(n.value)
+        elif isinstance(n, ast.JoinedStr):
+            for v in n.values:
+                if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                    parts.append(v.value)
+    return chr(10).join(parts)
+
+
+def _extract_probes(branch):
+    """分支内 HTTP 调用提取 -> [(method, path)]（safe_request / requests.x 两形态；
+    f-string path 取常量段拼接——变量段参与端点匹配）。"""
+    probes = []
+    for n in ast.walk(branch):
+        if not isinstance(n, ast.Call):
+            continue
+        fn = n.func
+        name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else "")
+        if name == "safe_request":
+            if len(n.args) >= 2 and isinstance(n.args[0], ast.Constant) and isinstance(n.args[1], ast.Constant):
+                probes.append((str(n.args[0].value), str(n.args[1].value)))
+        elif isinstance(fn, ast.Attribute) and fn.attr in ("get", "post", "put", "delete", "patch", "head")                 and isinstance(fn.value, ast.Name) and fn.value.id == "requests" and n.args:
+            a = n.args[0]
+            if isinstance(a, ast.Constant):
+                probes.append((fn.attr.upper(), str(a.value)))
+            elif isinstance(a, ast.JoinedStr):
+                txt = "".join(v.value for v in a.values if isinstance(v, ast.Constant))
+                probes.append((fn.attr.upper(), txt))
+    return probes
+
+
+def _is_health_path(path):
+    try:
+        from spec_index import normalize_path
+        p = normalize_path(path)
+    except Exception:
+        p = path if path.startswith("/") else "/" + path
+    first = "/" + p.strip("/").split("/")[0] if p.strip("/") else "/"
+    return p in HEALTH_PATHS or first in HEALTH_PATHS
+
+
+def _check_transport_probe(tree):
+    """transport-failure 分支三分法（R2 boundary_012 靶标）。
+
+    REJECT-1: 分支含存活结论（alive/NO_DEFECT 字样）但无任何 HTTP 探针
+    REJECT-2: 分支含存活结论，探针全为业务端点（非健康端点——012 的 GET /collections）
+    其余（健康端点复核 / 无存活结论的诊断分支）通过。
+    """
+    findings = []
+    branches = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ExceptHandler):
+            enames = []
+            if n.type is not None:
+                t = n.type
+                el = t.elts if isinstance(t, ast.Tuple) else [t]
+                for e in el:
+                    if isinstance(e, ast.Name):
+                        enames.append(e.id)
+                    elif isinstance(e, ast.Attribute):
+                        enames.append(e.attr)
+            if any(x in TRANSPORT_EXC_NAMES for x in enames):
+                branches.append(n)
+        elif isinstance(n, ast.If):
+            t = n.test
+            if isinstance(t, ast.Compare) and isinstance(t.left, ast.Name)                     and t.left.id in ("status", "s", "st", "code"):
+                for op, comp in zip(t.ops, t.comparators):
+                    neg = (isinstance(op, ast.Lt) and isinstance(comp, ast.Constant)
+                           and isinstance(comp.value, (int, float)) and comp.value <= 0) or (
+                          isinstance(op, ast.Eq) and isinstance(comp, ast.Constant)
+                           and comp.value in (-1, 0))
+                    if neg:
+                        branches.append(n)
+                        break
+    for br in branches:
+        text = _iter_str_constants(br)
+        if not ALIVE_CONCLUSION_RE.search(text):
+            continue
+        probes = _extract_probes(br)
+        health = [pp for pp in probes if _is_health_path(pp[1])]
+        if not probes:
+            findings.append({"class": "transport_probe_wrong", "severity": "REJECT",
+                             "detail": {"reason": "no_probe_before_alive_verdict"}})
+        elif not health:
+            findings.append({"class": "transport_probe_wrong", "severity": "REJECT",
+                             "detail": {"reason": "business_endpoint_probe",
+                                        "probes": [m + " " + pth for m, pth in probes]}})
+    return findings
+
+
 def classify_script(script_path: Path) -> dict | None:
     """返回 {script_id, script_path, error_classes, feedback_hints} 或 None（无法读取）。
 
@@ -288,6 +433,7 @@ def classify_script(script_path: Path) -> dict | None:
 
     sid = script_path.stem
     error_classes: list[str] = []
+    severities: dict[str, str] = {}
 
     # 1. syntax check (py_compile)
     try:
@@ -325,12 +471,24 @@ def classify_script(script_path: Path) -> dict | None:
     if not VERDICT_RE.search(src):
         error_classes.append("verdict_missing")
 
+    # 6/7. D3b 预验证（legacy 模式跳过——R1-R3 语料逐字节一致回归护栏）
+    if not LEGACY_MODE:
+        osev = _check_oracle_missing(tree)
+        if osev:
+            oc = "oracle_missing" if osev == "REJECT" else "oracle_degenerate"
+            error_classes.append(oc)
+            severities[oc] = osev
+        for f in _check_transport_probe(tree):
+            error_classes.append(f["class"])
+            severities[f["class"]] = f["severity"]
+
     if not error_classes:
         return None
-    return _build_entry(sid, script_path, error_classes)
+    return _build_entry(sid, script_path, error_classes, severities)
 
 
-def _build_entry(sid: str, path: Path, classes: list[str]) -> dict:
+def _build_entry(sid: str, path: Path, classes: list[str],
+                 severities: dict[str, str] | None = None) -> dict:
     # 去重保序
     seen: set[str] = set()
     unique: list[str] = []
@@ -338,12 +496,16 @@ def _build_entry(sid: str, path: Path, classes: list[str]) -> dict:
         if c not in seen:
             seen.add(c)
             unique.append(c)
-    return {
+    entry = {
         "script_id": sid,
         "script_path": str(path),
         "error_classes": unique,
         "feedback_hints": {c: FEEDBACK_HINTS[c] for c in unique if c in FEEDBACK_HINTS},
     }
+    if severities:
+        entry["severities"] = {c: severities.get(c, "REJECT") for c in unique}
+        entry["preverify_version"] = PREVERIFY_VERSION
+    return entry
 
 
 # ---------------- 主入口 ----------------
