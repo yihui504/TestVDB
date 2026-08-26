@@ -627,6 +627,12 @@ python scripts/verify_live_l1.py "results/{target}/{version}/{timestamp}" --targ
 ```
 REFUTED 候选从 candidates.jsonl 移除（记入 verify_live_l1.json，供实验统计）。
 
+**Step 2.5 — 证据链引文预检（auditor 前置，R2 教训机制化 2026-08-26）**：
+```bash
+python scripts/verify_chain_quotes.py "results/{target}/{version}/{timestamp}"
+```
+builder 全部 `.done` 后、auditor 派发前执行。mismatch 的链按 R2 工单模式打回对应 builder 重引原文子串（1 分钟修复 << NME 补证轮 3 builder+1 auditor 成本；R2 实测 3 条括注引文落 NME）。
+
 **Step 3 — evidence-builder 按候选并发派发**（1 builder/候选，任务重减压提效）：
 ```
 对 candidates.jsonl 每行，并发派发（受派发槽位约束，超出排队）：
