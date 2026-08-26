@@ -38,6 +38,10 @@ _GROUPS = (
     ("type_constraints", "type"),
     ("range_constraints", "range"),
     ("state_constraints", "state"),
+    # 规则 2.9 新约束类别（v3.4 C 节）：system 级不绑 builtin（同 state——
+    # "清晰才绑"），但纳入 level lint 与绑定汇总统计。
+    ("resource_bound_constraints", "resource_bound"),
+    ("doc_consistency_constraints", "doc_consistency"),
 )
 
 # 内置策略基线（v3.4 D2）：attack agents 规范内建的确定性映射——仅收录
@@ -56,6 +60,8 @@ BUILTIN_BASELINE = {
          "ref": "attack-boundary.md 策略 1: 边界值攻击（针对 range_constraints）"},
     ],
     "state": [],
+    "resource_bound": [],
+    "doc_consistency": [],
 }
 
 

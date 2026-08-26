@@ -387,6 +387,31 @@ run2r-01 J1 五项契约失真（枚举大小写/响应形状/absent 子句/meta
 3. **版本核对**：提取前核对规格来源 tag 与目标 version 一致（R9 先例：.sourcedeps 中 openapi
    存在高于目标的漂移）；不一致 → 停止生成并报告，禁止静默用错版规格。
 
+### 规则 2.9: 新约束类别探索（v3.4 C 节遗留子项 — resource_bound + doc_consistency，三轮实证驱动）
+
+导师反馈"约束可能不止类型/范围/行为/状态四型"。v3.4 重跑 R2/R3 两类实证超出四型的约束形态，
+按以下判据提取，归入现有两级（均标 level；type 字段分别记 `resource_bound` / `doc_consistency`）：
+
+1. **resource_bound（资源边界，system 级）**：数值参数在 openapi 规格中**有 min 无 max** 时，
+   生成一条 inferred 级约束（description 须 "inferred:" 前缀，规则 3）：断言
+   "服务端须在实现资源边界内优雅处理该参数的任意规格合法值（完成、拒绝或文档化 service error），
+   不得崩溃/panic/服务死亡"。constraint_id 命名 `qdrant_resource_<param>_001` 形态。
+   实证：R2 012 案——shard_number（uint32 min=1 无 max）=10000 合法值打崩服务（panic
+   Cannot allocate memory），契约无上限断言导致 DoS 无法 strict 定罪；本类约束给策略 6
+   （资源极限）探针提供可判定锚。
+2. **doc_consistency（文档语义一致性，system 级）**：提取时发现同一参数/值域/默认值在
+   **openapi 规格与 prose/示例间冲突**（如规格注释 default A vs 文档正文 default B），
+   生成一条约束记录两侧原文（assertion 写 "doc-internal conflict: spec says X, prose says Y
+   — behavior follows implementation, either side may be violated"），evidence_tier=explicit
+   （两侧原文均在文档中）。constraint_id 命名 `qdrant_doccons_<param>_001` 形态。
+   实证：R3 默认值分歧族——indexing_threshold readback 10000 vs 文档 20000（实现三处一致
+   10000，20000 溯源自源码内陈旧注释）；此类案在无 doc_consistency 锚时只能借 range 约束
+   曲线定罪。
+3. 两类均不回溯改既有契约（15 版批量起生效）；当前重跑块保持三一致。
+4. schema 分组：新类别入 `constraints` 下新组键 `resource_bound_constraints` /
+   `doc_consistency_constraints`（组结构与 type/range/state 三组同构；chunk_contract 与
+   bind_strategies 按组键遍历自动兼容）。
+
 ### 规则 3: 证据分级（ADR-0008 简化版 — 删 confidence 自评，两档 evidence_tier）
 
 每条约束/断言标记 `evidence_tier` 字段（`explicit` / `inferred` 两档）。**不再使用 LLM confidence 自评**（导师 2026-08-17 反馈：自评分数不可靠且无消费方，机械的文档可追溯性分级已足够）。
