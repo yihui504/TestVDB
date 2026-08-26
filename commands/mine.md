@@ -574,7 +574,9 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 
 **更新 pipeline_state**: `phase` = `"DEBATE_S1"`, `phases_completed` 追加 `"ATTACK_GEN"`, `phase_data.ATTACK_GEN` = `{scripts_generated: N, agents_completed: [...]}`
 
-### 8c. DEBATE_S1 — 辩论 Stage 1
+### 8c. DEBATE_S1 — 辩论 Stage 1（静态审查 + D3b 预验证）
+
+> **gate 版本**: v3（R1-R3，7 检查，`TESTVDB_PREVERIFY=NONE` 可回放）/ **v4（R4+，+D3b 预验证 4 类：oracle_missing / oracle_degenerate / transport_probe_wrong / oracle_shape_conflict / request_required_missing，preverify_version=D3b-R4.0）**
 
 主进程自行执行自动化审查（编排协调工作）：
 
@@ -585,8 +587,20 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 5. **API 调用格式 AST 验证**：`python scripts/validate_api_format.py "results/{target}/{version}/{timestamp}"`
 6. **Target 中立验证**：`python scripts/validate_target_neutrality.py "results/{target}/{version}/{timestamp}"`
    含与当前 target 不符的 DB 签名（如 target=weaviate 但脚本命中 :6333）的脚本 → 打回 Attack Agent 修改（同 8d.5 打回机制）。
-7. 审查结果写入 `debate_logs/stage1.json`
-8. 脚本路径标准化
+7. **D3b 预验证 A/B 类**（v3.4，2026-08-26；oracle 行存在性 + transport 存活探针三分法）：
+   ```bash
+   python scripts/_classify_script_errors.py "results/{target}/{version}/{timestamp}"
+   ```
+8. **D3b 预验证 C/D 类**（spec 对照：断言×响应形状相容矩阵 + 请求体×嵌套必填树；含 meta.oracle 单写者派生与 WARN 边车）：
+   ```bash
+   python scripts/_preverify_spec_shape.py "results/{target}/{version}/{timestamp}" --db {target} --version {version}
+   ```
+9. **severity 感知的 retry 派发**（WARN 不消耗预算；REJECT 按 8d.5 工单模式打回）：
+   ```bash
+   python scripts/_apply_script_retry.py "results/{target}/{version}/{timestamp}"
+   ```
+10. 审查结果写入 `debate_logs/stage1.json`
+11. 脚本路径标准化
 
 **更新 pipeline_state**: `phase` = `"EXECUTION"`, `phases_completed` 追加 `"DEBATE_S1"`, `phase_data.DEBATE_S1` = `{approved_count: N, rejected_count: M}`
 

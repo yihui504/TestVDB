@@ -95,6 +95,9 @@ def main() -> int:
                 rec["param"] = meta.get("param")
                 rec["strategy"] = meta.get("strategy", "")
                 rec["expected_defect_type"] = meta.get("expected_defect_type", "")
+                if isinstance(meta.get("oracle"), dict):  # D3b 单写者派生（优先于 docstring）
+                    rec["oracle"] = meta["oracle"].get("statement", rec["oracle"])
+                    rec["has_oracle"] = bool(rec["oracle"])
             except (json.JSONDecodeError, OSError):
                 pass
         ef = os.path.join(sd, f"exit_code_{sid}.txt")

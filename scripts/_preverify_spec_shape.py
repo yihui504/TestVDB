@@ -353,6 +353,30 @@ def _diff_required(body: dict, node: dict, endpoint: str, warn_only: bool,
 
 # ---------------------------------------------------------------- 主流程
 
+def _materialize_meta_oracle(f: Path, tree):
+    """meta.json 增补第 6 键 oracle（主进程单写者派生，agent 零负担——R2 挂账项落地）。
+
+    docstring Oracle 行原文 + source 标记；oracle_stats.py 优先读 meta（历史回退 docstring）。
+    """
+    import re as _re
+    try:
+        doc = ast.get_docstring(tree) or ""
+        m = _re.search(r"^\s*Oracle:\s*(.+)$", doc, _re.IGNORECASE | _re.MULTILINE)
+        if not m:
+            return
+        mp = f.parent / (f.stem + ".meta.json")
+        if not mp.is_file():
+            return
+        meta = json.loads(mp.read_text(encoding="utf-8"))
+        if "oracle" in meta:
+            return  # 已有（幂等）
+        meta["oracle"] = {"statement": m.group(1).strip(),
+                          "source": "docstring", "preverify_version": PREVERIFY_VERSION}
+        mp.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        pass
+
+
 def scan_session(sd: Path, db: str, version: str, spec_path: str | None = None):
     if LEGACY_MODE:
         print("[preverify] legacy mode (TESTVDB_PREVERIFY=NONE) — skip")
@@ -381,6 +405,7 @@ def scan_session(sd: Path, db: str, version: str, spec_path: str | None = None):
             tree = ast.parse(f.read_text(encoding="utf-8", errors="replace"), filename=str(f))
         except SyntaxError:
             continue  # syntax 类归 _classify 管
+        _materialize_meta_oracle(f, tree)
         shape_findings = check_shape_conflicts(tree, index)
         req_findings = check_request_required(tree, index, warn_only=warn_only)
         for x in shape_findings + req_findings:

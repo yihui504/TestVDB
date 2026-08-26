@@ -87,6 +87,13 @@ fp_evidence_source 按证据来源标注。这是双盲设计所防的原型案�
 （计数由主进程维护在 rework_state 文件）；第 3 轮后仍 mismatch → 保守 NOT_DEFECT。
 你在工单中如实写判定，轮次控制由主进程执行。
 
+### preverify_warnings 边车（D3b v3.4）
+
+脚本旁的 `{script_id}.preverify_warnings.json`（oracle_shape_conflict VACUOUS /
+request_required_missing anyOf 歧义）是投跑前预验证的 WARN 级标记：纳入视角权衡的参考
+（verdict 可靠性可能降低），但**不视为 finding 本身、不改变机械定案规则**——你的四态
+机械判定权不受预验证影响。
+
 ## 三视角聚合（继承 dev-reviewer 第 6 步，固定规则不可自由解释）
 
 **视角 A — 契约（机械判定，2026-08-18 E1 定稿——LLM 不得自行改判）**：

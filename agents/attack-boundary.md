@@ -360,6 +360,18 @@ elif status in (400, 422):
 
 ---
 
+## Spec-grounded oracle discipline（D3b v3.4，2026-08-26）
+
+预验证（8c gate v4）会机械核对你的脚本；以下纪律让脚本一次通过：
+1. **定稿前对照契约物化字段**：`api_endpoints[].response_shape`（成功响应路径→类型格）与
+   `request_required_paths`（含嵌套 anyOf 分支必填，如 points[].vector）。判定代码访问的路径
+   与断言类型必须与 response_shape 相容（`b.get("result") is True` 在 result=object 上即冲突）。
+2. **description 与 spec 派生字段冲突时以 spec 派生字段为准**（`description_conflict: true`
+   标记即此情形——文档转述可能失真，exists 响应形状案实证）。
+3. **transport 分支存活复核**：timeout/连接错误处理后必须调用轻量健康端点
+   （/healthz 类）确认服务状态；业务端点在服务濒死时仍可能响应（假存活——shard 资源探针案实证）。
+4. Oracle 行写具体可证伪的预期（含状态码/形状/数值），退化措辞会被 WARN 边车标记供 auditor 权衡。
+
 ## Retry Feedback Handling（v2.5 新增 — Stage 1 错误分类反馈环）
 
 Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `${script_id}.retry_feedback.json` 标记你的脚本有静态错误，需重生成。**memory 教训**：attack 脚本 ~25%+ 静态错误率（meilisearch 57% / chroma 12.5%），Stage 1 不再直接废弃，而是给你一次修正机会（每脚本最多 2 次 retry）。
@@ -375,6 +387,11 @@ Stage 1 确定性分类器（`scripts/_classify_script_errors.py`）可能产 `$
    | `safe_request_unused` | 定义但不调用 | 把所有 HTTP 调用走 safe_request，或删死定义 |
    | `cleanup_unwrapped` | delete/drop/clear 调用未在 try/except 内 | 包 `try: ... except Exception: pass` |
    | `verdict_missing` | 无 `VERDICT: <X>` 行 | 末尾加 `print("VERDICT: DEFECT_FOUND/NO_DEFECT/SCRIPT_ERROR")` |
+| oracle_missing | REJECT | docstring 补 `Oracle:` 行（预期行为声明：状态码/响应形状/时序），勿改测试目标本身 |
+| oracle_degenerate | WARN | Oracle 行过简不可证伪——写明具体预期可观测物（状态码/形状/计数/时序） |
+| transport_probe_wrong | REJECT | transport 失败分支（timeout/连接错误/负 status）的存活复核必须用轻量健康端点（目标文档化 health/ready 路径），禁止用业务端点响应推导 "server alive"/NO_DEFECT |
+| oracle_shape_conflict | REJECT | 成功路径断言与端点 spec 声明响应形状矛盾——查 api_endpoints[].response_shape 对齐访问路径与断言类型后重推导判定 |
+| request_required_missing | REJECT/WARN | 请求体缺所选分支的必填字段——查 api_endpoints[].request_required_paths 后再修预期状态码 |
 3. **保留原脚本没问题的部分**——只改被标错的，不要从头重写（保留测试逻辑、参数、断言意图）
 4. **覆盖原文件**（script_id 不变），不要新建文件
 5. 修正后 Stage 1 会重新分类，如全清则进 Step 5 交叉审查
