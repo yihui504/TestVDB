@@ -50,6 +50,9 @@ def judge_grounding(chain: dict, contract_text: str) -> dict:
     """
     cg = (chain.get("steps") or {}).get("contract_grounding") or {}
     cid = str(cg.get("constraint_id", "") or "").strip()
+    # unit_ref 前缀归一（R6 实证：链内 cid 带 "assertions::" 前缀导致 constraint_absent
+    # 误判 GREY_ZONE——candidates.jsonl 的 constraint_id 保留前缀形态，此处剥到底）
+    cid = cid.split("::")[-1].strip() if "::" in cid else cid
     if not cid:
         return {"verdict_A": "NEUTRAL", "reason": "no_reference",
                 "implied_verdict": "GREY_ZONE", "constraint_id": None}
