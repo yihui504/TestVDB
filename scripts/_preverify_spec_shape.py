@@ -161,10 +161,10 @@ def _extract_assertions(expr, var_names: set, prefix=""):
         kind = "key_exists"  # in / is not None / 真值等——信息不足按存在性
         if len(expr.ops) == 1:
             op, comp = expr.ops[0], expr.comparators[0]
-            if isinstance(op, ast.Is) and isinstance(comp, ast.Constant) \
+            if isinstance(op, (ast.Is, ast.IsNot)) and isinstance(comp, ast.Constant) \
                     and isinstance(comp.value, bool):
                 kind = "identity_bool"
-            elif isinstance(op, ast.Eq) and isinstance(comp, ast.Constant) \
+            elif isinstance(op, (ast.Eq, ast.NotEq)) and isinstance(comp, ast.Constant) \
                     and isinstance(comp.value, bool):
                 kind = "eq_bool"
             elif isinstance(op, (ast.In, ast.NotEq)):
@@ -232,7 +232,8 @@ def check_shape_conflicts(tree, index) -> list[dict]:
         # 调用点后 HOP_LIMIT 行内的布尔上下文
         for n in ast.walk(tree):
             expr = n.test if isinstance(n, (ast.If, ast.While, ast.Assert)) else (
-                n.value if isinstance(n, ast.Assign) else None)
+                n.value if isinstance(n, ast.Assign) and isinstance(
+                    n.value, (ast.Compare, ast.BoolOp, ast.UnaryOp)) else None)
             if expr is None:
                 continue
             if not (0 <= n.lineno - call.lineno <= HOP_LIMIT):

@@ -187,6 +187,23 @@ def _collect_unwrapped_teardowns(tree: ast.AST) -> list[tuple[int, str]]:
         label = _is_teardown_call(node)
         if label is None:
             continue
+        # D3b gate v4 首战教训（2026-08-26，R4 collections+delete 块 19/19 误报）：
+        # safe_request("DELETE",...) 是攻击主请求而非 teardown 的判据——响应被
+        # 赋值消费（status, body, raw = safe_request(...)）即被测操作本身，放行。
+        fn_name = node.func.id if isinstance(node.func, ast.Name) else (
+            node.func.attr if isinstance(node.func, ast.Attribute) else None)
+        if fn_name == "safe_request":
+            anc = parents.get(id(node))
+            assigned = False
+            while anc is not None:
+                if isinstance(anc, ast.Assign):
+                    assigned = True
+                    break
+                if isinstance(anc, ast.stmt):
+                    break
+                anc = parents.get(id(anc))
+            if assigned:
+                continue
         # 冒烟实证（chroma 2026-08-17）：setup 预清理（建 collection 前删同名残留的
         # safe_request("DELETE", ...)）与 teardown 清理语义不同——前者失败无害（本来
         # 就可能不存在），不需要 try 保护。区分法：同一行/紧邻下一语句是创建类调用
@@ -569,7 +586,10 @@ def main() -> int:
         "total_scripts": total_scripts,
         "total_errors": len(all_errors),
         "errors": all_errors,
-        "verdict": "FAIL" if all_errors else "PASS",
+        "verdict": ("FAIL" if any(
+            (e.get("severities") or {}).get(c, "REJECT") == "REJECT"
+            for e in all_errors for c in e.get("error_classes", []))
+        else "WARN_ONLY" if all_errors else "PASS"),
     }
     out_path = out_dir / "script_errors.json"
     out_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
