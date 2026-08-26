@@ -78,6 +78,14 @@ def main() -> int:
         spath = Path(spath_str)
         classes = e.get("error_classes", [])
         hints = e.get("feedback_hints", {})
+        # D3b severity（v3.4）：WARN 类不消耗 retry 预算、不进 regen——
+        # 边车 preverify_warnings.json 由 _preverify_spec_shape 单独写，随脚本进执行队列
+        sevs = e.get("severities") or {}
+        if sevs:
+            reject_classes = [c for c in classes if sevs.get(c, "REJECT") == "REJECT"]
+            if not reject_classes:
+                continue  # 全 WARN：跳过（不计数不打回）
+            classes = reject_classes
 
         count = int(retry_map.get(sid, 0))
         if count < MAX_SCRIPT_RETRY:
