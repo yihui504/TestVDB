@@ -61,13 +61,21 @@ _COMPAT = {
 
 
 def _lattice_lookup(lattice: dict, path: str) -> str | None:
-    """逐级回退：'result.exists' → 'result.exists' / 'result' / None。"""
+    """逐级回退：'result.exists' → 'result.exists' / 'result' / None。
+
+    无点路径（如 'metadata'）不进回退循环——rsplit 对无点串返回原串会死循环
+    （alias 展开首次触发该路径形态时实测卡死，2026-08-26 修）。
+    """
     if path in lattice:
         return lattice[path]
+    if "." not in path:
+        return None
     parent = path.rsplit(".", 1)[0].replace("[]", "")
     while parent:
         if parent in lattice:
             return lattice[parent]
+        if "." not in parent:
+            break
         parent = parent.rsplit(".", 1)[0].replace("[]", "")
     return None
 
@@ -213,10 +221,37 @@ def _chain_path(node, var_names: set, prefix=""):
     return None
 
 
+def _collect_get_aliases(tree, bindings) -> dict:
+    # 检测边界（R7 实测）：三跳函数封装（body→helper()→result→.get）不追——
+    # 该形态（sem02/09）由 builder/auditor 事后层淘汰（R7 四源反证实证）。
+    """两跳别名（R7 sem02/09 形态）：`meta = resp.get("k")` 纯取值 Assign →
+    {meta_name: (call_id, "k")}——后续 `if meta is None` 可展开回源端点。"""
+    aliases: dict[str, tuple[int, str]] = {}
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Assign) or len(n.targets) != 1:
+            continue
+        t = n.targets[0]
+        v = n.value
+        if not (isinstance(t, ast.Name) and isinstance(v, ast.Call)
+                and isinstance(v.func, ast.Attribute) and v.func.attr == "get"
+                and v.args and isinstance(v.args[0], ast.Constant)
+                and isinstance(v.args[0].value, str)
+                and isinstance(v.func.value, ast.Name)
+                and v.func.value.id not in ("os", "sys")):
+            continue
+        src = v.func.value.id
+        # 反查 src 绑定的 call（可能多个 call 同名——取全部中任一，位置最近者）
+        for cid, names in bindings.items():
+            if src in names:
+                aliases.setdefault(t.id, (cid, str(v.args[0].value)))
+    return aliases
+
+
 def check_shape_conflicts(tree, index) -> list[dict]:
     """C 类主检查：成功路径断言 × spec lattice。"""
     findings = []
     bindings = _collect_response_bindings(tree)
+    aliases = _collect_get_aliases(tree, bindings)
     calls = [c for c in _iter_http_calls(tree)]
     for method, path, call in calls:
         key = si.match_endpoint(method, path, index)
@@ -238,9 +273,35 @@ def check_shape_conflicts(tree, index) -> list[dict]:
                 continue
             if not (0 <= n.lineno - call.lineno <= HOP_LIMIT):
                 continue
-            for path_, kind in _extract_assertions(expr, var_names):
+            assertions = _extract_assertions(expr, var_names)
+            # 别名展开：if meta is None（meta = resp.get("k")）→ (k, identity_bool)
+            if isinstance(expr, ast.Compare) and isinstance(expr.left, ast.Name)                     and expr.left.id in aliases and aliases[expr.left.id][0] == id(call):
+                apath = aliases[expr.left.id][1]
+                akind = None
+                if len(expr.ops) == 1 and isinstance(expr.comparators[0], ast.Constant):
+                    cv = expr.comparators[0].value
+                    if isinstance(expr.ops[0], (ast.Is, ast.IsNot)) and cv is None:
+                        akind = "key_exists"
+                    elif isinstance(expr.ops[0], (ast.Is, ast.IsNot, ast.Eq, ast.NotEq))                             and isinstance(cv, bool):
+                        akind = "identity_bool"
+                if akind:
+                    assertions.append((apath, akind))
+            for path_, kind in assertions:
                 declared = _lattice_lookup(lattice, path_)
-                if declared is None or declared in ("any", "recursive", "scalar"):
+                if declared is None:
+                    # 后缀段增强（R7 挂账：sem02/09 顶层路径伪影）：query 路径未声明
+                    # 但恰是 lattice 某深路径的尾段（如 "metadata" vs "result.config.metadata"）
+                    # → 位置错位信号，WARN（不消耗 retry 预算）
+                    leaf = path_.rsplit(".", 1)[-1] if path_ else ""
+                    deep = [k for k in lattice if k.endswith("." + leaf) or k == leaf]                         if leaf and len(leaf) > 2 else []
+                    if deep and kind in ("identity_bool", "eq_bool", "key_exists", "eq_scalar"):
+                        findings.append({"class": "oracle_shape_conflict", "severity": "WARN",
+                                         "detail": {"endpoint": key, "path": path_ or "<root>",
+                                                    "asserted": kind,
+                                                    "reason": "path_suffix_mismatch",
+                                                    "declared_paths": deep[:3]}})
+                    continue
+                if declared in ("any", "recursive", "scalar"):
                     continue
                 verdict = _COMPAT.get(kind, {}).get(declared, "OK")
                 if verdict == "CONFLICT":
