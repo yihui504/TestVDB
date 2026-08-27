@@ -245,12 +245,24 @@ def _collect_get_aliases(tree, bindings) -> dict:
             if src in names:
                 aliases.setdefault(t.id, (cid, str(v.args[0].value)))
         continue
-    # Subscript 取值：names = resp["collections"]（R8 共模 bug 形态）
-    if isinstance(t, ast.Name) and isinstance(v, ast.Subscript)             and isinstance(v.slice, ast.Constant) and isinstance(v.slice.value, str)             and isinstance(v.value, ast.Name) and v.value.id not in ("os", "sys"):
-        src = v.value.id
-        for cid, names_ in bindings.items():
-            if src in names_:
-                aliases.setdefault(t.id, (cid, str(v.slice.value)))
+    # Subscript 取值（R8 共模 bug 形态）：names = resp["result"]["collections"]
+    # 链式取值展开为完整路径 "result.collections"（lattice 键带前缀——裸顶层键不匹配）
+    if isinstance(t, ast.Name) and isinstance(v, ast.Subscript):
+        parts = []
+        cur = v
+        ok = True
+        while isinstance(cur, ast.Subscript):
+            if isinstance(cur.slice, ast.Constant) and isinstance(cur.slice.value, str):
+                parts.append(str(cur.slice.value))
+                cur = cur.value
+            else:
+                ok = False
+                break
+        if ok and isinstance(cur, ast.Name) and cur.id not in ("os", "sys") and parts:
+            full = ".".join(reversed(parts))
+            for cid, names_ in bindings.items():
+                if cur.id in names_:
+                    aliases.setdefault(t.id, (cid, full))
     return aliases
 
 
