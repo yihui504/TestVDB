@@ -244,6 +244,13 @@ def _collect_get_aliases(tree, bindings) -> dict:
         for cid, names in bindings.items():
             if src in names:
                 aliases.setdefault(t.id, (cid, str(v.args[0].value)))
+        continue
+    # Subscript 取值：names = resp["collections"]（R8 共模 bug 形态）
+    if isinstance(t, ast.Name) and isinstance(v, ast.Subscript)             and isinstance(v.slice, ast.Constant) and isinstance(v.slice.value, str)             and isinstance(v.value, ast.Name) and v.value.id not in ("os", "sys"):
+        src = v.value.id
+        for cid, names_ in bindings.items():
+            if src in names_:
+                aliases.setdefault(t.id, (cid, str(v.slice.value)))
     return aliases
 
 
@@ -286,6 +293,17 @@ def check_shape_conflicts(tree, index) -> list[dict]:
                         akind = "identity_bool"
                 if akind:
                     assertions.append((apath, akind))
+            # in 成员测试元素类型对照（R8 挂账：`x not in names` str 对 dict 列表恒 True 共模 bug）
+            if isinstance(expr, ast.Compare) and len(expr.ops) == 1                     and isinstance(expr.ops[0], (ast.In, ast.NotIn))                     and isinstance(expr.comparators[0], ast.Name)                     and expr.comparators[0].id in aliases                     and aliases[expr.comparators[0].id][0] == id(call):
+                apath = aliases[expr.comparators[0].id][1]
+                if any(k.startswith(apath + "[].") for k in lattice):
+                    findings.append({"class": "oracle_shape_conflict", "severity": "REJECT",
+                                     "detail": {"endpoint": key, "path": apath,
+                                                "asserted": "str_membership_on_object_elements",
+                                                "reason": "in_test_element_type_mismatch",
+                                                "note": f"`x (str) in {expr.comparators[0].id}` where elements are objects "
+                                                        f"(lattice {apath}[].* exists) — use key extraction e.g. "
+                                                        f"[e['name'] for e in {expr.comparators[0].id}]"}})
             for path_, kind in assertions:
                 declared = _lattice_lookup(lattice, path_)
                 if declared is None:
