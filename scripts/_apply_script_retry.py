@@ -21,6 +21,7 @@ Exit: 0 = ok（无论是否有 regen/exhausted；这是机制而非 gate）,
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -72,6 +73,17 @@ def main() -> int:
     exhausted: list[dict] = []
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
 
+    # 幂等化（R4 挂账）：同 errors 集重复执行不双计——上次运行的 errors 指纹
+    # 与本次一致则跳过计数（R4 实测 _apply 被重复跑导致 counter 2/2 触顶假风险）
+    errors_sig = hashlib.sha256(json.dumps(
+        sorted((e.get("script_id"), tuple(sorted(e.get("error_classes", []))))
+               for e in errors), ensure_ascii=False).encode("utf-8")).hexdigest()
+    sig_path = sd / "script_retry.sig"
+    same_sig = sig_path.exists() and sig_path.read_text(encoding="utf-8").strip() == errors_sig
+    if not same_sig:
+        sig_path.write_text(errors_sig, encoding="utf-8")
+
+
     for e in errors:
         sid = e.get("script_id", "")
         spath_str = e.get("script_path", "")
@@ -89,8 +101,9 @@ def main() -> int:
 
         count = int(retry_map.get(sid, 0))
         if count < MAX_SCRIPT_RETRY:
-            # 未超限：counter += 1，写 retry_feedback.json
-            count += 1
+            # 未超限：counter += 1，写 retry_feedback.json（幂等：同集重跑不计数）
+            if not same_sig:
+                count += 1
             retry_map[sid] = count
             fb = {
                 "script_id": sid,
