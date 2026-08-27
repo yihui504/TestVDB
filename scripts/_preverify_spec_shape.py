@@ -232,37 +232,40 @@ def _collect_get_aliases(tree, bindings) -> dict:
             continue
         t = n.targets[0]
         v = n.value
-        if not (isinstance(t, ast.Name) and isinstance(v, ast.Call)
-                and isinstance(v.func, ast.Attribute) and v.func.attr == "get"
-                and v.args and isinstance(v.args[0], ast.Constant)
-                and isinstance(v.args[0].value, str)
-                and isinstance(v.func.value, ast.Name)
-                and v.func.value.id not in ("os", "sys")):
+        is_get = (isinstance(t, ast.Name) and isinstance(v, ast.Call)
+                  and isinstance(v.func, ast.Attribute) and v.func.attr == "get"
+                  and v.args and isinstance(v.args[0], ast.Constant)
+                  and isinstance(v.args[0].value, str)
+                  and isinstance(v.func.value, ast.Name)
+                  and v.func.value.id not in ("os", "sys"))
+        if is_get:
+            src = v.func.value.id
+            # 反查 src 绑定的 call（可能多个 call 同名——取全部中任一，位置最近者）
+            for cid, names in bindings.items():
+                if src in names:
+                    aliases.setdefault(t.id, (cid, str(v.args[0].value)))
             continue
-        src = v.func.value.id
-        # 反查 src 绑定的 call（可能多个 call 同名——取全部中任一，位置最近者）
-        for cid, names in bindings.items():
-            if src in names:
-                aliases.setdefault(t.id, (cid, str(v.args[0].value)))
-        continue
-    # Subscript 取值（R8 共模 bug 形态）：names = resp["result"]["collections"]
-    # 链式取值展开为完整路径 "result.collections"（lattice 键带前缀——裸顶层键不匹配）
-    if isinstance(t, ast.Name) and isinstance(v, ast.Subscript):
-        parts = []
-        cur = v
-        ok = True
-        while isinstance(cur, ast.Subscript):
-            if isinstance(cur.slice, ast.Constant) and isinstance(cur.slice.value, str):
-                parts.append(str(cur.slice.value))
-                cur = cur.value
-            else:
-                ok = False
-                break
-        if ok and isinstance(cur, ast.Name) and cur.id not in ("os", "sys") and parts:
-            full = ".".join(reversed(parts))
-            for cid, names_ in bindings.items():
-                if cur.id in names_:
-                    aliases.setdefault(t.id, (cid, full))
+        # Subscript 取值（R8 共模 bug 形态）：names = resp["result"]["collections"]
+        # 链式取值展开为完整路径 "result.collections"（lattice 键带前缀——裸顶层键不匹配）
+        if isinstance(t, ast.Name) and isinstance(v, ast.Subscript):
+            parts = []
+            cur = v
+            ok = True
+            while isinstance(cur, ast.Subscript):
+                sl = cur.slice
+                if isinstance(sl, getattr(ast, "Index", ()) if hasattr(ast, "Index") else ()):
+                    sl = sl.value  # py<3.9 语法树 Index 包装
+                if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+                    parts.append(str(sl.value))
+                    cur = cur.value
+                else:
+                    ok = False
+                    break
+            if ok and isinstance(cur, ast.Name) and cur.id not in ("os", "sys") and parts:
+                full = ".".join(reversed(parts))
+                for cid, names_ in bindings.items():
+                    if cur.id in names_:
+                        aliases.setdefault(t.id, (cid, full))
     return aliases
 
 
