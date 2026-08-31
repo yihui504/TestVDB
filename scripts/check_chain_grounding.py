@@ -49,6 +49,14 @@ def judge_grounding(chain: dict, contract_text: str) -> dict:
       CONFLICT    —— A=REFUTED 与机械 B=CONFIRMED 冲突 → NEEDS_MORE_EVIDENCE + rework
     """
     cg = (chain.get("steps") or {}).get("contract_grounding") or {}
+    # v2 链格式 fallback(R21 state_recommend_02 实测 GREY_ZONE 伪影修复,2026-08-31):
+    # v2 链无 steps.contract_grounding——锚取 unit_ref(同样剥 :: 前缀),忠实性改查
+    # doc_evidence[].quote 与契约原文的逐字匹配。violates 声明前置于候选层(8e 只收
+    # VERDICT: DEFECT_FOUND 的候选建链),故引文忠实即 CONFIRMED,reason=id+quote_ok_v2。
+    v2_mode = not cg
+    if v2_mode:
+        cg = {"constraint_id": str(chain.get("unit_ref", "") or ""),
+              "assertion_text_quoted": "", "api_violates_assertion": True}
     cid = str(cg.get("constraint_id", "") or "").strip()
     # unit_ref 前缀归一（R6 实证：链内 cid 带 "assertions::" 前缀导致 constraint_absent
     # 误判 GREY_ZONE——candidates.jsonl 的 constraint_id 保留前缀形态，此处剥到底）
@@ -60,10 +68,20 @@ def judge_grounding(chain: dict, contract_text: str) -> dict:
         return {"verdict_A": "NEUTRAL", "reason": "constraint_absent",
                 "implied_verdict": "GREY_ZONE", "constraint_id": cid}
     quote = cg.get("assertion_text_quoted", "") or ""
+    # v2:忠实性检查对象 = doc_evidence[].quote 任一命中（v2 链无单引文字段）
+    v2_quotes: list[str] = []
+    if v2_mode:
+        v2_quotes = [str(d.get("quote", "") or "") for d in (chain.get("doc_evidence") or [])
+                     if isinstance(d, dict)]
+        v2_quotes = [q for q in v2_quotes if q.strip()]
     # JSON 转义规范化（2026-08-20 v8 考古案发现）：quote 含引号时，契约文件原文是 \" 形态
     # 而链内 quote 是解析后的 "——两侧都试，命中即算逐字
     norm = contract_text.replace('\\"', '"')
-    if quote and (quote in contract_text or quote in norm):
+
+    def _quote_hit(q: str) -> bool:
+        return bool(q) and (q in contract_text or q in norm)
+
+    if (quote and _quote_hit(quote)) or any(_quote_hit(q) for q in v2_quotes):
         if cg.get("api_violates_assertion"):
             # by_design 锚点感知冲突（v8 FP 侧 2026-08-20）：A=CONFIRMED 但链现象命中
             # cognition 的 by_design 锚点（确定性关键词匹配）→ 降 CONFLICT 走打回闭环，
@@ -77,7 +95,7 @@ def judge_grounding(chain: dict, contract_text: str) -> dict:
                             "conflict_note": ac.get("anchor")}
             except ImportError:
                 pass
-            return {"verdict_A": "CONFIRMED", "reason": "id+quote_ok",
+            return {"verdict_A": "CONFIRMED", "reason": "id+quote_ok_v2" if v2_mode else "id+quote_ok",
                     "implied_verdict": "DEFECT", "constraint_id": cid}
         # 信号冲突检测：violates=False 但机械 B 有独立 CONFIRMED 证据
         try:
