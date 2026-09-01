@@ -58,9 +58,15 @@ Turn M:  Bash  touch ${SESSION_DIR}/evidence_chain/${defect_id}.json.done
 
 对候选的 constraint_id 对应 constraint（Read `structured_contract.json` 找到它）：
 
-1. **可达性**：WebFetch constraint 的 `source_url`。200/301/302 → PASS；404/5xx → FAIL；
-   网络受限 → `domain_blocked`（记 PARTIAL，不视为 FAIL）。无 source_url → FAIL。
-2. **版本匹配**：从文档页面 URL/标题提取版本号，与 target major.minor 宽松比对。
+1. **可达性**：优先读契约同目录 `doc_preflight.json`（规则 P1.0 sidecar，mine Step 6.2 /
+   contract Step 5b 批量预检产物）。URL 有记录：reachable → 直接 PASS（引用 sidecar，
+   不再 WebFetch）；dead/unreachable → 记 FAIL/PARTIAL 并**自行 WebFetch 复核一次**
+   （防预检后环境恢复）；无记录（旧契约/TESTVDB_OFFLINE 轮次）→ 回退现行 WebFetch：
+   200/301/302 → PASS；404/5xx → FAIL；网络受限 → `domain_blocked`（记 PARTIAL，
+   不视为 FAIL）。无 source_url → FAIL。
+2. **版本匹配**：优先读 sidecar 的 version 判定（matched/mismatched/
+   no_version_in_url——最后一档记 PARTIAL，legacy 概念文档无版本路由属正常）；
+   无记录 → 回退从文档页面 URL/标题提取版本号，与 target major.minor 宽松比对。
 3. **内容一致性**：文档原文是否真包含 assertion 声称的行为？（如"nprobe must be in
    [1,16384]"是否是文档原话或等价表述）。特别注意 SDK/REST 混淆——功能只在 SDK 文档
    出现 → `sdk_rest_confusion: true`。

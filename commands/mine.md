@@ -389,6 +389,15 @@ py -3 scripts/enrich_contract_from_spec.py results/{target}/{version} --fill-mis
 python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
 ```
 
+**Step 6.2: 契约文档资产预检（规则 P1.0，2026-09-02 — evidence-builder A 层前两层消费）**：
+```bash
+python scripts/preflight_contract_docs.py "results/{target}/{version}/structured_contract.json"
+```
+产 sidecar `doc_preflight.json`（契约文件本体零改动；0-LLM，URL 去重后 8 并发，秒级）。
+- exit 0 = PASS 或 skipped（`TESTVDB_OFFLINE=1` 跳过，builder 走回退 WebFetch）
+- exit 1 = 存在 dead/mismatched 文档 → **记录 pipeline_state 不中断**（文档死亡是
+  环境事实，evidence-builder 如实取证；不重派发、不硬 block）
+
 **Step 6.5: 策略预绑定（v3.4 D2，确定性主进程步骤——0 LLM）**：
 ```bash
 python scripts/bind_strategies.py "results/{target}/{version}/structured_contract.json"

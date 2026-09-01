@@ -94,6 +94,17 @@ python scripts/validate_contract.py "results/{target}/{version}/structured_contr
 - exit 1（FAIL，有 errors）→ 输出错误 + 终止（契约不合格，不可用于挖掘）
 - exit 2（加载/用法错误）→ 终止
 
+**Step 5b: 契约文档资产预检（规则 P1.0，2026-09-02）**：
+
+```bash
+python scripts/preflight_contract_docs.py "results/{target}/{version}/structured_contract.json"
+```
+
+- exit 0 → sidecar `doc_preflight.json` 就绪（evidence-builder A 层前两层消费），或
+  `TESTVDB_OFFLINE=1` 跳过
+- exit 1 → 存在 dead/mismatched 文档；**不终止**（环境事实，取证层如实记录），输出
+  计数供排查
+
 **Passport Hash 验证**（`material_passport.enabled=true` 时）：
 ```bash
 python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
