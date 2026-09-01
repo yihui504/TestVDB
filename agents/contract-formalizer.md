@@ -422,6 +422,13 @@ run2r-01 J1 五项契约失真（枚举大小写/响应形状/absent 子句/meta
      分类不完备不产生测试盲区**。
    - **开类评审触发**：other 类约束数或其违反计数非零时，主进程评审是否从 other 中
      析出新正式类别（resource_bound / doc_consistency 即经此路径的先例）。
+   - **knowledge-other 桶消费（2026-09-02）**：knowledge 阶段 `constraints.other` 桶
+     条目按本规则处理——**优先尝试归入四类**（正常归入），确不可归才入
+     `other_constraints` 并补 `no_fit_reason`。该桶是**提取期暂存，非终判**，formalizer
+     保留重新归类权——防"偷懒出口"：塞进 other 的条目会被逐条重判。
+   - **知识阶段不设 resource_bound / doc_consistency 槽位（设计意图，非遗漏）**：
+     二者是 openapi 规格与 prose 的**对照产物**（min 无 max / 默认值冲突），knowledge
+     阶段单看 prose 判不了，给槽位只会诱导错误归类。
 4. 三类均不回溯改既有契约（15 版批量起生效）；当前重跑块保持三一致。
 5. schema 分组：新类别入 `constraints` 下新组键 `resource_bound_constraints` /
    `doc_consistency_constraints` / `other_constraints`（组结构与 type/range/state 三组

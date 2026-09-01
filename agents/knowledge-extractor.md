@@ -301,8 +301,9 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
       "constraints": {
         "type": ["{type_constraint}"],
         "range": ["{range_constraint}"],
-        "state": ["{state_constraint}"],
-        "behavioral": ["{behavioral_contract}"]
+        "state": ["{跨请求可见性与一致性承诺（如：写入完成后立即可读到该点）}"],
+        "behavioral": ["{接口使用方式与调用行为（如：with_lookup 时结果分组包含查找集合的点）；响应内容语义承诺（排序/顺序/确定性/兼容性/可见性）不属此桶}"],
+        "other": ["{装不进以上四桶的文档承诺——如：排序/结果顺序/确定性承诺、兼容性承诺、单调性承诺等无类型/范围/状态语义的保证；一句话原样描述，禁止丢弃或硬塞四桶；formalizer 按规则 2.9 处理}"]
       },
       "expected_responses": {"200": "{description}", "400": "{description}"}
     }
@@ -330,6 +331,8 @@ Step 4 的产出写入同目录 `results/{target}/{version}/deployment_meta.json
 检查 raw_knowledge.json 确保：
 - 核心 CRUD 端点全部覆盖（创建/读取/更新/删除/搜索类端点）
 - 每个端点至少有 1 条约束
+- **constraints.other 非空不视为错误**——它是四桶装不下的文档承诺（规则 2.9
+  other 类的提取期暂存），formalizer 负责定性；禁止为"干净"而丢弃或硬塞四桶
 - **deployment_meta.json 已单独写入（SDK/Docker 不在 knowledge 内）**
 - **每个端点都有 source_url 和 doc_version 字段**
 - **document_metadata.version_match 不为 mismatched**（如果是，需在 Step 1 重新搜索）
