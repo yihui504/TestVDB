@@ -222,6 +222,22 @@ verdict = DEFECT 时填 null。`root_cause_if_fp` 按词表填：
 env_noise | concurrency_race | eventual_consistency | request_param_typo |
 mundane_api_semantics | non_deterministic_unreproducible | script_error`
 
+## 约束类别归因（规则 2.9 other 兜底 — 处理机制闭包的度量，2026-08-29）
+
+每条 verdict 附两个字段：
+
+- `constraint_category`：该候选所违反/所涉约束的类别——从所审链对应契约单元的 type 取
+  （`type | range | state | resource_bound | doc_consistency`）；候选是行为异常但契约无
+  对应约束断言（exploratory / behavioral_anomaly 等"文档有承诺但未提取成约束"形态）→
+  `other`；契约路径不明确 → null（不猜）。
+- `category_no_fit_reason`：仅 `other` 时填一句话（为何现有类别表达不了该违反；如
+  "monotonic id promise — 非 type/range/state/资源/文档冲突任一形态"）；其余 null。
+
+summary 同步 `constraint_category_distribution`（词表计数）。
+**开类评审触发**：`other` 归因计数非零 → 主进程汇总后评审是否析出新正式类别
+（resource_bound / doc_consistency 即经此路径的先例）。other 非零不是缺陷——它是
+分类演化的信号通道；持续为零 = 分类在当前语料上饱和。
+
 **candidate_class 标注（ADR-0009 §5 exploratory 候选通道）**：verdict 保持二值不变
 （strict 判定层零改动）；每条 verdict 附带三态标注，判定规则：
 
@@ -252,7 +268,7 @@ form 照抄 `inference_consistency`——但三条件仍须你逐条自查（机
 
 1. **auditor 只输出文本判定行**（每链一行，无其他内容）：
    ```
-   verdict <defect_id> <DEFECT|NOT_DEFECT|NEEDS_MORE_EVIDENCE> fp=<doc|source|both|behavior|-> rationale="<≤60字>"
+   verdict <defect_id> <DEFECT|NOT_DEFECT|NEEDS_MORE_EVIDENCE> fp=<doc|source|both|behavior|-> cat=<type|range|state|resource_bound|doc_consistency|other|-> [nofit="<≤30字，仅 other 时"] rationale="<≤60字>"
    ```
    完整四视角分析在思考内完成，不复述、不输出中间推理。
 2. **主进程机械转写落盘**：按判定行组装 chain_verdicts.json（schema 同下——perspective_analysis
@@ -288,6 +304,8 @@ form 照抄 `inference_consistency`——但三条件仍须你逐条自查（机
       },
       "chain_broken_at": null,
       "root_cause_if_fp": null,
+      "constraint_category": "type | range | state | resource_bound | doc_consistency | other | null",
+      "category_no_fit_reason": "仅 other 时一句话，其余 null",
       "candidate_class": "strict_defect | exploratory_candidate | rejected",
       "exploratory": {"form": "inference_consistency|competing_explanation|behavioral_anomaly|null",
                        "signal": "rule5_approx_match|manual|null",
@@ -300,6 +318,7 @@ form 照抄 `inference_consistency`——但三条件仍须你逐条自查（机
     "total": 0, "defect": 0, "not_defect": 0, "needs_more_evidence": 0,
     "fp_evidence_source_distribution": {"doc": 0, "source": 0, "both": 0, "behavior": 0},
     "root_cause_distribution": {},
+    "constraint_category_distribution": {},
     "candidate_class_distribution": {"strict_defect": 0, "exploratory_candidate": 0, "rejected": 0}
   }
 }

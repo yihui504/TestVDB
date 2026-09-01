@@ -255,6 +255,12 @@ weaviate 文档站（`weaviate.io/developers/weaviate/`、`docs.weaviate.io/weav
 
 ### Step 5: 生成 raw_knowledge.json（v3.4 §A：舍弃 .md 改 .json；术语统一叫 knowledge）
 
+**api_endpoints[].path = 功能点逻辑 ID（formalizer 规则 2.10 强制）**：形态
+`^[a-z0-9]+(\+[a-z0-9]+)*$`（`+` 为字面连接符，禁 `_` / `/` / 大写 / `{}`）；同 vendor
+已有契约的 ID 键空间必须复用——**载入上一版 structured_contract.json 的 api_endpoints
+（path/method/category）作为先例集**，仅新增端点允许新 ID。粒度判据（语义动作区分/
+配置子面）见 formalizer 规则 2.10；实验依据：无先例集 75 端点对齐仅 5-6/75，载入后 75/75。
+
 **⛔ 强制输出约束（MUST Write Before Exit）：**
 - 在执行任何其他操作之前，必须先使用 Write 工具将 raw_knowledge.json 写入磁盘
 - 如果你在分析完成后未写入文件就退出，本轮知识提取自动判定为失败

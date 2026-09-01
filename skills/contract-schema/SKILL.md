@@ -69,7 +69,8 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
     "range_constraints": [ ... ],
     "state_constraints": [ ... ],
     "resource_bound_constraints": [ ... ],
-    "doc_consistency_constraints": [ ... ]
+    "doc_consistency_constraints": [ ... ],
+    "other_constraints": [ ... ]
   },
   "assertions": [ ... ],
   "behavioral_contracts": [ ... ],
@@ -96,8 +97,9 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
 | endpoint | string | Yes | Referenced endpoint path |
 | description | string | Yes | Human-readable constraint |
 | assertion | string | Yes | Machine-readable check |
-| type | string | Yes | `type_constraint/range_constraint/state_constraint/resource_bound/doc_consistency`（后两类=规则 2.9 新约束类别，v3.4） |
-| level | string | Yes | `endpoint` / `system`（v3.4 规则 2.7）：单请求可观测 → endpoint；跨端点/跨请求序列 → system |
+| type | string | Yes | `type_constraint/range_constraint/state_constraint/resource_bound/doc_consistency/other`（后三类=规则 2.9 新约束类别；other=兜底类，装不进已知类的文档承诺） |
+| no_fit_reason | string | other 类必填 | 一句话指明装不进已知类的原因（禁把 other 当偷懒出口；规则 2.9） |
+| level | string | Yes | `endpoint` / `system`（v3.4 规则 2.7）：单请求可观测 → endpoint；跨端点/跨请求序列 → system（other 类按本条正常分级） |
 | bound_strategies | array | No | 预绑定 strategy_id 清单——`scripts/bind_strategies.py` 确定性写入（v3.4 D2），formalizer 不填 |
 | evidence_tier | string | Yes | `explicit` / `inferred`（ADR-0008 两档） |
 

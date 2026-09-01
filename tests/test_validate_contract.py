@@ -151,7 +151,7 @@ def test_main_exit_codes(tmp_path):
     # pass（完整契约）
     good = tmp_path / "good.json"
     good.write_text('{"target":"weaviate","version":"1.0","api_endpoints":['
-                    '{"path":"objects","method":"POST","category":"objects",'
+                    '{"path":"objects+create","method":"POST","category":"objects",'
                     '"source_url":"u","doc_version":"1"}],'
                     '"data_types":[{"name":"vector"}]}', encoding="utf-8")
     sys.argv = ["validate_contract.py", str(good)]
@@ -162,3 +162,86 @@ def test_main_exit_codes(tmp_path):
     bad.write_text('{"version":"1.0"}', encoding="utf-8")
     sys.argv = ["validate_contract.py", str(bad)]
     assert main() == 1
+
+
+# ═══════════════════════════════════════════════════════════════
+# 规则 2.10（2026-09-01）：功能点 ID 粒度与形式
+# ═══════════════════════════════════════════════════════════════
+
+def _ep(path, method="GET", category="data"):
+    return {"path": path, "method": method, "category": category,
+            "source_url": "https://example.test/docs/a", "doc_version": "1.0"}
+
+
+def test_path_form_rule210_valid_forms(make_contract):
+    """规则 2.10:合规形式(资源型多段 + 根级运维单段)→ 无 2.10 error。"""
+    _, contract = make_contract(endpoints=[
+        _ep("points+recommend", "POST", "search"),
+        _ep("points+query+groups", "POST", "search"),
+        _ep("healthz", "GET", "admin"),
+    ])
+    errors, _ = validate_contract(contract)
+    assert not any("规则 2.10" in e for e in errors)
+
+
+def test_path_form_rule210_invalid_forms(make_contract):
+    """规则 2.10:下划线连接/斜杠/大写/路径参数 → 全部 error(实验中 A 系列漂移形态)。"""
+    _, contract = make_contract(endpoints=[
+        _ep("points_recommend"),       # 下划线连接(A 系列实测漂移形态)
+        _ep("collections/create"),     # 斜杠
+        _ep("Points+Get"),             # 大写
+        _ep("points/{id}"),            # 路径参数残留
+    ])
+    errors, _ = validate_contract(contract)
+    hits = [e for e in errors if "规则 2.10" in e]
+    assert hits and "4 个" in hits[0]
+
+
+def test_ref_contract_gone_ids_errors(tmp_path):
+    """规则 2.10 G-d:--ref-contract 旧 ID 消失(改名/删除)→ error。"""
+    import json as _json
+    import sys
+    from validate_contract import main
+
+    old = tmp_path / "old.json"
+    old.write_text(_json.dumps({
+        "target": "t", "version": "1.0",
+        "api_endpoints": [
+            {"path": "points+search", "method": "POST", "category": "search", "source_url": "u"},
+            {"path": "points+scroll", "method": "POST", "category": "search", "source_url": "u"},
+        ],
+        "data_types": [], "_passport": {}}), encoding="utf-8")
+    new = tmp_path / "new.json"
+    new.write_text(_json.dumps({
+        "target": "t", "version": "1.1",
+        "api_endpoints": [
+            {"path": "points+query", "method": "POST", "category": "search", "source_url": "u"},
+        ],
+        "data_types": [], "_passport": {}}), encoding="utf-8")
+    sys.argv = ["validate_contract.py", str(new), "--ref-contract", str(old)]
+    assert main() == 1
+
+
+def test_ref_contract_superset_passes(tmp_path):
+    """规则 2.10 G-d:新增 ID 合法(旧 ID 全保留)→ 不因 ref 报 error。"""
+    import json as _json
+    import sys
+    from validate_contract import main
+
+    old = tmp_path / "old.json"
+    old.write_text(_json.dumps({
+        "target": "t", "version": "1.0",
+        "api_endpoints": [
+            {"path": "points+search", "method": "POST", "category": "search", "source_url": "u"},
+        ],
+        "data_types": [], "_passport": {}}), encoding="utf-8")
+    new = tmp_path / "new.json"
+    new.write_text(_json.dumps({
+        "target": "t", "version": "1.1",
+        "api_endpoints": [
+            {"path": "points+search", "method": "POST", "category": "search", "source_url": "u"},
+            {"path": "points+search+batch", "method": "POST", "category": "search", "source_url": "u"},
+        ],
+        "data_types": [], "_passport": {}}), encoding="utf-8")
+    sys.argv = ["validate_contract.py", str(new), "--ref-contract", str(old)]
+    assert main() == 0

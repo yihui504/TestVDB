@@ -387,7 +387,7 @@ run2r-01 J1 五项契约失真（枚举大小写/响应形状/absent 子句/meta
 3. **版本核对**：提取前核对规格来源 tag 与目标 version 一致（R9 先例：.sourcedeps 中 openapi
    存在高于目标的漂移）；不一致 → 停止生成并报告，禁止静默用错版规格。
 
-### 规则 2.9: 新约束类别探索（v3.4 C 节遗留子项 — resource_bound + doc_consistency，三轮实证驱动）
+### 规则 2.9: 新约束类别探索（v3.4 C 节遗留子项 — resource_bound + doc_consistency + other 兜底）
 
 导师反馈"约束可能不止类型/范围/行为/状态四型"。v3.4 重跑 R2/R3 两类实证超出四型的约束形态，
 按以下判据提取，归入现有两级（均标 level；type 字段分别记 `resource_bound` / `doc_consistency`）：
@@ -407,10 +407,58 @@ run2r-01 J1 五项契约失真（枚举大小写/响应形状/absent 子句/meta
    实证：R3 默认值分歧族——indexing_threshold readback 10000 vs 文档 20000（实现三处一致
    10000，20000 溯源自源码内陈旧注释）；此类案在无 doc_consistency 锚时只能借 range 约束
    曲线定罪。
-3. 两类均不回溯改既有契约（15 版批量起生效）；当前重跑块保持三一致。
-4. schema 分组：新类别入 `constraints` 下新组键 `resource_bound_constraints` /
-   `doc_consistency_constraints`（组结构与 type/range/state 三组同构；chunk_contract 与
-   bind_strategies 按组键遍历自动兼容）。
+3. **other（兜底类，2026-08-29 新增 — 处理机制闭包）**：提取或攻击中发现的文档承诺
+   **装不进** type/range/state/resource_bound/doc_consistency 任一已知类时，入本类
+   而非丢弃或硬套。硬性要求：
+   - **强制字段 `no_fit_reason`**：一句话指明装不进的原因（"why not type/range/state/
+     resource_bound/doc_consistency"），缺此字段 = 提取不合规（禁把 other 当偷懒出口）。
+   - **level 按规则 2.7 正常分级**：单请求可观测 → endpoint（如"响应 id 严格递增"类
+     单请求序断言）；跨请求序列 → system。
+   - **constraint_id 命名** `{target}_other_<endpoint_short>_001` 形态。
+   - **测试路径闭包**：绑定阶段先过内置/注册表策略匹配（bind_strategies 照常），
+     未命中 → 通用测试原则正反覆盖（G1–G10 明文见各 attack agent 规范同文节；
+     同 system 级方法：正面 = 满足承诺的合法请求/
+     序列，反面 = 违反承诺的构造，两侧都构造出才算覆盖）——**任意约束必有测试路径，
+     分类不完备不产生测试盲区**。
+   - **开类评审触发**：other 类约束数或其违反计数非零时，主进程评审是否从 other 中
+     析出新正式类别（resource_bound / doc_consistency 即经此路径的先例）。
+4. 三类均不回溯改既有契约（15 版批量起生效）；当前重跑块保持三一致。
+5. schema 分组：新类别入 `constraints` 下新组键 `resource_bound_constraints` /
+   `doc_consistency_constraints` / `other_constraints`（组结构与 type/range/state 三组
+   同构；chunk_contract 与 bind_strategies 按组键遍历自动兼容）。
+
+### 规则 2.10: 功能点（endpoint ID）粒度与形式（强制，2026-09-01 — 提取实验实证）
+
+每条 `api_endpoints[].path` 是**功能点逻辑 ID**：下游 chunk 命名（chunk_points+recommend）、
+策略预绑定、脚本命名派生、统计分组全部以它为键，**ID 一旦发布只增不改**。
+
+**构成规则（机械，validate_contract 强制校验）**：
+- **连接符为字面 `+` 字符**。合法形态 `^[a-z0-9]+(\+[a-z0-9]+)*$`——ID 内禁 `_`、禁 `/`、
+  禁大写、禁路径参数残留（`{}`）。⚠ 2026-09-01 提取实验：元语法记法 `段[+段]*` 被
+  **全部三个**独立提取会话误读（产出了下划线风格）——连接符必须按字面字符理解与书写。
+- 段来源：资源段 = URL 首个资源词（collections/points/aliases/payload/shards/snapshots/
+  index/vectors…）；子路径段 = URL 尾段（query/groups/batch/scroll/matrix…）；URL 未含
+  动作词时以 method 语义动词收尾（create/get/update/delete/list/exists/overwrite/set…）。
+- 根级运维端点（healthz/livez/readyz/metrics/telemetry/root 等）允许单段；资源型端点 ≥2 段。
+
+**粒度判据（提取/生成时判断）**：
+- **G-a 语义动作区分（强制）**：同一 URL 不同 method → 不同功能点（payload+set=POST ≠
+  payload+overwrite=PUT）；同 URL 同 method 不得拆分。实验实证：此判据 LLM 执行零偏差
+  （3 独立会话 60/60 处全对——漂移从不发生在粒度层）。
+- **G-b 配置子面可入表**：无独立路由的行为面（集合配置 vectors 段等）可立功能点，
+  source_url 允许概念文档。
+- **G-c 完整性**：文档 ∪ openapi /paths 全覆盖（同 L300 与 knowledge-extractor Step 6b，
+  此处不重复）。
+- **G-d 跨版本一致性（硬约束 — 必须载入先例集）**：同 vendor 同功能跨版本**必须复用
+  同 ID**；新增变体 → 新增 ID；禁止改名或旧 ID 挪用新语义。**提取新版契约前必须载入
+  上一版契约的 `api_endpoints`（path/method/category）作为先例集**——实验实证
+  （2026-09-01，75 端点命名任务 ×4 独立会话）：无先例集对既有键空间逐字对齐仅 5-6/75
+  （三方两两 Jaccard 0.26-0.63），载入先例集 **75/75**；先例集成本实测 ≈1.3K tokens。
+  粒度判断无先例集也稳定，漂移全部发生在命名层——先例集正是为此而设。
+
+**回溯声明**：已固化契约不做粒度补齐、不改 ID（points+recommend 无 batch/groups 变体
+属既有边界）；新需求走增量新 ID；存量契约的形式校验失败不追溯归档数据
+（实验纪律：改机制不毁历史可比性）。
 
 ### 规则 3: 证据分级（ADR-0008 简化版 — 删 confidence 自评，两档 evidence_tier）
 

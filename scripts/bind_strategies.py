@@ -14,9 +14,11 @@
      （experimental / 零战绩策略不自动绑定——防未验证策略污染预绑定）
 
 level=system 约束一律不绑定（走场景构造路径，v3.4 意见 4：系统级宽松覆盖）。
-写回：constraints.{type,range,state}_constraints[].bound_strategies = [strategy_id...]
-     （无绑定也写空列表——显式表达"已评估"）+ 顶层 _strategy_binding 汇总
-     （F 节策略贡献统计的消费入口）。
+写回：constraints.{type,range,state,resource_bound,doc_consistency,other}_constraints[]
+     .bound_strategies = [strategy_id...]（无绑定也写空列表——显式表达"已评估"）
+     + 顶层 _strategy_binding 汇总（F 节策略贡献统计的消费入口；其中
+     new_category_general_path = 新类别 endpoint 级空绑定计数——该路径显式走
+     通用测试原则正反覆盖，非异常未绑）。
 
 level lint（fail fast，exit 1）：存在缺 level 字段的约束 → 列清单报错
 （契约必须先过 contract-formalizer 规则 2.7 分级）。
@@ -42,7 +44,16 @@ _GROUPS = (
     # "清晰才绑"），但纳入 level lint 与绑定汇总统计。
     ("resource_bound_constraints", "resource_bound"),
     ("doc_consistency_constraints", "doc_consistency"),
+    # 规则 2.9 other 兜底类（装不进已知类的约束，须附 no_fit_reason）：
+    # endpoint 级无绑定 ≠ 异常未绑，而是显式走通用测试原则正反覆盖
+    # （NEW_CATEGORY_TAGS 计数供 F 节"处理机制闭包"统计消费）。
+    ("other_constraints", "other"),
 )
+
+# 新类别（规则 2.9）：无 builtin 确定映射，registry 三条件照常可绑；
+# endpoint 级空绑定 → 通用兜底路径（attack agents 按规范消费——
+# 分类可不完备，处理机制闭包：任意约束必有测试路径）。
+NEW_CATEGORY_TAGS = frozenset({"resource_bound", "doc_consistency", "other"})
 
 # 内置策略基线（v3.4 D2）：attack agents 规范内建的确定性映射——仅收录
 # "策略相对确定、清晰"的两条（导师点名 Boundary Value / Type Boundary，
@@ -62,6 +73,7 @@ BUILTIN_BASELINE = {
     "state": [],
     "resource_bound": [],
     "doc_consistency": [],
+    "other": [],
 }
 
 
@@ -139,6 +151,7 @@ def bind_contract(contract: dict, registries: list, registry_names=None) -> dict
 
     bound = unbound_endpoint = system_skipped = 0
     builtin_bound = registry_bound = 0
+    new_category_general_path = 0
     strategies_used = set()
     for group, tag in _GROUPS:
         for c in (out.setdefault("constraints", {}).setdefault(group, []) or []):
@@ -161,6 +174,8 @@ def bind_contract(contract: dict, registries: list, registry_names=None) -> dict
                     registry_bound += 1
             else:
                 unbound_endpoint += 1
+                if tag in NEW_CATEGORY_TAGS:
+                    new_category_general_path += 1
 
     out["_strategy_binding"] = {
         "tool": "bind_strategies.py",
@@ -170,6 +185,7 @@ def bind_contract(contract: dict, registries: list, registry_names=None) -> dict
         "bound_via_builtin": builtin_bound,
         "bound_via_registry": registry_bound,
         "unbound_endpoint_constraints": unbound_endpoint,
+        "new_category_general_path": new_category_general_path,
         "system_constraints_skipped": system_skipped,
         "distinct_strategies_bound": len(strategies_used),
     }
@@ -234,8 +250,30 @@ def _self_check() -> int:
                 "endpoint": "collections+delete", "type": "state_constraint",
                 "level": "system",
             }],
+            "other_constraints": [
+                {
+                    "constraint_id": "qdrant_other_collections_create_001",
+                    "endpoint": "collections+create", "type": "other_constraint",
+                    "level": "endpoint", "no_fit_reason": "monotonic id promise",
+                },
+                {
+                    "constraint_id": "qdrant_other_global_002",
+                    "endpoint": "collections+create", "type": "other_constraint",
+                    "level": "system", "no_fit_reason": "cross-request ordering",
+                },
+            ],
         },
     }
+
+    # ── other 注册表策略（过三条件）可绑 endpoint 级 other 约束 ──
+    other_strategy = {
+        "strategy_id": "other_monotonic_probe",
+        "status": "active",
+        "pattern": {"constraint_types": ["other"],
+                    "applicable_endpoints": ["*+create"]},
+        "performance": {"defects_found": 2},
+    }
+    registry2 = {"strategies": registry["strategies"] + [other_strategy]}
 
     # ── lint：缺 level 报错 ──
     broken = copy.deepcopy(contract)
@@ -257,13 +295,28 @@ def _self_check() -> int:
            f"range constraint binds builtin only (experimental/zero-track blocked), got {rc['bound_strategies']}")
     sc = bound["constraints"]["state_constraints"][0]
     expect(sc["bound_strategies"] == [], "system constraint skipped (no binding)")
+    ocs = bound["constraints"]["other_constraints"]
+    expect(ocs[0]["bound_strategies"] == [],
+           "other endpoint-level w/o eligible strategy → general path (empty, not error)")
+    expect(ocs[1]["bound_strategies"] == [], "other system-level skipped")
     meta = bound["_strategy_binding"]
-    expect(meta["bound_constraints"] == 2 and meta["unbound_endpoint_constraints"] == 0
-           and meta["system_constraints_skipped"] == 1
+    expect(meta["bound_constraints"] == 2 and meta["unbound_endpoint_constraints"] == 1
+           and meta["new_category_general_path"] == 1
+           and meta["system_constraints_skipped"] == 2
            and meta["bound_via_builtin"] == 2 and meta["bound_via_registry"] == 1,
            f"summary counts sane: {meta}")
     expect(contract["constraints"]["type_constraints"][0].get("bound_strategies") is None,
            "input contract not mutated (immutable)")
+
+    # ── other 约束经注册表三条件绑定（先匹配内置/注册表策略，未命中才兜底）──
+    bound2 = bind_contract(contract, [registry2], ["global_strategies.json"])
+    oc = bound2["constraints"]["other_constraints"][0]
+    expect(oc["bound_strategies"] == ["other_monotonic_probe"],
+           f"other endpoint-level binds eligible registry strategy, got {oc['bound_strategies']}")
+    meta2 = bound2["_strategy_binding"]
+    expect(meta2["new_category_general_path"] == 0 and meta2["bound_via_registry"] == 2
+           and meta2["unbound_endpoint_constraints"] == 0,
+           f"registry-bound other leaves no general-path residue: {meta2}")
 
     # ── CLI 端到端：写文件 → bind → 读回；dry-run 不写 ──
     with tempfile.TemporaryDirectory() as td:

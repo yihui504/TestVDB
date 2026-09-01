@@ -13,11 +13,15 @@ Exit: 0=pass, 1=errors, 2=usage/load error
 from __future__ import annotations
 
 import json
+import re
 import sys
 
 from _pipeline_utils import setup_encoding
 
 setup_encoding()
+
+# 规则 2.10（2026-09-01）功能点 ID 形式：字面 + 连接符，禁 _ / 大写 / 路径参数 / 空段
+_ID_PATH_RE = re.compile(r"^[a-z0-9]+(\+[a-z0-9]+)*$")
 
 
 def load_contract(path):
@@ -62,6 +66,15 @@ def validate_contract(contract):
         missing_src = [e.get("path", "?") for e in endpoints if not e.get("source_url")]
         if missing_src:
             errors.append(f"endpoints missing source_url: {missing_src[:5]}")
+
+        # 规则 2.10：功能点 ID 形式（字面 + 连接符；禁 _ / 大写 / 路径参数 / 空段）
+        bad_form = [str(e.get("path", "?")) for e in endpoints
+                    if e.get("path") and not _ID_PATH_RE.match(str(e["path"]))]
+        if bad_form:
+            errors.append(
+                f"endpoint path 形式违反规则 2.10（{len(bad_form)} 个——须 "
+                f"^[a-z0-9]+(\\+[a-z0-9]+)*$，连接符为字面 + 且不含 _）: {bad_form[:5]}"
+            )
 
     if not contract.get("data_types"):
         warnings.append("empty/missing data_types")
@@ -131,16 +144,41 @@ def check_endpoint_completeness(endpoints_count, raw_knowledge_path):
 
 
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python scripts/validate_contract.py <contract_path>", file=sys.stderr)
+    args = sys.argv[1:]
+    ref_path = None
+    if "--ref-contract" in args:
+        i = args.index("--ref-contract")
+        if i + 1 >= len(args):
+            print("Usage: python scripts/validate_contract.py <contract_path> "
+                  "[--ref-contract <old_contract>]", file=sys.stderr)
+            return 2
+        ref_path = args[i + 1]
+        del args[i:i + 2]
+    if not args:
+        print("Usage: python scripts/validate_contract.py <contract_path> "
+              "[--ref-contract <old_contract>]", file=sys.stderr)
         return 2
-    path = sys.argv[1]
+    path = args[0]
     contract, err = load_contract(path)
     if err:
         print(f"ERROR: {err}", file=sys.stderr)
         return 2
 
     errors, warnings = validate_contract(contract)
+    # 规则 2.10 G-d：跨版本键空间兼容（旧 ID 禁消失——改名/删除都是破坏）
+    if ref_path:
+        old, err2 = load_contract(ref_path)
+        if err2:
+            print(f"ERROR: ref-contract: {err2}", file=sys.stderr)
+            return 2
+        old_ids = {e.get("path") for e in get_endpoints(old)}
+        new_ids = {e.get("path") for e in get_endpoints(contract)}
+        gone = sorted(old_ids - new_ids)
+        if gone:
+            errors.append(
+                f"规则 2.10 G-d 跨版本键空间破坏：旧契约 {len(gone)} 个功能点 ID 消失"
+                f"（禁止改名/删除，新增走增量）: {gone[:5]}"
+            )
     # [5] 端点完整度检测（vs raw_knowledge，cross-file）
     from pathlib import Path as _P
     _raw = _P(path).resolve().parent / "raw_knowledge.md"

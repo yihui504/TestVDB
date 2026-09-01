@@ -37,7 +37,7 @@ def make_contract(tmp_path):
             "target": target,
             "version": "1.0",
             "api_endpoints": endpoints or [
-                {"path": "objects", "method": "POST", "category": "objects",
+                {"path": "objects+create", "method": "POST", "category": "objects",
                  "source_url": "https://example.test/docs/a", "doc_version": "1.0",
                  "parameters": []},
             ],

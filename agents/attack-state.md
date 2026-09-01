@@ -99,11 +99,41 @@ create_object / batch_objects / get_object({id}) / delete_object({id}) / graphql
 **策略预绑定消费（D2，v3.4）**：约束带非空 `bound_strategies` 时**直接按绑定清单生成**
 （不再按策略触发规则自行匹配——匹配环节已取消）；`bound_strategies` 为空（system 级约束
 或无确定策略）→ 按下方"覆盖目标驱动"流程，system 级走通用场景正反两面 + 基本原则构造。
+**新类别约束（规则 2.9：type ∈ `resource_bound` / `doc_consistency` / `other`）即使
+level=endpoint 且绑定空 → 通用测试原则正反覆盖（G1–G10，见下节），禁跳过**：正面 = 满足承诺的合法请求；
+反面 = 违反承诺的构造（resource_bound：规格合法但资源极端值，断言不崩溃/不挂起；
+doc_consistency：对 spec 与 prose 两侧陈述分别构造，任一被违反即记录；other：按其
+assertion 与 `no_fit_reason` 构造正反例）——新类别空绑定是显式兜底路径而非盲区
+（分类可不完备，处理机制闭包）。
 
 **Oracle 配套生成（D3a）— 测试用例与 oracle 同步产出，禁止无预期判读**：
 1. 每个脚本 docstring 必须有 `Oracle:` 行（紧跟 `Attack:` 行）：一行预期行为声明，如 `Oracle: 删除后 exists → 404 (constraint xxxx_001)`——预期须与所测约束的 assertion 对齐
 2. 判定必须"先声明预期、再比对实测"：优先用 runtime 判定 helpers（`expect_rejected` / `expect_records` / `judge_schema_attack`）；手写判定必须显式 expected vs actual 比对
 3. ⛔ 禁止模糊判读："2xx 即成功/即异常"的裸 status 检查、无预期 print 后人工判，均按判读粗糙打回（S3 两案实测教训）
+
+## 通用测试原则（G1–G10，2026-08-30 明文化）
+
+> 上文 D2 段所称"通用测试原则正反覆盖 / 基本原则构造"由以下 10 条构成。
+> 全部收拢自本规范既有段落与 runtime 实现——**不新增机制**（唯 G6 由实战惯例升格为明文）。
+> 每条括注出处；gate 与 auditor 按各出处既有机制检查，本节不设新检查器。
+
+**对象（攻什么）**
+- **G1 契约锚定**：每个测试挂唯一约束锚（constraint_id / unit_ref），目标从契约取，不发明；`Attack:` 行必须可对账。〔出处：契约驱动核心 + 强制输出要求 §5〕
+- **G2 DB 中立**：路径/字段/端口/响应键一律从速查表 + contract 推导，禁止硬编码；把当前 target 换成任意其他 target，脚本构造逻辑仍应成立。〔出处：契约驱动核心 + 通用性红线〕
+- **G3 规避与泛化**：威胁模型已声明的 by-design 行为跳过并标注（`SKIPPED: by-design per threat_model`）；同形态参数族泛化覆盖，不只测已报案例。〔出处：威胁模型消费 §3 + Shape 泛化 §5〕
+
+**构造（怎么造）**
+- **G4 正反成对**：正面 = 承诺行使（含边界闭包：min/max 本身必须被接受），反面 = 承诺挑战（按类别判据构造）；两面共享 setup、缺一不可——只有反面没有正面时，约束本身可能为假，攻击无从谈起。〔出处：D2 段 + attack-boundary 策略 1 边界矩阵〕
+- **G5 优雅分型**：反面 oracle 按违规形态分型，不搞"应拒绝"一刀切——该拒不拒 = Type1_IllegalSuccess；崩溃/挂起/5xx = Type3_RuntimeFailure；状态不对账 = Type4_StateLogicViolation；"拒绝且诊断清晰" = 非缺陷。〔出处：attack-boundary 策略 1/6/7 断言逻辑〕
+- **G6 变异可证**：序列反面的变异点必须在脚本 Rationale 中论证破坏性（为何此变异最易破坏该不变量：时序/边界/重复/恢复）。〔出处：R22 state_scroll_01 实例惯例，2026-08-30 升格为明文〕
+
+**判定（怎么判）**
+- **G7 oracle 先行**：`Oracle:` 行先于执行存在，预期与所测 assertion 对齐且精确可证伪；裸 status 检查与退化措辞（"应失败/应异常"）按判读粗糙打回。〔出处：D3a + spec-grounded oracle discipline〕
+- **G8 三分隔离**：verdict 只有三出口——DEFECT_FOUND / NO_DEFECT / SCRIPT_ERROR；setup 失败与传输失败不得产生缺陷结论，传输失败必须 `/healthz` 复核存活后才可判 Type3。〔出处：scripts/runtime 判定 helpers + classify_transport 惯例〕
+- **G9 处置一致**：同族参数处置不一致、同参数跨接口面不对称 = 缺陷信号，无需契约背书（契约明示的面间差异除外）。〔出处：chain-auditor 机械规则 5/6 的攻击侧镜像〕
+
+**收工（何时停）**
+- **G10 覆盖收工**：适用 (策略/模式 × 约束/端点) 组合覆盖完即收工；无适用目标如实报告不硬造；本轮覆盖清单写进 docstring `Attack:` 行供统计对账。〔出处：强制输出要求 §1/§5〕
 
 ---
 
