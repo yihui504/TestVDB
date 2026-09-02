@@ -7,8 +7,16 @@ import pytest
 
 from _validate_contract import (
     check_tier_consistency,
+    classify_constraint,
     TIER_GROUP_NAMES,
 )
+
+
+def _doccons(assertion="doc-internal conflict: spec says 10000, prose says 20000 "
+                        "— behavior follows implementation, either side may be violated",
+             cid="qdrant_doccons_indexing_threshold_001"):
+    return {"constraint_id": cid, "description": "conflict", "assertion": assertion,
+            "evidence_tier": "explicit", "type": "doc_consistency"}
 
 
 def _constraint(tier="explicit", desc="limit must be positive", cid="qdrant_range_search_001"):
@@ -123,3 +131,45 @@ def test_group_names_cover_all_six():
         "type_constraints", "range_constraints", "state_constraints",
         "resource_bound_constraints", "doc_consistency_constraints", "other_constraints",
     }
+
+
+# ---- doc_consistency 双源模式（任一冲突侧命中即支持）----
+
+def test_doccons_one_side_found_passes():
+    """双源冲突断言：source 只含一侧数值(10000)→ EXPLICIT,不误伤。"""
+    c = _doccons()
+    label, _ = classify_constraint(c, "the default of indexing_threshold is 10000 here",
+                                   None, allow_partial_numeric=True)
+    assert label == "EXPLICIT"
+
+
+def test_doccons_other_side_found_passes():
+    """另一侧数值(20000)在 source → EXPLICIT。"""
+    c = _doccons()
+    label, _ = classify_constraint(c, "reading back shows 20000 in this doc", None,
+                                   allow_partial_numeric=True)
+    assert label == "EXPLICIT"
+
+
+def test_doccons_all_numeric_missing_drops():
+    """两侧数值都不在 source → DROP(纯编造)。"""
+    c = _doccons()
+    label, reason = classify_constraint(c, "no numbers in this source at all", None,
+                                        allow_partial_numeric=True)
+    assert label == "DROP"
+    assert "全部数值" in reason
+
+
+def test_strict_mode_still_drops_partial_miss():
+    """非 doc_consistency(默认严格模式)行为不变:缺任一数值仍 DROP。"""
+    c = _doccons()  # 含 10000+20000
+    label, _ = classify_constraint(c, "default is 10000 only", None,
+                                   allow_partial_numeric=False)
+    assert label == "DROP"
+
+
+def test_doccons_unreachable_stays_neutral():
+    """source 不可达 → UNVERIFIED(中性),doc_consistency 同样不误伤。"""
+    c = _doccons()
+    label, _ = classify_constraint(c, None, None, allow_partial_numeric=True)
+    assert label == "UNVERIFIED"

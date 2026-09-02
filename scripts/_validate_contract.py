@@ -10,7 +10,7 @@ Checks:
 1b. evidence_tier 一致性（枚举 {explicit, inferred} + inferred: 前缀 + explicit 反向漂移，R16 补洞 2026-09-02）
 2. CRUD 端点覆盖率 ≥ 90%
 3. 每条 constraint source_url 真包含 assertion 关键短语（支持 github + 文档站 + 本地 doc_bundle；
-   v3.4 组覆盖 resource_bound/other；doc_consistency 双源语义除外，留白）
+   v3.4 六组全覆盖；doc_consistency 双源模式=任一冲突侧命中即支持）
 4. 编造下限检测（regex `param >= 1` 但 source 只有 default 无 min）
 5. DROP 比例 > 20% → 整 contract 不合格
 
@@ -206,8 +206,14 @@ def check_crud_coverage(contract: dict) -> dict:
 
 
 def classify_constraint(constraint: dict, source_text: str | None,
-                        doc_bundle_dir: Path | None) -> tuple[str, str]:
-    """返回 (label, reason). label ∈ {EXPLICIT, INFERRED, DROP, UNVERIFIED}."""
+                        doc_bundle_dir: Path | None,
+                        allow_partial_numeric: bool = False) -> tuple[str, str]:
+    """返回 (label, reason). label ∈ {EXPLICIT, INFERRED, DROP, UNVERIFIED}.
+
+    allow_partial_numeric=True（doc_consistency 用）：断言是 "spec says X / prose says Y"
+    双源冲突，两侧数值分属两个 source，gate 只取得到其一（source_url 单字段）；
+    **任一冲突侧在 source 中找到即支持**，全部缺失才算编造。
+    """
     cid = constraint.get("constraint_id", "") or ""
     a = (constraint.get("assertion", "") or "").lower()
     src_url = constraint.get("source_url", "") or ""
@@ -221,15 +227,17 @@ def classify_constraint(constraint: dict, source_text: str | None,
         if not EXPLICIT_BOUND_WORDS.search(source_text) and DEFAULT_WORD.search(source_text):
             return "DROP", f"编造下限: assertion='{a.strip()[:60]}' 但 source 只有 default 无 min"
 
-    # 数值关键词必须全在 source 找到
+    # 数值关键词核验：普通约束须全在 source 找到；doc_consistency 任一命中即支持
     kws = extract_keywords(constraint)
     numeric = [kw for kw in kws if kw.isdigit()]
     if numeric:
         missing = [kw for kw in numeric if kw not in source_text]
-        if missing:
+        if missing and not allow_partial_numeric:
             return "DROP", f"数值关键词在 source 找不到: {missing}"
+        if allow_partial_numeric and len(missing) == len(numeric):
+            return "DROP", f"双源冲突断言的全部数值在 source 找不到: {numeric}"
 
-    return "EXPLICIT", "数值关键词全找到 或 非数值约束"
+    return "EXPLICIT", "数值关键词全找到(或任一冲突侧) 或 非数值约束"
 
 
 def main() -> int:
@@ -269,16 +277,20 @@ def main() -> int:
     constraints_root = contract.get("constraints", {}) or {}
     drop_count = 0
     total = 0
-    # v3.4 组覆盖（2026-09-02 补洞）：resource_bound/other 纳入 source 核验。
-    # doc_consistency 除外：其断言是 "spec says X / prose says Y" 双源冲突，数值分属两个 source，
-    # 单源数值关键词模型会误伤合法约束 — 需独立设计，故留白不纳入。
-    for gname in ["type_constraints", "range_constraints", "state_constraints",
-                  "resource_bound_constraints", "other_constraints"]:
+    # v3.4 组覆盖（2026-09-02 补洞）：六组全纳入 source 核验。
+    # doc_consistency 用双源模式（任一冲突侧命中即支持）——见 classify_constraint。
+    _SOURCE_VERIFY_GROUPS = (
+        "type_constraints", "range_constraints", "state_constraints",
+        "resource_bound_constraints", "doc_consistency_constraints", "other_constraints",
+    )
+    for gname in _SOURCE_VERIFY_GROUPS:
         for c in constraints_root.get(gname, []) or []:
             total += 1
             src_url = c.get("source_url", "") or ""
             source_text = get_source_text(src_url, doc_bundle) if src_url else None
-            label, reason = classify_constraint(c, source_text, doc_bundle)
+            label, reason = classify_constraint(
+                c, source_text, doc_bundle,
+                allow_partial_numeric=(gname == "doc_consistency_constraints"))
             classifications.append({
                 "constraint_id": c.get("constraint_id") or c.get("assertion_id", ""),
                 "group": gname,
