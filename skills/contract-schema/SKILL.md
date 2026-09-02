@@ -1,18 +1,18 @@
 ---
 name: contract-schema
-description: TestVDB 结构化契约 JSON Schema 参考。当 Contract Formalizer Agent 或相关 Agent 需要了解契约格式时自动加载。
+description: TestVDB structured-contract JSON Schema reference. Auto-loaded when the Contract Formalizer agent or related agents need the contract format.
 version: 1.0.0
 ---
 
 # Contract JSON Schema Reference
 
-## 触发条件
+## Trigger conditions
 
-Contract Formalizer Agent 生成契约 JSON 时自动加载。非用户手动触发。
+Auto-loaded when the Contract Formalizer agent generates contract JSON. Not user-triggered.
 
 ## Schema Version: 1.0
 
-### _passport 字段 (v2.0 新增)
+### The _passport field (added v2.0)
 
 ```json
 {
@@ -21,7 +21,7 @@ Contract Formalizer Agent 生成契约 JSON 时自动加载。非用户手动触
     "contract_hash": "sha256:<hex_digest>",
     "contract_hash_algorithm": "sha256",
     "source": {
-      "doc_urls": ["<url>", ...],
+      "doc_urls": ["<url>", "..."],
       "doc_version": "<version>",
       "crawl_method": "crawl4ai|webfetch|manual",
       "crawled_at": "<ISO 8601>"
@@ -43,43 +43,43 @@ Contract Formalizer Agent 生成契约 JSON 时自动加载。非用户手动触
 }
 ```
 
-**Hash 计算规则**：
-- 输入 = 排除 `_passport` 字段后的完整 JSON（按 key 排序，无空格）
-- 算法 = sha256
-- 格式 = `sha256:<hex_digest>`
+**Hash computation rules**:
+- input = the complete JSON excluding the `_passport` field (keys sorted, no whitespace)
+- algorithm = sha256
+- format = `sha256:<hex_digest>`
 
-**验证方法**：
+**Verification method**:
 ```bash
 python scripts/passport_verify.py <path/to/structured_contract.json>
 ```
 
-## 顶层结构
+## Top-level structure
 
 ```json
 {
   "target": "<string> - milvus/qdrant/weaviate/pgvector",
-  "version": "<string> - 目标版本",
-  "cache_ttl_hours": "<integer> - 契约缓存有效期（小时），默认 168（7天）",
-  "cached_at": "<string> - 契约生成时间（ISO 8601），用于计算缓存是否过期",
-  "sdk": { ... },
-  "docker": { ... },
-  "api_endpoints": [ ... ],
+  "version": "<string> - target version",
+  "cache_ttl_hours": "<integer> - contract cache lifetime (hours), default 168 (7 days)",
+  "cached_at": "<string> - contract generation time (ISO 8601), used to compute cache expiry",
+  "sdk": { "..." : "..." },
+  "docker": { "..." : "..." },
+  "api_endpoints": [ "..." ],
   "constraints": {
-    "type_constraints": [ ... ],
-    "range_constraints": [ ... ],
-    "state_constraints": [ ... ],
-    "resource_bound_constraints": [ ... ],
-    "doc_consistency_constraints": [ ... ],
-    "other_constraints": [ ... ]
+    "type_constraints": [ "..." ],
+    "range_constraints": [ "..." ],
+    "state_constraints": [ "..." ],
+    "resource_bound_constraints": [ "..." ],
+    "doc_consistency_constraints": [ "..." ],
+    "other_constraints": [ "..." ]
   },
-  "assertions": [ ... ],
-  "behavioral_contracts": [ ... ],
-  "state_invariants": [ ... ],
-  "data_types": [ ... ]
+  "assertions": [ "..." ],
+  "behavioral_contracts": [ "..." ],
+  "state_invariants": [ "..." ],
+  "data_types": [ "..." ]
 }
 ```
 
-## 端点字段
+## Endpoint fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -89,7 +89,7 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
 | description | string | No | Human-readable description |
 | parameters | array | No | Parameter definitions |
 
-## 约束字段
+## Constraint fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -97,13 +97,13 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
 | endpoint | string | Yes | Referenced endpoint path |
 | description | string | Yes | Human-readable constraint |
 | assertion | string | Yes | Machine-readable check |
-| type | string | Yes | `type_constraint/range_constraint/state_constraint/resource_bound/doc_consistency/other`（后三类=规则 2.9 新约束类别；other=兜底类，装不进已知类的文档承诺） |
-| no_fit_reason | string | other 类必填 | 一句话指明装不进已知类的原因（禁把 other 当偷懒出口；规则 2.9） |
-| level | string | Yes | `endpoint` / `system`（v3.4 规则 2.7）：单请求可观测 → endpoint；跨端点/跨请求序列 → system（other 类按本条正常分级） |
-| bound_strategies | array | No | 预绑定 strategy_id 清单——`scripts/bind_strategies.py` 确定性写入（v3.4 D2），formalizer 不填 |
-| evidence_tier | string | Yes | `explicit` / `inferred`（ADR-0008 两档） |
+| type | string | Yes | `type_constraint/range_constraint/state_constraint/resource_bound/doc_consistency/other` (the last three = Rule 2.9's new constraint classes; other = the fallback class for documentation promises fitting no known class) |
+| no_fit_reason | string | required for the other class | one sentence stating why it fits no known class (treating other as a lazy outlet is forbidden; Rule 2.9) |
+| level | string | Yes | `endpoint` / `system` (v3.4 Rule 2.7): observable in a single request → endpoint; spans endpoints / crosses requests → system (the other class is graded normally per this rule) |
+| bound_strategies | array | No | pre-bound strategy_id list — written deterministically by `scripts/bind_strategies.py` (v3.4 D2); the formalizer does not fill it |
+| evidence_tier | string | Yes | `explicit` / `inferred` (ADR-0008's two grades) |
 
-## 断言字段
+## Assertion fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -112,10 +112,10 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
 | description | string | Yes | Human-readable |
 | category | string | Yes | `type_check/range_check/state_check/behavioral` |
 | expected_behavior | string | Yes | Expected outcome |
-| evidence_tier | string | Yes | `explicit` / `inferred`（ADR-0008 两档） |
+| evidence_tier | string | Yes | `explicit` / `inferred` (ADR-0008's two grades) |
 | defect_type_if_violated | string | No | Type1-4 classification |
 
-## 置信度指南
+## Confidence guide
 
 | Score | Meaning |
 |-------|---------|

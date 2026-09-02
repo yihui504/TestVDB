@@ -1,16 +1,16 @@
 ---
 name: docker-templates
-description: TestVDB Docker 容器模板参考。当 Executor Agent 需要启动目标向量数据库容器时自动加载。
+description: TestVDB Docker container template reference. Auto-loaded when the Executor agent needs to start target vector-database containers.
 version: 1.0.0
 ---
 
 # Docker Templates Reference
 
-## 触发条件
+## Trigger conditions
 
-Docker Executor Agent 需要启动目标 DB 容器时自动加载。非用户手动触发。
+Auto-loaded when the Docker Executor agent needs to start the target DB container. Not user-triggered.
 
-## 模板概览
+## Template overview
 
 | Template | File | Containers | Complexity |
 |----------|------|-----------|------------|
@@ -19,9 +19,9 @@ Docker Executor Agent 需要启动目标 DB 容器时自动加载。非用户手
 | Weaviate | `docker/weaviate.yml` | 1 | Low |
 | PGVector | `docker/pgvector.yml` | 1 | Low |
 
-## 版本覆盖
+## Version overrides
 
-通过环境变量覆盖默认版本：
+Override the default versions via environment variables:
 
 ```bash
 export MILVUS_VERSION="v2.4.0"
@@ -30,9 +30,9 @@ export WEAVIATE_VERSION="1.25.0"
 export PGVECTOR_VERSION="pg17"
 ```
 
-## 端口配置
+## Port configuration
 
-通过环境变量覆盖默认端口：
+Override the default ports via environment variables:
 
 ```bash
 export MILVUS_PORT="19530"
@@ -44,7 +44,7 @@ export WEAVIATE_GRPC_PORT="50051"
 export PGVECTOR_PORT="5432"
 ```
 
-## 启动命令
+## Startup commands
 
 ```bash
 # Milvus (most complex — requires etcd + MinIO first)
@@ -64,7 +64,7 @@ docker compose -f docker/pgvector.yml up -d
 # Wait ~10s
 ```
 
-## 健康检查
+## Health checks
 
 | DB | Health Endpoint | Expected |
 |----|----------------|----------|
@@ -73,7 +73,7 @@ docker compose -f docker/pgvector.yml up -d
 | Weaviate | `curl -f http://localhost:8080/v1/.well-known/ready` | —, exit 0 |
 | PGVector | `pg_isready -U postgres -d testvdb` | accepting connections |
 
-## 启动超时
+## Startup timeouts
 
 | DB | Max Wait | Notes |
 |----|----------|-------|
@@ -82,7 +82,7 @@ docker compose -f docker/pgvector.yml up -d
 | Weaviate | 30s | Single container |
 | PGVector | 20s | PostgreSQL initialization |
 
-## 清理
+## Cleanup
 
 ```bash
 # Normal cleanup
@@ -92,9 +92,9 @@ docker compose -f docker/{db}.yml down -v
 docker rm -f testvdb-{db}-standalone testvdb-{db}-etcd testvdb-{db}-minio
 ```
 
-## SDK 隔离
+## SDK isolation
 
-每个 DB 容器只安装其对应 SDK，禁止交叉污染：
+Each DB container installs only its corresponding SDK; cross-contamination is forbidden:
 
 | DB | SDK | Install Command |
 |----|-----|----------------|

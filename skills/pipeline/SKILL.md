@@ -1,97 +1,97 @@
 ---
 name: pipeline
-description: TestVDB 缺陷挖掘流水线 SOP。当 Orchestrator 编排缺陷挖掘流水线时自动加载。
+description: TestVDB defect-mining pipeline SOP. Auto-loaded when the Orchestrator coordinates the defect-mining pipeline.
 version: 1.1.0
 ---
 
 # TestVDB Pipeline Skill
 
-## 触发条件
+## Trigger conditions
 
-当 Orchestrator 编排缺陷挖掘流水线时自动加载。非用户手动触发。
+Auto-loaded when the Orchestrator coordinates the defect-mining pipeline. Not user-triggered.
 
-## 流水线 SOP
+## Pipeline SOP
 
-### Phase 1: 知识获取
+### Phase 1: Knowledge acquisition
 
-1. Orchestrator 派 Knowledge Extractor Agent
-2. 优先使用 Crawl4AI 本地 Docker 服务抓取文档（`python scripts/crawl_fetch.py`）
-3. 降级使用 WebSearch + WebFetch
-4. 提取端点、参数、约束
-5. 提取 SDK 版本和 Docker tags
-6. 输出 `raw_knowledge.json`（v3.4）+ `deployment_meta.json`
+1. The Orchestrator dispatches the Knowledge Extractor agent
+2. Prefer the Crawl4AI local Docker service for fetching documentation (`python scripts/crawl_fetch.py`)
+3. Fall back to WebSearch + WebFetch
+4. Extract endpoints, parameters, constraints
+5. Extract SDK versions and Docker tags
+6. Output `raw_knowledge.json` (v3.4) + `deployment_meta.json`
 
-### Phase 2: 契约形式化
+### Phase 2: Contract formalization
 
-1. Orchestrator 派 Contract Formalizer Agent
-2. 读取 `raw_knowledge.json`
-3. 按 JSON Schema 转换为结构化契约
-4. 生成 endpoint_registry（含 source_url, doc_version, doc_quote）
-5. 输出 `structured_contract.json`
-6. 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）
+1. The Orchestrator dispatches the Contract Formalizer agent
+2. Read `raw_knowledge.json`
+3. Convert to the structured contract per the JSON Schema
+4. Generate the endpoint_registry (with source_url, doc_version, doc_quote)
+5. Output `structured_contract.json`
+6. Contract gate checks (core CRUD endpoint coverage ≥ 90%)
 
-### Phase 3: 测试生成 (v2.0 Fan-Out)
+### Phase 3: Test generation (v2.0 fan-out)
 
-1. Orchestrator 并发派 Attack Trio（boundary + state + semantic）
-2. **v2.0 Fan-Out**：每个 Agent 使用 3 种 focus_profile 各派发一次（共 9 并发）
-   - priority_first: 优先高严重性约束
-   - coverage_gap: 优先低覆盖率端点
-   - rejection_pattern: 绕过已知驳回模式
-3. 每个 Agent 独立生成测试脚本（最多 30 个/Agent/profile/轮）
-3a. **v2.0 跨会话策略注入**：从 Strategy Registry 查询适用策略 → 注入 Attack Agent prompt
-    - 高 confidence (>0.7) 策略作为优先攻击模板（注：此为 strategy_registry 的历史表现统计分，非契约的 LLM confidence 自评——后者已删）
-    - 应用 migration_rules 中的 DB 特定适配规则
-    - `status=deprecated` 的策略不注入
-4. 注入 reflection_context + 跨会话策略（首轮无）
-5. 辩论 Stage 1：自动化审查（语法验证 + 约束验证 + 风险模式检查 + retry 子循环，ADR-0008：脚本去重已删）
-6. 通过脚本存入 `results/{target}/{version}/{timestamp}/script_*.py`
+1. The Orchestrator concurrently dispatches the Attack Trio (boundary + state + semantic)
+2. **v2.0 fan-out**: each agent is dispatched once per focus_profile, 3 profiles (9 concurrent total)
+   - priority_first: high-severity constraints first
+   - coverage_gap: low-coverage endpoints first
+   - rejection_pattern: route around known rejection patterns
+3. Each agent independently generates test scripts (at most 30 per agent/profile/round)
+3a. **v2.0 cross-session strategy injection**: query applicable strategies from the Strategy Registry → inject into the attack agent prompt
+    - high-confidence (>0.7) strategies serve as preferred attack templates (note: this is strategy_registry's historical performance score, not the contract's LLM confidence self-rating — the latter has been removed)
+    - apply the DB-specific adaptation rules in migration_rules
+    - strategies with `status=deprecated` are not injected
+4. Inject reflection_context + cross-session strategies (none in the first round)
+5. Debate Stage 1: automated review (syntax validation + constraint validation + risky-pattern checks + the retry sub-loop; ADR-0008: script dedup removed)
+6. Approved scripts are stored in `results/{target}/{version}/{timestamp}/script_*.py`
 
-### Phase 4: 沙箱执行
+### Phase 4: Sandboxed execution
 
-1. Executor 按 DB 选择 Docker Compose 模板
-2. 镜像 tag 预检 → 启动容器 → 健康检查
-3. 安装 SDK 依赖 → 在独立执行容器中运行脚本
-4. 收集结果（stdout/stderr/exit code/HTTP 响应/容器日志）
-5. **容器保持运行**（供后续 Reporter 复用）
+1. The executor picks the Docker Compose template per DB
+2. Image-tag pre-check → start containers → health check
+3. Install SDK dependencies → run the scripts in independent execution containers
+4. Collect results (stdout/stderr/exit code/HTTP responses/container logs)
+5. **Containers stay running** (for later reuse by the reporter)
 
-### Phase 5: 缺陷判定（ADR-0008 证据链双 Agent）
+### Phase 5: Defect adjudication (ADR-0008 evidence-chain duo)
 
-1. **候选提取**（extract_candidates.py，机械）：output_*.log 含 `VERDICT: DEFECT_FOUND` → candidates.jsonl
-2. **L1 机械闸门**（verify_live_l1.py，0 token）：杀 ~90% 历史假阳性模式，REFUTED 淘汰
-3. **evidence-builder 按候选并发 fan-out**（1 builder/候选）：
-   - step1 文档验证 + 执行证据审查 + 证据链追溯 → `evidence_chain/{defect_id}.json`
-   - step2 源码搜证（本地 clone Grep + 调用链追踪）
-   - 不做真伪判定，只写实证据
-4. **chain-auditor 单实例收口**（全部 builder .done 后）：完备性/一致性/自洽性三查 + 三视角聚合（契约/物理压倒行为优雅）→ `chain_verdicts.json`
+1. **Candidate extraction** (extract_candidates.py, mechanical): output_*.log containing `VERDICT: DEFECT_FOUND` → candidates.jsonl
+2. **L1 mechanical gate** (verify_live_l1.py, 0 tokens): kills ~90% of historical false-positive patterns; REFUTED eliminated
+3. **evidence-builder concurrent fan-out per candidate** (1 builder/candidate):
+   - step1 doc verification + execution-evidence review + chain tracing → `evidence_chain/{defect_id}.json`
+   - step2 source forensics (local clone Grep + call-chain tracing)
+   - no truth judgment; factual evidence only
+4. **chain-auditor single-instance close-out** (after all builders' .done): the completeness/consistency/self-consistency triple check + the perspective aggregation (contract/physical override behavioral elegance) → `chain_verdicts.json`
    - verdict ∈ {DEFECT, NOT_DEFECT, NEEDS_MORE_EVIDENCE}
-   - FP 判定必填 fp_evidence_source（doc/source/both/behavior）+ root_cause
-   - NEEDS_MORE_EVIDENCE 回 builder 补证一轮（最多 1 次），仍矛盾保守判 NOT_DEFECT
-5. **novelty 终判后置**到提交前（Phase 7 后）：NON_NOVEL 归档不删（archived/ + manifest.json）
+   - FP verdicts require fp_evidence_source (doc/source/both/behavior) + root_cause
+   - NEEDS_MORE_EVIDENCE goes back to the builder for one more evidence round (at most once); still contradictory → conservative NOT_DEFECT
+5. **novelty final ruling deferred** to pre-submission (after Phase 7): NON_NOVEL archived, not deleted (archived/ + manifest.json)
 
-### Phase 6: 报告生成
+### Phase 6: Report generation
 
-1. Reporter 执行 Pre-Submit Gate（100% 复现验证）
-2. 生成 defect-N.md（含 3-Ring 证据链 + 4 型缺陷分类）
-3. 生成自包含 MRE 脚本（不依赖 TestVDB 代码）
-4. 生成 summary.md
-5. 保存 session_metadata.json
+1. The reporter runs the Pre-Submit Gate (100% reproduction verification)
+2. Generate defect-N.md (with the 3-Ring evidence chain + the four-type defect classification)
+3. Generate self-contained MRE scripts (no dependency on TestVDB code)
+4. Generate summary.md
+5. Save session_metadata.json
 
-## 迭代循环
+## Iteration loop
 
-- 每轮结束生成 reflection_context（key_learnings + rejection_patterns + high_value_endpoints + exhausted_endpoints）
-- 注入下一轮 Attack Agents
-- 僵局检测：连续 5 轮无新缺陷 → 重新搜索文档 → 重新评估候选 → 调整策略
-- 终止条件：僵局 / 覆盖率 ≥ 95% / max_rounds 达到 / min_defects 达到
+- Each round's end generates reflection_context (key_learnings + rejection_patterns + high_value_endpoints + exhausted_endpoints)
+- Injected into the next round's attack agents
+- Stalemate detection: 5 consecutive rounds with no new defects → re-search documentation → re-evaluate candidates → adjust strategies
+- Termination conditions: stalemate / coverage ≥ 95% / max_rounds reached / min_defects reached
 
-## Agent 间通信
+## Inter-agent communication
 
-- 所有 Agent 通过文件系统通信（structured_contract.json, pipeline_state.json, debate_logs/*.json）
-- 采用 `.done` 标记文件确保写入原子性
-- Orchestrator 检查 `.done` 文件而非直接检查输出文件
+- All agents communicate through the filesystem (structured_contract.json, pipeline_state.json, debate_logs/*.json)
+- `.done` marker files ensure write atomicity
+- The orchestrator checks `.done` files rather than the output files directly
 
-## 容器生命周期
+## Container lifecycle
 
-- Executor 启动容器，执行完成后**不清理**
-- Judge（evidence）复用运行中容器做复现验证
-- Reporter 复用运行中容器做 Pre-Submit Gate
-- Orchestrator 在每轮结束/会话结束时统一清理
+- The executor starts containers and does **not** clean up after execution
+- The judge (evidence) reuses running containers for reproduction verification
+- The reporter reuses running containers for the Pre-Submit Gate
+- The orchestrator cleans up uniformly at each round's end / session end
