@@ -364,7 +364,7 @@ If the output is 0 (none of the 3 agents produced any script file), the sub-agen
 
 **Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EXECUTION --phase-data '{"DEBATE_S1": {"approved_count": N, "rejected_count": M}}'`
 
-Collect the test scripts produced by the three agents (boundary + state + semantic) → the Orchestrator **runs the automated review itself** (not a peer review; no sub-agents dispatched).
+Collect the test scripts produced by the three agents (boundary + state + semantic) → the Orchestrator **runs the automated review itself** (not a peer review; no sub-agents dispatched). This is orchestration/coordination work and does not contradict 8b's ban on performing attack generation yourself — review is not substantive work like attack-script generation/execution.
 
 **Automated review steps**:
 1. **Collect scripts**: read all script files produced by the Attack Agents, marked by source boundary/state/semantic
