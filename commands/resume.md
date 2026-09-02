@@ -1,35 +1,35 @@
 ---
-description: 发现未完成的挖掘运行并续跑
+description: Discover unfinished mining runs and resume them
 allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 ---
 
 # /testvdb:resume
 
-发现未完成的挖掘运行（含 Turn1 setup 中断），查询进度并续跑。
+Discover unfinished mining runs (including Turn-1 setup interruptions), query progress, and resume.
 
-> **派发纪律**：续跑实质工作仍经 `Agent(subagent_type=...)`，禁用 `TaskCreate`（详见 `commands/mine.md`「派发工具纪律」）。
+> **Dispatch discipline**: substantive resumed work still goes through `Agent(subagent_type=...)`; `TaskCreate` is disabled (see `commands/mine.md` "dispatch tool discipline").
 
 ## Usage
 
 ```
-/testvdb:resume                  # 列出未完成运行，对话里选一个续
-/testvdb:resume <session_id>     # 直接续指定 session
+/testvdb:resume                  # list unfinished runs; pick one in conversation
+/testvdb:resume <session_id>     # resume the specified session directly
 ```
 
-## 执行流程
+## Execution flow
 
-### 形态 A: 无参 — 列出未完成，选一个续
+### Form A: no argument — list unfinished, pick one
 
-1. 列出未完成运行：
+1. List unfinished runs:
 ```bash
 py -3.12 scripts/session_index.py --incomplete
 ```
-2. 若无未完成 → 输出"无未完成运行"，结束。
-3. 若有 → 输出列表 + 提示用户："回复 `/testvdb:resume <session_id>` 续跑其中一个"。
+2. If none → output "no unfinished runs", end.
+3. If any → output the list + prompt the user: "reply `/testvdb:resume <session_id>` to resume one".
 
-### 形态 B: 带 session_id — 续指定
+### Form B: with session_id — resume the specified session
 
-1. 定位 session_dir（复用 `_entry_dispatch.find_by_session_id`，避免重复 glob）：
+1. Locate session_dir (reuses `_entry_dispatch.find_by_session_id`, avoiding duplicate globbing):
 ```bash
 py -3.12 -c "
 import sys; sys.path.insert(0,'scripts')
@@ -37,7 +37,7 @@ import _entry_dispatch as ed
 print(ed.find_by_session_id(ed._plugin_root(), '{session_id}') or 'NOT_FOUND')
 "
 ```
-2. 设 `.resume_target` 标记（供后续 `/mine` 兜底，防重复）：
+2. Set the `.resume_target` marker (for later `/mine` fallback; prevents duplicates):
 ```bash
 py -3.12 -c "
 import sys; sys.path.insert(0,'scripts')
@@ -45,14 +45,14 @@ import _entry_dispatch as ed
 ed.write_resume_target(ed._plugin_root(), '{session_dir}', '{target}', '{version}')
 "
 ```
-3. 重建上下文：
+3. Rebuild context:
 ```bash
 PYTHONIOENCODING=utf-8 py -3.12 scripts/reconstruct_context.py --session-dir "{session_dir}" --format text
 ```
-4. 按 reconstruct 输出的 `next_action`（resume_from_phase / skip_phases）执行 [commands/mine.md 的 Loop Turn: Resume Round](mine.md#loop-turn-resume-round) 续跑流程：reconstruct Phase 0 已提供断点，主进程执行该轮 next_action（派发 Attack/Judge/Reporter 等按 mine.md SOP），**完成后主动结束当前 turn**——`pipeline_gate.py` Stop hook 检测 `phase != DONE` → `exit 2` → harness 自动开新 turn 继续后续轮（与正常 mine Loop Turn 一致，无需手动驱动）。
+4. Per the reconstruct output's `next_action` (resume_from_phase / skip_phases), execute the resume flow of [commands/mine.md's Loop Turn: Resume Round](mine.md#loop-turn-resume-round): reconstruct Phase 0 has already provided the breakpoint; the main process executes that round's next_action (dispatching Attack/Judge/Reporter etc. per the mine.md SOP), and **actively ends the current turn when done** — the `pipeline_gate.py` Stop hook detects `phase != DONE` → `exit 2` → the harness automatically opens a new turn to continue subsequent rounds (identical to the normal mine loop turn; no manual driving needed).
 
-## 约束
+## Constraints
 
-- resume 只做"发现 + 选择 + 设标记 + reconstruct + 转交 mine 续跑"，零新状态机。
-- 续跑引擎 = 现有 mine Loop Turn（reconstruct_context Phase 0 + 断点续）。
-- 不处理 `phase=DONE` 的已完成会话（DONE 续挖非目标，见 spec 非目标；想接着挖 = 新 `/mine`，experience_handoff 传经验）。
+- resume only does "discover + select + set marker + reconstruct + hand off to mine"; zero new state machines.
+- The resume engine = the existing mine loop turn (reconstruct_context Phase 0 + breakpoint resume).
+- Sessions with `phase=DONE` are not handled (resuming DONE sessions is a non-goal, see spec non-goals; to keep mining = a new `/mine`, with experience passed via experience_handoff).

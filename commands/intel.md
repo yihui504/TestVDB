@@ -1,29 +1,29 @@
 ---
-description: 单独采集指定 DB 的历史 Issue/Commit 情报并构建威胁模型
+description: Collect historical Issue/Commit intelligence for a specified DB and build the threat model
 allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 ---
 
-# /testvdb:intel — 情报采集 + 威胁建模
+# /testvdb:intel — intelligence collection + threat modeling
 
-单独为指定向量数据库采集历史 Issue/Commit 情报，构建威胁模型与认知盲点（`threat_model.json`）。**只跑情报**，不跑契约/攻击/执行。用于刷新过期情报、跨 DB 迁移前更新威胁模型、单独调试 threat-modeler。
+Independently collect historical Issue/Commit intelligence for a specified vector database, building the threat model and cognitive blindspots (`threat_model.json`). **Runs intelligence only**; no contract/attack/execution. Used for refreshing expired intelligence, updating threat models before cross-DB migration, and debugging threat-modeler in isolation.
 
-> 情报是 **per-target**（不限 version）——同一 DB 的所有版本共享一份 `intelligence/{target}/threat_model.json`。
+> Intelligence is **per-target** (not version-bound) — all versions of the same DB share one `intelligence/{target}/threat_model.json`.
 
 ---
 
-## ⚠️ 架构约束（CRITICAL — 技术原因）
+## ⚠️ Architecture constraint (CRITICAL — for technical reasons)
 
-**与 `/testvdb:mine` 相同：主进程永远只做编排，不做执行。**
+**Same as `/testvdb:mine`: the main process only ever orchestrates; it never executes.**
 
-| 禁止事项 | 正确做法 |
+| Forbidden | Correct approach |
 |---------|---------|
-| ❌ 自己爬取 GitHub Issues/Commits | ✅ `Agent(subagent_type="testvdb:issue-miner")` |
-| ❌ 自己分类/提取 bug shape | ✅ `Agent(subagent_type="testvdb:bug-shape-extractor")` |
-| ❌ 自己构建威胁模型 | ✅ `Agent(subagent_type="testvdb:threat-modeler")` |
+| ❌ Crawling GitHub Issues/Commits yourself | ✅ `Agent(subagent_type="testvdb:issue-miner")` |
+| ❌ Classifying/extracting bug shapes yourself | ✅ `Agent(subagent_type="testvdb:bug-shape-extractor")` |
+| ❌ Building the threat model yourself | ✅ `Agent(subagent_type="testvdb:threat-modeler")` |
 
-主进程只使用 `Read`/`Write`/`Bash`(验证)/`Grep`/`Glob`/`Agent` 做编排。
+The main process uses only `Read`/`Write`/`Bash`(verification)/`Grep`/`Glob`/`Agent` to orchestrate.
 
-> **派发纪律**：派 `testvdb:*` 子 Agent **只用 `Agent(subagent_type=...)`**；❌ 禁用 `TaskCreate`（不识别 plugin agent_type → `Spawning agent: unknown`，任务永久 `pending` 幽灵条目，`TaskStop` 删不掉，背后无真实 agent 执行）。`Agent` 是核心内置工具，直接调用（`ToolSearch` 搜不到 ≠ 不可用）。详见 `commands/mine.md`「派发工具纪律」。
+> **Dispatch discipline**: dispatching `testvdb:*` sub-agents uses **only `Agent(subagent_type=...)`**; ❌ `TaskCreate` is disabled (it does not recognize plugin agent_types → `Spawning agent: unknown`, tasks stay `pending` forever as ghost entries that `TaskStop` cannot delete, with no real agent behind them). `Agent` is a core built-in tool; call it directly (`ToolSearch` not finding it ≠ unavailable). See `commands/mine.md` "dispatch tool discipline".
 
 ---
 
@@ -37,24 +37,24 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, `pgvector`, `meilisearch`, 或 `chroma` |
-| `--max-issues N` | No | settings.json `intelligence.max_issues`（默认 500） | 采集最近 N 条 issue + 已合并 PR |
-| `--max-commits N` | No | settings.json `intelligence.max_commits`（默认 200） | 采集最近 N 个 commit |
-| `--force` | No | — | 强制重新采集，忽略缓存 |
+| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, `pgvector`, `meilisearch`, or `chroma` |
+| `--max-issues N` | No | settings.json `intelligence.max_issues` (default 500) | Collect the most recent N issues + merged PRs |
+| `--max-commits N` | No | settings.json `intelligence.max_commits` (default 200) | Collect the most recent N commits |
+| `--force` | No | — | Force recollection, ignoring the cache |
 
 ---
 
-## 执行步骤
+## Execution steps
 
-### Step 1: 解析参数 + 前置检查
+### Step 1: Parse arguments + preflight
 
-- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}
-- 解析 `max_issues`、`max_commits`、`force`
-- 确定 `PROJECT_ROOT`: `git rev-parse --show-toplevel 2>/dev/null || pwd`
-- 前置检查：`python scripts/preflight.py`
-- 若 `intelligence.enabled=false`（settings.json）→ 提示"情报功能未启用"并退出
+- Verify `target` ∈ {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}
+- Parse `max_issues`, `max_commits`, `force`
+- Determine `PROJECT_ROOT`: `git rev-parse --show-toplevel 2>/dev/null || pwd`
+- Preflight: `python scripts/preflight.py`
+- If `intelligence.enabled=false` (settings.json) → print "intelligence feature not enabled" and exit
 
-### Step 2: 读取 intelligence 配置（CLI 参数覆盖默认）
+### Step 2: Read intelligence settings (CLI arguments override defaults)
 
 ```bash
 python -c "
@@ -68,50 +68,50 @@ print(f'INTEL_TTL={c.get(\"cache_ttl_hours\", 720)}')
 "
 ```
 
-> **CLI 覆盖**：`--max-issues N` → `INTEL_MI=N`；`--max-commits N` → `INTEL_MC=N`。未传则用 settings 默认值。
+> **CLI overrides**: `--max-issues N` → `INTEL_MI=N`; `--max-commits N` → `INTEL_MC=N`. When not passed, use the settings defaults.
 
-### Step 3: 缓存检查（D 判断，批次 D）
+### Step 3: Cache check (D-judgment, batch D)
 
-检查 `intelligence/{target}/threat_model.json` 是否可复用：
+Check whether `intelligence/{target}/threat_model.json` is reusable:
 
 ```bash
 python scripts/check_cache.py intel "intelligence/{target}" {target} --ttl {INTEL_TTL}
 ```
 
-- **USABLE**（exit 0）且**未传 `--force`** → 跳到 [Step 7: 输出](#step-7-输出)（报告"缓存有效，跳过采集"）
-- **STALE / INVALID / MISSING** 或 **传了 `--force`** → 继续 Step 4 重新采集
+- **USABLE** (exit 0) and **no `--force`** → jump to [Step 7: Output](#step-7-output) (report "cache valid, collection skipped")
+- **STALE / INVALID / MISSING** or **`--force` given** → continue to Step 4 to recollect
 
-> TTL 默认 720h（30 天）。
+> TTL defaults to 720h (30 days).
 
-### Step 4: 派 issue-miner
+### Step 4: Dispatch issue-miner
 
 ```
 Agent(subagent_type="testvdb:issue-miner",
-  description="采集 {target} 历史 Issues 和 Commits",
-  prompt="按照 agents/issue-miner.md 规范，为 {target} 采集历史 Issues 和已合并修复 PR。输入参数: target={target}, version=*, intelligence_dir=intelligence/{target}/, time_window_months={INTEL_TW}, max_issues={INTEL_MI}, max_commits={INTEL_MC}。将结果写入 intelligence/{target}/issue_corpus.json 和 intelligence/{target}/commit_corpus.json。")
+  description="Collect {target} historical Issues and Commits",
+  prompt="Per the agents/issue-miner.md spec, collect historical Issues and merged fix PRs for {target}. Input parameters: target={target}, version=*, intelligence_dir=intelligence/{target}/, time_window_months={INTEL_TW}, max_issues={INTEL_MI}, max_commits={INTEL_MC}. Write the results to intelligence/{target}/issue_corpus.json and intelligence/{target}/commit_corpus.json.")
 ```
 
-> `version=*` 表示采集全版本历史（情报是 per-target，不限版本）。若失败 → 记录警告，跳过 Step 5/6。
+> `version=*` means collecting all-version history (intelligence is per-target, not version-bound). On failure → log a warning and skip Steps 5/6.
 
-### Step 5: 派 bug-shape-extractor
+### Step 5: Dispatch bug-shape-extractor
 
 ```
 Agent(subagent_type="testvdb:bug-shape-extractor",
-  description="提取 {target} 历史 Bug Shapes",
-  prompt="按照 agents/bug-shape-extractor.md 规范，对 intelligence/{target}/issue_corpus.json 和 intelligence/{target}/commit_corpus.json 进行分类和根因模式提取。将结果写入 intelligence/{target}/classified_issues.json、bug_shapes.json、developer_cognition.json。")
+  description="Extract {target} historical Bug Shapes",
+  prompt="Per the agents/bug-shape-extractor.md spec, classify and extract root-cause patterns from intelligence/{target}/issue_corpus.json and intelligence/{target}/commit_corpus.json. Write the results to intelligence/{target}/classified_issues.json, bug_shapes.json, developer_cognition.json.")
 ```
 
-### Step 6: 派 threat-modeler
+### Step 6: Dispatch threat-modeler
 
 ```
 Agent(subagent_type="testvdb:threat-modeler",
-  description="构建 {target} 威胁模型",
-  prompt="按照 agents/threat-modeler.md 规范，基于 bug_shapes.json、classified_issues.json、developer_cognition.json 构建威胁模型。将结果写入 intelligence/{target}/threat_model.json。")
+  description="Build the {target} threat model",
+  prompt="Per the agents/threat-modeler.md spec, build the threat model from bug_shapes.json, classified_issues.json, developer_cognition.json. Write the result to intelligence/{target}/threat_model.json.")
 ```
 
-### Step 7: 输出
+### Step 7: Output
 
-加载情报摘要：
+Load the intelligence summary:
 
 ```bash
 python -c "
@@ -126,28 +126,28 @@ print(json.dumps({
 " 2>/dev/null || echo "THREAT_MODEL_NOT_AVAILABLE"
 ```
 
-报告：
-- 情报路径：`intelligence/{target}/threat_model.json`
-- 盲点数（`blindspot_count`）、高优先攻击面（`high_priority_areas`）、Top 3 盲点
-- 采集规模：`max_issues={INTEL_MI}`、`max_commits={INTEL_MC}`、时间窗 `{INTEL_TW}` 月
-- 来源：缓存复用 / 新采集
+Report:
+- intelligence path: `intelligence/{target}/threat_model.json`
+- blindspot count (`blindspot_count`), high-priority attack surfaces (`high_priority_areas`), Top 3 blindspots
+- collection scale: `max_issues={INTEL_MI}`, `max_commits={INTEL_MC}`, time window `{INTEL_TW}` months
+- source: cache reuse / newly collected
 
 ---
 
-## 独立性
+## Independence
 
-本命令**只跑情报采集 + 建模**，不启动：
-- ❌ 文档提取/契约生成（→ 用 `/testvdb:contract`）
-- ❌ 攻击生成/执行（→ 用 `/testvdb:mine`）
+This command **runs intelligence collection + modeling only**; it does not start:
+- ❌ Documentation extraction/contract generation (→ use `/testvdb:contract`)
+- ❌ Attack generation/execution (→ use `/testvdb:mine`)
 
-典型用途：
-1. **情报刷新**：`--force` 强制重新采集过期情报
-2. **跨 DB 迁移前**：为新目标 DB 构建威胁模型
-3. **单独调试**：验证 issue-miner/bug-shape/threat-modeler 链路
-4. **规模调整**：`--max-issues 50 --max-commits 20` 快速采集小样本
+Typical uses:
+1. **Intelligence refresh**: `--force` to recollect expired intelligence
+2. **Pre-migration**: build a threat model for a new target DB
+3. **Isolated debugging**: verify the issue-miner/bug-shape/threat-modeler chain
+4. **Scale adjustment**: `--max-issues 50 --max-commits 20` for a quick small-sample collection
 
 ---
 
-## 与 /testvdb:mine 的关系
+## Relationship to /testvdb:mine
 
-`/testvdb:mine` 的情报阶段（智能消费）在缓存缺失/过期时调用与本命令**完全相同**的 agent 派发逻辑（issue-miner → bug-shape-extractor → threat-modeler）。本命令是 mine 情报阶段的**独立可触发版本**。详见 `commands/mine.md` Step 3.6。
+`/testvdb:mine`'s intelligence stage (intelligent consumption) invokes **exactly the same** agent dispatch logic as this command when the cache is missing/expired (issue-miner → bug-shape-extractor → threat-modeler). This command is the **independently triggerable version** of mine's intelligence stage. See `commands/mine.md` Step 3.6.

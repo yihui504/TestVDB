@@ -1,26 +1,26 @@
 ---
-description: 单独生成/刷新指定 DB 版本的文档知识与结构化契约
+description: Generate/refresh documentation knowledge and the structured contract for a specified DB version
 allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 ---
 
-# /testvdb:contract — 文档提取 + 契约生成
+# /testvdb:contract — documentation extraction + contract generation
 
-单独为指定向量数据库版本提取官方文档知识并形式化为结构化契约（`structured_contract.json`）。**只跑文档+契约**，不启动攻击/执行/judge/reporting。用于调试 contract-formalizer、验证契约（如 bug #3 category）、刷新过期契约。
+Independently extract official documentation knowledge for a specified vector database version and formalize it into a structured contract (`structured_contract.json`). **Runs documentation+contract only**; no attack/execution/judge/reporting. Used for debugging contract-formalizer, verifying contracts (e.g. bug #3's category), and refreshing expired contracts.
 
 ---
 
-## ⚠️ 架构约束（CRITICAL — 技术原因）
+## ⚠️ Architecture constraint (CRITICAL — for technical reasons)
 
-**与 `/testvdb:mine` 相同：主进程永远只做编排，不做执行。**
+**Same as `/testvdb:mine`: the main process only ever orchestrates; it never executes.**
 
-| 禁止事项 | 正确做法 |
+| Forbidden | Correct approach |
 |---------|---------|
-| ❌ 使用 WebSearch/WebFetch 爬取文档 | ✅ `Agent(subagent_type="testvdb:knowledge-extractor")` |
-| ❌ 自己生成 structured_contract.json | ✅ `Agent(subagent_type="testvdb:contract-formalizer")` |
+| ❌ Using WebSearch/WebFetch to crawl documentation | ✅ `Agent(subagent_type="testvdb:knowledge-extractor")` |
+| ❌ Generating structured_contract.json yourself | ✅ `Agent(subagent_type="testvdb:contract-formalizer")` |
 
-主进程只使用 `Read`/`Write`/`Bash`(验证)/`Grep`/`Glob`/`Agent` 做编排。
+The main process uses only `Read`/`Write`/`Bash`(verification)/`Grep`/`Glob`/`Agent` to orchestrate.
 
-> **派发纪律**：派 `testvdb:*` 子 Agent **只用 `Agent(subagent_type=...)`**；❌ 禁用 `TaskCreate`（不识别 plugin agent_type → `Spawning agent: unknown`，任务永久 `pending` 幽灵条目，`TaskStop` 删不掉，背后无真实 agent 执行）。`Agent` 是核心内置工具，直接调用（`ToolSearch` 搜不到 ≠ 不可用）。详见 `commands/mine.md`「派发工具纪律」。
+> **Dispatch discipline**: dispatching `testvdb:*` sub-agents uses **only `Agent(subagent_type=...)`**; ❌ `TaskCreate` is disabled (it does not recognize plugin agent_types → `Spawning agent: unknown`, tasks stay `pending` forever as ghost entries that `TaskStop` cannot delete, with no real agent behind them). `Agent` is a core built-in tool; call it directly (`ToolSearch` not finding it ≠ unavailable). See `commands/mine.md` "dispatch tool discipline".
 
 ---
 
@@ -34,114 +34,114 @@ allowed-tools: Read, Write, Bash, Grep, Glob, Agent
 
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
-| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, `pgvector`, `meilisearch`, 或 `chroma` |
-| `<version>` | Yes | — | 目标版本号（如 `1.38.0`） |
-| `--force` | No | — | 强制重新生成，忽略缓存（即使缓存有效也重跑） |
+| `<db>` | Yes | — | `milvus`, `qdrant`, `weaviate`, `pgvector`, `meilisearch`, or `chroma` |
+| `<version>` | Yes | — | Target version number (e.g. `1.38.0`) |
+| `--force` | No | — | Force regeneration, ignoring the cache (rerun even if the cache is valid) |
 
 ---
 
-## 执行步骤
+## Execution steps
 
-### Step 1: 解析参数 + 前置检查
+### Step 1: Parse arguments + preflight
 
-- 验证 `target` ∈ {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}
-- 解析 `version`、`force`
-- 确定 `PROJECT_ROOT`: `git rev-parse --show-toplevel 2>/dev/null || pwd`
-- 前置检查：`python scripts/preflight.py`
+- Verify `target` ∈ {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}
+- Parse `version`, `force`
+- Determine `PROJECT_ROOT`: `git rev-parse --show-toplevel 2>/dev/null || pwd`
+- Preflight: `python scripts/preflight.py`
 
-### Step 2: 缓存检查（D 判断，批次 D）
+### Step 2: Cache check (D-judgment, batch D)
 
-检查 `results/{target}/{version}/structured_contract.json` 是否可复用：
+Check whether `results/{target}/{version}/structured_contract.json` is reusable:
 
 ```bash
 python scripts/check_cache.py contract "results/{target}/{version}" {target} {version} --ttl {knowledge.cache_ttl_hours}
 ```
 
-- **USABLE**（exit 0）且**未传 `--force`** → 跳到 [Step 6: 输出](#step-6-输出)（报告"缓存有效，跳过生成"）
-- **STALE / INVALID / MISSING** 或 **传了 `--force`** → 继续 Step 3 重新生成
+- **USABLE** (exit 0) and **no `--force`** → jump to [Step 6: Output](#step-6-output) (report "cache valid, generation skipped")
+- **STALE / INVALID / MISSING** or **`--force` given** → continue to Step 3 to regenerate
 
-> TTL 默认 168h（读 `settings.json` 的 `knowledge.cache_ttl_hours`）。
+> TTL defaults to 168h (read from `knowledge.cache_ttl_hours` in `settings.json`).
 
-### Step 3: 派 Knowledge Extractor
+### Step 3: Dispatch the Knowledge Extractor
 
 ```
 Agent(subagent_type="testvdb:knowledge-extractor",
-  description="提取 {target} {version} 文档知识",
-  prompt="按照 agents/knowledge-extractor.md 规范，为 {target} {version} 提取 API 文档知识。将结果写入 results/{target}/{version}/raw_knowledge.json（SDK/Docker 信息单独写 deployment_meta.json，v3.4 §B）")
+  description="Extract {target} {version} documentation knowledge",
+  prompt="Per the agents/knowledge-extractor.md spec, extract API documentation knowledge for {target} {version}. Write the result to results/{target}/{version}/raw_knowledge.json (SDK/Docker info goes separately to deployment_meta.json, v3.4 §B)")
 ```
 
-**验证：** `ls -la results/{target}/{version}/raw_knowledge.json results/{target}/{version}/deployment_meta.json`
+**Verification:** `ls -la results/{target}/{version}/raw_knowledge.json results/{target}/{version}/deployment_meta.json`
 
-### Step 4: 派 Contract Formalizer
+### Step 4: Dispatch the Contract Formalizer
 
 ```
 Agent(subagent_type="testvdb:contract-formalizer",
-  description="形式化 {target} v{version} API 契约",
-  prompt="按照 agents/contract-formalizer.md 规范，将 results/{target}/{version}/raw_knowledge.json 转换为 structured_contract.json（每条约束标 level 分级，规则 2.7；v3.4）。将结果写入 results/{target}/{version}/structured_contract.json")
+  description="Formalize the {target} v{version} API contract",
+  prompt="Per the agents/contract-formalizer.md spec, convert results/{target}/{version}/raw_knowledge.json into structured_contract.json (every constraint graded with level, Rule 2.7; v3.4). Write the result to results/{target}/{version}/structured_contract.json")
 ```
 
-**验证：** `ls -la results/{target}/{version}/structured_contract.json`
+**Verification:** `ls -la results/{target}/{version}/structured_contract.json`
 
-### Step 5: 合同门控检查
+### Step 5: Contract gate checks
 
-契约合法性验证（批次 B 的通用 `validate_contract`）：
+Contract validity verification (batch B's generic `validate_contract`):
 
 ```bash
 python scripts/validate_contract.py "results/{target}/{version}/structured_contract.json"
 ```
 
-- exit 0（PASS，可能有 warnings）→ 通过
-- exit 1（FAIL，有 errors）→ 输出错误 + 终止（契约不合格，不可用于挖掘）
-- exit 2（加载/用法错误）→ 终止
+- exit 0 (PASS, possibly with warnings) → pass
+- exit 1 (FAIL, with errors) → print errors + terminate (an unqualified contract must not be used for mining)
+- exit 2 (loading/usage error) → terminate
 
-**Step 5b: 契约文档资产预检（规则 P1.0，2026-09-02）**：
+**Step 5b: Contract documentation-asset preflight (Rule P1.0, 2026-09-02)**:
 
 ```bash
 python scripts/preflight_contract_docs.py "results/{target}/{version}/structured_contract.json"
 ```
 
-- exit 0 → sidecar `doc_preflight.json` 就绪（evidence-builder A 层前两层消费），或
-  `TESTVDB_OFFLINE=1` 跳过
-- exit 1 → 存在 dead/mismatched 文档；**不终止**（环境事实，取证层如实记录），输出
-  计数供排查
+- exit 0 → sidecar `doc_preflight.json` ready (consumed by evidence-builder layer A's first two layers), or
+  skipped via `TESTVDB_OFFLINE=1`
+- exit 1 → dead/mismatched documentation exists; **do not terminate** (an environmental fact; the forensic layer records it honestly), print
+  counts for troubleshooting
 
-**Passport Hash 验证**（`material_passport.enabled=true` 时）：
+**Passport hash verification** (when `material_passport.enabled=true`):
 ```bash
 python scripts/passport_verify.py "results/{target}/{version}/structured_contract.json"
 ```
 
-### Step 5.5: 策略预绑定（v3.4 D2，确定性主进程步骤——0 LLM）
+### Step 5.5: Strategy pre-binding (v3.4 D2; deterministic main-process step — 0 LLM)
 ```bash
 python scripts/bind_strategies.py "results/{target}/{version}/structured_contract.json"
 ```
-- exit 1（level lint 失败：契约缺 `level` 字段）→ 重派 contract-formalizer（规则 2.7 未执行）
-- 正常 → 契约各约束带 `bound_strategies` + 顶层 `_strategy_binding` 汇总（attack agents 按绑定清单直接生成）
+- exit 1 (level lint failure: the contract lacks `level` fields) → redispatch contract-formalizer (Rule 2.7 was not executed)
+- normal → every constraint carries `bound_strategies` + the top-level `_strategy_binding` summary (attack agents generate directly per the binding list)
 
-### Step 6: 输出
+### Step 6: Output
 
-报告：
-- 契约路径：`results/{target}/{version}/structured_contract.json`
-- 端点数（`len(api_endpoints)`）、category 分布、data_types 数
-- 来源：缓存复用 / 新生成
-- 门控结果：PASS / FAIL（warnings 数）
-
----
-
-## 独立性
-
-本命令**只跑文档提取 + 契约生成 + 门控**，不启动：
-- ❌ 攻击生成（attack-boundary/state/semantic）
-- ❌ Docker 执行（docker-executor）
-- ❌ Judge 辩论（judge-*）
-- ❌ 报告生成（reporter）
-
-典型用途：
-1. **契约调试**：单独验证 contract-formalizer 输出（如 bug #3 的 category 中立化）
-2. **契约刷新**：`--force` 强制重新生成过期契约
-3. **跨 DB 迁移前验证**：为目标 DB 生成契约，确认端点覆盖
+Report:
+- contract path: `results/{target}/{version}/structured_contract.json`
+- endpoint count (`len(api_endpoints)`), category distribution, data_types count
+- source: cache reuse / newly generated
+- gate result: PASS / FAIL (warning count)
 
 ---
 
-## 与 /testvdb:mine 的关系
+## Independence
 
-`/testvdb:mine` 的契约阶段（智能消费）在缓存缺失/过期时调用与本命令**完全相同**的 agent 派发逻辑（knowledge-extractor → contract-formalizer → 门控）。本命令是 mine 契约阶段的**独立可触发版本**。详见 `commands/mine.md` Step 3。
+This command **runs documentation extraction + contract generation + gating only**; it does not start:
+- ❌ Attack generation (attack-boundary/state/semantic)
+- ❌ Docker execution (docker-executor)
+- ❌ Judge debate (judge-*)
+- ❌ Report generation (reporter)
+
+Typical uses:
+1. **Contract debugging**: verify contract-formalizer output in isolation (e.g. bug #3's category neutralization)
+2. **Contract refresh**: `--force` to regenerate an expired contract
+3. **Pre-migration verification**: generate a contract for a target DB and confirm endpoint coverage
+
+---
+
+## Relationship to /testvdb:mine
+
+`/testvdb:mine`'s contract stage (intelligent consumption) invokes **exactly the same** agent dispatch logic as this command when the cache is missing/expired (knowledge-extractor → contract-formalizer → gating). This command is the **independently triggerable version** of mine's contract stage. See `commands/mine.md` Step 3.

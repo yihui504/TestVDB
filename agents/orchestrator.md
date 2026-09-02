@@ -1,6 +1,6 @@
 ---
 name: orchestrator
-description: TestVDB 缺陷挖掘流水线主编排器。协调全部 16 个 Agent 完成从战略情报采集到缺陷报告的全流程。
+description: TestVDB defect-mining pipeline chief orchestrator. Coordinates all 16 agents through the full flow from strategic intelligence collection to defect reporting.
 model: opus
 dataAccess: redacted
 maxTurns: 300
@@ -13,96 +13,96 @@ tools:
   - Agent
 ---
 
-# TestVDB Orchestrator — 缺陷挖掘流水线主编排器 SOP
+# TestVDB Orchestrator — defect-mining pipeline chief orchestrator SOP
 
-## 数据访问级别: redacted
+## Data access level: redacted
 
-你只能访问所有 Agent 的产出文件（structured_contract.json, raw_knowledge.json, pipeline_state.json,
+You may only access all agents' output files (structured_contract.json, raw_knowledge.json, pipeline_state.json,
 debate_logs/*.json, execution_summary.txt, output_*.log, defect-*.md, experience_handoff.json,
-coverage.json, mine_state.json, strategy_registry/*.json）。
+coverage.json, mine_state.json, strategy_registry/*.json).
 
-禁止直接访问:
-- 网络（WebSearch/WebFetch/Crawl4AI）—— 爬取由 knowledge-extractor 完成
-- 外部 API —— 所有外部数据获取由对应子 Agent 完成
+Direct access forbidden:
+- Network (WebSearch/WebFetch/Crawl4AI) — crawling is done by knowledge-extractor
+- External APIs — all external data acquisition is done by the corresponding sub-agents
 
-如果你需要访问网络或外部数据，请派发对应权限的 Agent（如 knowledge-extractor）。
+If you need network or external data, dispatch the agent with the corresponding permissions (e.g. knowledge-extractor).
 
-> **⛔ 执行模型变更（2026-06-06）：** 由于 Claude Code 插件体系的子 Agent 无法可靠嵌套派发
-> 孙 Agent（plugin-registered agent_type 在孙 Agent 上下文中不可用），本文件现在是 **SOP 参考文档**，
-> 由主进程（`commands/mine.md`）按照此 SOP 直接执行编排。
+> **⛔ Execution-model change (2026-06-06):** because Claude Code's plugin system cannot reliably have sub-agents
+> dispatch grandchild agents (plugin-registered agent_types are unavailable in a grandchild's context), this file is now a **SOP reference document**,
+> executed directly for orchestration by the main process (`commands/mine.md`) per this SOP.
 >
-> `testvdb:orchestrator` agent 类型保留用于未来平台能力就绪时恢复自治模式。
+> The `testvdb:orchestrator` agent type is retained for restoring the autonomous mode when platform capabilities are ready.
 >
-> **⛔ 嵌套派发禁令（v2.2 新增）：** 主进程派发的每个子 Agent prompt 末尾必须包含：
-> `你是 TestVDB 流水线中被主进程派发的子 Agent。禁止使用 Agent 工具派发孙 Agent — 插件体系不支持嵌套派发，调用会静默失败。所有产出必须通过 Write/Bash/Read 工具直接完成。`
+> **⛔ Nested-dispatch ban (added v2.2):** every sub-agent prompt dispatched by the main process must end with:
+> `You are a sub-agent dispatched by the main process in the TestVDB pipeline. Using the Agent tool to dispatch grandchild agents is forbidden — the plugin system does not support nested dispatch; the call fails silently. All output must be completed directly via the Write/Bash/Read tools.`
 >
-> **主进程执行时遵循的核心铁律：只编排，不执行。所有实质性工作必须通过
-> `Agent(subagent_type="testvdb:xxx")` 派发给对应子 Agent。**
+> **Core iron law for main-process execution: orchestrate only, never execute. All substantive work must be
+> dispatched via `Agent(subagent_type="testvdb:xxx")` to the corresponding sub-agent.**
 
 ---
 
-## ⚠️ 已废弃：子 Agent 嵌套派发模式
+## ⚠️ Deprecated: the sub-agent nested-dispatch mode
 
-**以下调用方式已废弃：**
+**The following invocation style is deprecated:**
 ```
-// ❌ 废弃：主进程 → orchestrator(子Agent) → knowledge-extractor(孙Agent) — 不可靠
+// ❌ Deprecated: main process → orchestrator (sub-agent) → knowledge-extractor (grandchild) — unreliable
 Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 ```
 
-**当前正确方式：主进程按照本 SOP 逐步直接派发子 Agent。**
-详见 `commands/mine.md` 的完整执行流程。
+**The current correct way: the main process dispatches sub-agents directly, step by step, per this SOP.**
+See `commands/mine.md` for the full execution flow.
 
 ---
 
 ---
 
-## ⚠️ 强制执行步骤 Checklist（每条都必须完成）
+## ⚠️ Mandatory step checklist (every item must be completed)
 
 ```
-□ [Step 1] 解析参数（target, version, max_rounds, min_defects）
-□ [Step 2] 前置条件检查（Docker/Python/磁盘/网络）
-□ [Step 3] 检查缓存（raw_knowledge.json + structured_contract.json，含 TTL 计算）
-□ [Step 3.6] 如 intelligence.enabled=true：历史情报采集（issue-miner → bug-shape-extractor → threat-modeler）
-□ [Step 3.65] bug-shape 确定性核验（v2.4，fail-fast + bounded retry + v2.5.2 降级）：
-  - 跑 `python scripts/_validate_bug_shapes.py intelligence/{target}/bug_shapes.json`
-  - **exit 0** → 进 Step 4
-  - **exit 1** → 读 `bug_shapes_validation_report.json`，把 failures 摘要（尤其 `empty_shell_instance` 清单：哪些 issue 的 endpoint/param/value 全 N/A）作为 feedback 注入 bug-shape-extractor 重派
-  - **bounded retry**：最多重派 `MAX_BUGSHAPE_RETRY=2` 次。counter 由 orchestrator 维护（重派前写 `intelligence/{target}/.bugshape_retry` 单行整数；简单 counter 不需确定性脚本，区别于 Step 4.6 attack 脚本 retry 的多脚本复杂 counter）
-  - **超限降级**（重派后仍 exit 1 且已达上限）：**不阻塞 pipeline**。写 `intelligence/{target}/.bugshape_empty_shell_warning`（含 failure 摘要 + 降级原因），继续 Step 4。下游 attack agent 读 bug_shapes 时若见此 warning 则降级为 richness-only（shape 引导不可信，等价 D1 行为）
-  - **为什么 bounded**（v2.5.2 D2 教训）：empty_shell 校验是"检测"非"修复"——extractor 能力未变时无界重派 = 死循环。降级路径让 pipeline 在 extractor 未根本修时仍可跑（牺牲 shape 引导质量换 pipeline 可用性）。根本修 extractor 是独立 follow-up
-□ [Step 4] 如缓存未命中：派 Knowledge Extractor 获取文档
-□ [Step 5] 如缓存未命中：派 Contract Formalizer 生成契约
-□ [Step 6] 合同门控检查（核心 CRUD 端点覆盖率 ≥ 90%）+ 确定性核验（v2.4，fail-fast）：`python scripts/_validate_contract.py results/{target}/{version}/structured_contract.json`；exit 1 → 读 contract_validation_report.json → 重派 contract-formalizer（反系统性 source_verified 幻觉）
-□ [Step 6.5] 策略预绑定（v3.4 D2）：`python scripts/bind_strategies.py results/{target}/{version}/structured_contract.json`；exit 1 = level lint 失败 → 重派 contract-formalizer（规则 2.7）
-□ [Step 7] 初始化 mine_state.json + 设置 TESTVDB_SESSION_ID 环境变量
-□ [Step 8] 开始挖掘循环（最多 max_rounds 轮）：
-  □ 8a. 注入 reflection_context + threat_model + cognitive_blindspots 到 Attack Agents
-  □ 8b. 并发出动 Attack Trio（boundary + state + semantic）
-  □ 8c. Orchestrator 自行执行辩论 Stage 1（交叉审查 + 去重）
-  □ 8d. 派 Executor 在沙箱中执行通过辩论的脚本（容器保持运行）
-  □ 8e. 候选机械提取 + L1 闸门 → evidence-builder 并发 fan-out → chain-auditor 收口（ADR-0008）
-  □ 8f. 派 Reporter 为通过辩论的缺陷生成报告（含 Pre-Submit Gate 复现验证）
-  □ 8g. 保存 mine_state.json + coverage.json + experience_handoff.json
-  □ 8h. 分析本轮产出，生成 reflection_context
-  □ 8i. 检查终止条件
-  □ 8j. 轮次间容器管理（重启或清理）
-□ [Step 9] 生成汇总报告（summary.md）+ 强制清理所有 Docker 容器
-□ [Step 10] 标记会话完成
+□ [Step 1] Parse arguments (target, version, max_rounds, min_defects)
+□ [Step 2] Precondition checks (Docker/Python/disk/network)
+□ [Step 3] Cache check (raw_knowledge.json + structured_contract.json, incl. TTL computation)
+□ [Step 3.6] If intelligence.enabled=true: historical intelligence collection (issue-miner → bug-shape-extractor → threat-modeler)
+□ [Step 3.65] bug-shape deterministic verification (v2.4, fail-fast + bounded retry + v2.5.2 degradation):
+  - run `python scripts/_validate_bug_shapes.py intelligence/{target}/bug_shapes.json`
+  - **exit 0** → proceed to Step 4
+  - **exit 1** → read `bug_shapes_validation_report.json`; inject the failures summary (especially the `empty_shell_instance` list: which issues have endpoint/param/value all N/A) as feedback into a bug-shape-extractor redispatch
+  - **bounded retry**: at most `MAX_BUGSHAPE_RETRY=2` redispatches. The counter is maintained by the orchestrator (before each redispatch write `intelligence/{target}/.bugshape_retry` as a one-line integer; a simple counter needs no deterministic script, unlike Step 4.6's multi-script complex counter for attack-script retries)
+  - **over-limit degradation** (still exit 1 after redispatch and at the cap): **do not block the pipeline**. Write `intelligence/{target}/.bugshape_empty_shell_warning` (with the failure summary + degradation reason) and continue to Step 4. When downstream attack agents see this warning while reading bug_shapes, they degrade to richness-only (shape guidance untrusted; equivalent to D1 behavior)
+  - **why bounded** (v2.5.2 D2 lesson): empty_shell validation "detects" rather than "repairs" — with the extractor's capability unchanged, unbounded redispatch = an infinite loop. The degradation path lets the pipeline keep running when the extractor is not fundamentally fixed (trading shape-guidance quality for pipeline availability). Fundamentally fixing the extractor is a separate follow-up
+□ [Step 4] On cache miss: dispatch the Knowledge Extractor to fetch documentation
+□ [Step 5] On cache miss: dispatch the Contract Formalizer to generate the contract
+□ [Step 6] Contract gate checks (core CRUD endpoint coverage ≥ 90%) + deterministic verification (v2.4, fail-fast): `python scripts/_validate_contract.py results/{target}/{version}/structured_contract.json`; exit 1 → read contract_validation_report.json → redispatch contract-formalizer (anti systematic source_verified hallucination)
+□ [Step 6.5] Strategy pre-binding (v3.4 D2): `python scripts/bind_strategies.py results/{target}/{version}/structured_contract.json`; exit 1 = level lint failure → redispatch contract-formalizer (Rule 2.7)
+□ [Step 7] Initialize mine_state.json + set the TESTVDB_SESSION_ID environment variable
+□ [Step 8] Start the mining loop (at most max_rounds rounds):
+  □ 8a. Inject reflection_context + threat_model + cognitive_blindspots into the Attack Agents
+  □ 8b. Concurrently dispatch the Attack Trio (boundary + state + semantic)
+  □ 8c. The Orchestrator runs Debate Stage 1 itself (cross-review + dedup)
+  □ 8d. Dispatch the Executor to run the debate-approved scripts in sandboxes (containers stay running)
+  □ 8e. Mechanical candidate extraction + L1 gate → evidence-builder concurrent fan-out → chain-auditor closes (ADR-0008)
+  □ 8f. Dispatch the Reporter to generate reports for debate-confirmed defects (incl. Pre-Submit Gate reproduction verification)
+  □ 8g. Save mine_state.json + coverage.json + experience_handoff.json
+  □ 8h. Analyze this round's output, generate reflection_context
+  □ 8i. Check termination conditions
+  □ 8j. Inter-round container management (restart or cleanup)
+□ [Step 9] Generate the summary report (summary.md) + force-cleanup all Docker containers
+□ [Step 10] Mark the session complete
 ```
 
 ---
 
-## 参数规范
+## Parameter specification
 
-### 输入参数
-| 参数 | 必填 | 默认值 | 说明 |
+### Input parameters
+| Parameter | Required | Default | Description |
 |------|------|--------|------|
 | target | ✅ | — | milvus / qdrant / weaviate / pgvector / meilisearch / chroma |
-| version | ✅ | — | 目标版本号 |
-| max_rounds | ❌ | 5 | 最大挖掘轮数（0=无上限） |
-| min_defects | ❌ | 1 | 最低缺陷产出要求 |
+| version | ✅ | — | Target version number |
+| max_rounds | ❌ | 5 | Maximum mining rounds (0 = unlimited) |
+| min_defects | ❌ | 1 | Minimum defect output requirement |
 
-### 示例调用
+### Example invocations
 ```
 /testvdb:mine qdrant v1.13.0 --max-rounds 5 --min-defects 1
 /testvdb:mine milvus v2.4.0 --max-rounds 3
@@ -112,81 +112,81 @@ Agent(subagent_type="testvdb:orchestrator", prompt="target=... version=...")
 
 ---
 
-## 流水线详细规范
+## Detailed pipeline specification
 
-### Step 1: 解析参数
-- target 必须在 {milvus, qdrant, weaviate, pgvector, meilisearch, chroma} 内，否则报错退出
-- version 格式不做强制校验（由镜像tag预检验证）
-- max_rounds = 0 表示不限上限，但有僵局终止机制
+### Step 1: Parse arguments
+- target must be within {milvus, qdrant, weaviate, pgvector, meilisearch, chroma}, otherwise error out
+- version format is not strictly validated (verified by the image-tag pre-check)
+- max_rounds = 0 means no upper limit, but a stalemate-termination mechanism exists
 
-### Step 2: 前提条件检查
-执行检查脚本，验证：
-- Docker Engine 运行中
-- **Crawl4AI 网页抓取服务**：执行 `docker compose -f docker/crawl4ai.yml up -d --wait` 启动。等待 `/health` 端点返回 200。如果 Docker 不可用，警告但继续（Agent 将降级为 WebFetch）。Crawl4AI 是 WebFetch 封锁的解决方案 — 所有文档抓取优先走 Crawl4AI。
-- Python 3.9+ 可用（**Python < 3.9 为致命错误，终止会话**）。
-  - **v2.0 更新**：docker-executor 支持双轨执行（Tier 1: 主机 Python / Tier 2: Docker stdin pipe），Python 缺失时 Executor 可自动回退到 Tier 2。但 Python 仍为知识提取和脚本预处理阶段的必需依赖——缺少 Python 会阻塞 Phase 1，故保持致命错误判定。
-- Python 依赖安装：`pip install httpx html2text`（crawl_fetch.py 的降级方案依赖）
-- 磁盘剩余空间 ≥ 10GB
-- **模型兼容性**：Claude Sonnet/Opus，通过 Claude Code 原生支持。
+### Step 2: Precondition checks
+Run the check scripts, verifying:
+- Docker Engine is running
+- **Crawl4AI web-fetching service**: run `docker compose -f docker/crawl4ai.yml up -d --wait` to start it. Wait for the `/health` endpoint to return 200. If Docker is unavailable, warn but continue (agents will degrade to WebFetch). Crawl4AI is the solution to WebFetch blocking — all documentation fetching prefers Crawl4AI.
+- Python 3.9+ available (**Python < 3.9 is fatal; terminate the session**).
+  - **v2.0 update**: docker-executor supports dual-track execution (Tier 1: host Python / Tier 2: Docker stdin pipe); when Python is missing the executor can automatically fall back to Tier 2. But Python remains a required dependency for the knowledge-extraction and script-preprocessing stages — missing Python blocks Phase 1, so the fatal-error ruling is kept.
+- Python dependencies: `pip install httpx html2text` (crawl_fetch.py's fallback dependencies)
+- Free disk space ≥ 10GB
+- **Model compatibility**: Claude Sonnet/Opus, natively supported via Claude Code.
 
-**确定项目根目录**：使用 Bash 执行 `git rev-parse --show-toplevel 2>/dev/null || pwd`，将结果存储为 `PROJECT_ROOT` 变量。后续所有路径操作使用 `${PROJECT_ROOT}/` 前缀确保绝对路径。
-- GitHub PAT（可选，MCP GitHub 工具需要）
-- 网络连接（Crawl4AI 服务需要出站网络访问文档站点）
-- `DOCKER_HUB_TOKEN` 环境变量（**推荐**，Docker Hub API 查询 tags 时有更高频率限制；Docker CLI 命令如 `docker pull` / `docker manifest inspect` 无需 token）
+**Determine the project root**: use Bash `git rev-parse --show-toplevel 2>/dev/null || pwd`, store the result as the `PROJECT_ROOT` variable. All subsequent path operations use the `${PROJECT_ROOT}/` prefix to ensure absolute paths.
+- GitHub PAT (optional; needed by the MCP GitHub tools)
+- Network connection (the Crawl4AI service needs outbound network access to documentation sites)
+- `DOCKER_HUB_TOKEN` environment variable (**recommended**; higher rate limits for Docker Hub API tag queries; Docker CLI commands like `docker pull` / `docker manifest inspect` need no token)
 
-### Step 3: 契约智能消费（批次 D，D 判断）
+### Step 3: Contract intelligent consumption (batch D, D-judgment)
 
-> 完整 SOP 见 `commands/contract.md`（独立命令）与 `commands/mine.md` Step 3。本节为参考摘要。
+> Full SOP in `commands/contract.md` (standalone command) and `commands/mine.md` Step 3. This section is a reference summary.
 
-契约阶段按 D 判断（`scripts/check_cache.py contract <dir> <target> <version> --ttl H`，spec 决策 4：存在→TTL→有效性→target/version 匹配）：
-- **USABLE** → 跳过契约生成，直接 Step 7
-- **MISSING / STALE / INVALID** → 派发契约生成（Step 4 → 5 → 6）
-- **MISMATCH** → 报错退出
+The contract stage follows the D-judgment (`scripts/check_cache.py contract <dir> <target> <version> --ttl H`; spec decision 4: exists → TTL → validity → target/version match):
+- **USABLE** → skip contract generation, go straight to Step 7
+- **MISSING / STALE / INVALID** → dispatch contract generation (Step 4 → 5 → 6)
+- **MISMATCH** → error out
 
-TTL 从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取（默认 168h）。
+The TTL is read from `knowledge.cache_ttl_hours` in `settings.json` (default 168h).
 
-### Step 3.6: 历史情报采集（intelligence.enabled=true 时）
+### Step 3.6: Historical intelligence collection (when intelligence.enabled=true)
 
-> 完整 SOP 见 `commands/intel.md`（独立命令）与 `commands/mine.md` Step 3.6。
+> Full SOP in `commands/intel.md` (standalone command) and `commands/mine.md` Step 3.6.
 
-**⛔ 铁律：主进程只做编排，不做执行。** `intelligence.enabled=false` → 跳过整个 Step 3.6。
+**⛔ Iron law: the main process only orchestrates; it never executes.** `intelligence.enabled=false` → skip all of Step 3.6.
 
-按 D 判断（`scripts/check_cache.py intel <dir> <target> --ttl H`）：
-- **USABLE** → 跳过采集，仅加载 threat_model 摘要到上下文（blindspot_count / priority_areas / top_blindspots）
-- **MISSING / STALE / INVALID** → 派发 issue-miner → bug-shape-extractor → threat-modeler（任一失败记录警告继续，Phase 0 非关键路径）
+Per the D-judgment (`scripts/check_cache.py intel <dir> <target> --ttl H`):
+- **USABLE** → skip collection; only load the threat_model summary into context (blindspot_count / priority_areas / top_blindspots)
+- **MISSING / STALE / INVALID** → dispatch issue-miner → bug-shape-extractor → threat-modeler (log a warning and continue on any failure; Phase 0 is not on the critical path)
 
-配置从 `settings.json` 的 `intelligence` 节读取：`time_window_months`(默认24) / `max_issues`(500) / `max_commits`(200) / `cache_ttl_hours`(默认720h)。
+Configuration is read from the `intelligence` section of `settings.json`: `time_window_months` (default 24) / `max_issues` (500) / `max_commits` (200) / `cache_ttl_hours` (default 720h).
 
-### Step 4-6: 契约生成（MISSING/STALE/INVALID 时派发）
+### Steps 4-6: Contract generation (dispatched on MISSING/STALE/INVALID)
 
-> 完整 agent 派发 prompt 见 `commands/contract.md` Step 3-5。
+> Full agent dispatch prompts in `commands/contract.md` Steps 3-5.
 
 - **Step 4**: `Agent(subagent_type="testvdb:knowledge-extractor")` → `results/{target}/{version}/raw_knowledge.json`
 - **Step 5**: `Agent(subagent_type="testvdb:contract-formalizer")` → `results/{target}/{version}/structured_contract.json`
-- **Step 6**: 合同门控 — `scripts/validate_contract.py`（schema 合法性）+ 核心 CRUD 端点覆盖率 ≥ 90%。不通过 → 输出缺失端点 + 终止会话。
-  - 核心 CRUD：collections create/list/get/delete、points insert/get/update/delete、search/recommend
-  - 排除管理端点：/indexes/, /partitions/, /aliases/, load, release, flush, compact, /meta, /nodes, /cluster, /users, /roles
-  - `material_passport.enabled=true` 时加 `scripts/passport_verify.py`
+- **Step 6**: contract gating — `scripts/validate_contract.py` (schema validity) + core CRUD endpoint coverage ≥ 90%. Failure → print missing endpoints + terminate the session.
+  - Core CRUD: collections create/list/get/delete, points insert/get/update/delete, search/recommend
+  - Excluded management endpoints: /indexes/, /partitions/, /aliases/, load, release, flush, compact, /meta, /nodes, /cluster, /users, /roles
+  - When `material_passport.enabled=true`, add `scripts/passport_verify.py`
 
-### Step 7: 初始化状态
-创建 `results/{target}/{version}/` 目录（不含 timestamp 子目录），初始化 mine_state.json：
+### Step 7: Initialize state
+Create the `results/{target}/{version}/` directory (without a timestamp subdirectory) and initialize mine_state.json:
 
-**注意**：timestamp 子目录（`results/{target}/{version}/{timestamp}/`）在 Step 8 第一轮挖掘开始时才创建。这样如果 Step 6 门控失败，不会留下空的 timestamp 子目录。
+**Note**: the timestamp subdirectory (`results/{target}/{version}/{timestamp}/`) is created only when Step 8's first mining round starts. This way, if Step 6's gating fails, no empty timestamp subdirectory is left behind.
 
-**Session ID 生成与传递**：
-1. 生成格式：`{target}-{version_short}-{counter}`（如 `milvus-2617-r1`、`qdrant-1130-r1`）
-   - `version_short`：取 major+minor 拼接（如 `v2.6.17` → `2617`，`v1.13.0` → `1130`）
-   - `counter`：从 `r1` 递增，同 target+version 下避免冲突
-2. **Sanitization 规则**：只保留 `[a-z0-9-]`，大写转小写，删除 `T`/`:`/`/` 等无效字符，长度限制 63 字符（Docker 容器名限制）
-3. **立即设置环境变量**：`export TESTVDB_SESSION_ID="{session_id}"`，确保后续所有子 agent 和 Docker 容器使用统一的 session_id
-4. 在所有 Agent 调用的 prompt 中显式传递 `session_id={session_id}`
-5. Docker Compose 模板通过 `${TESTVDB_SESSION_ID:-standalone}` 环境变量读取，确保容器名唯一
+**Session ID generation and propagation**:
+1. Generation format: `{target}-{version_short}-{counter}` (e.g. `milvus-2617-r1`, `qdrant-1130-r1`)
+   - `version_short`: take major+minor concatenated (e.g. `v2.6.17` → `2617`, `v1.13.0` → `1130`)
+   - `counter`: increments per round (r1, r2...); per target+version, avoids collisions
+2. **Sanitization rules**: keep only `[a-z0-9-]`, lowercase uppercase letters, drop invalid characters like `T`/`:`/`/`, length limit 63 characters (Docker container-name limit)
+3. **Set the environment variable immediately**: `export TESTVDB_SESSION_ID="{session_id}"`, ensuring all subsequent sub-agents and Docker containers use the same session_id
+4. Pass `session_id={session_id}` explicitly in every agent call's prompt
+5. Docker Compose templates read `${TESTVDB_SESSION_ID:-standalone}` so container names are unique
 
-**Session 锁机制**：创建目录后立即写入 `.session.lock` 文件：
+**Session lock mechanism**: immediately after creating the directory, write the `.session.lock` file:
 ```json
 { "session_id": "{target}-{version_short}-{counter}", "started_at": "...", "status": "active" }
 ```
-所有 agent（包括 Stop/SessionEnd hooks）在清理前必须检查 `.session.lock` 是否存在且 `status` 为 `active`。如果锁存在，不得删除该 session 目录下的任何文件。
+All agents (including Stop/SessionEnd hooks) must check that `.session.lock` exists with `status` `active` before cleanup. If the lock exists, no file under that session directory may be deleted.
 ```json
 {
   "version": 3,
@@ -218,21 +218,21 @@ TTL 从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取（默认 168h）�
 }
 ```
 
-**v3 schema 说明**（跨 Turn 状态机）：
-- `phase`：当前所处阶段枚举（ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → EVIDENCE_BUILD → CHAIN_AUDIT → REPORTING → DEFECT_REVIEW → STATE_SAVE → CLEANUP → DONE）
-- `phases_completed`：当前轮次已完成的阶段列表（轮内断点恢复用，每轮重置）
-- `phase_data`：每个阶段的产出摘要（供断点恢复时跳过已完成的工作）
-- `turn_type`：`setup`（Turn 1）→ `loop`（Loop Turn）→ `done`（完成）
-- `global_state`：跨轮次全局状态（缺陷总数、覆盖率、容器状态）
+**v3 schema notes** (cross-turn state machine):
+- `phase`: the current phase enum (ROUND_START → ATTACK_GEN → DEBATE_S1 → EXECUTION → EVIDENCE_BUILD → CHAIN_AUDIT → REPORTING → DEFECT_REVIEW → STATE_SAVE → CLEANUP → DONE)
+- `phases_completed`: the list of phases completed in the current round (for intra-round checkpoint recovery; reset each round)
+- `phase_data`: each phase's output summary (so checkpoint recovery can skip completed work)
+- `turn_type`: `setup` (Turn 1) → `loop` (loop turn) → `done` (finished)
+- `global_state`: cross-round global state (total defects, coverage, container status)
 
-### Step 8: 挖掘循环（每轮）
+### Step 8: The mining loop (per round)
 
-**每轮开始前**：如果是第一轮，创建 `results/{target}/{version}/{timestamp}/` 目录结构。
+**Before each round**: if it is the first round, create the `results/{target}/{version}/{timestamp}/` directory structure.
 
-#### 8a. 注入 reflection_context + threat_model + cognitive_blindspots
+#### 8a. Inject reflection_context + threat_model + cognitive_blindspots
 
-第一轮：无 reflection_context，Attack Agents 自由探索。
-后续轮次：注入上轮 reflection_context 到 Attack Agents 的 context：
+Round 1: no reflection_context; the Attack Agents explore freely.
+Later rounds: inject the last round's reflection_context into the Attack Agents' context:
 ```json
 {
   "key_learnings": ["...", "..."],
@@ -243,185 +243,184 @@ TTL 从 `settings.json` 的 `knowledge.cache_ttl_hours` 读取（默认 168h）�
 }
 ```
 
-**reflection_context 注入模板**：在 Agent 调用的 prompt 参数中，将 reflection_context 以纯文本形式注入：
+**reflection_context injection template**: in the agent call's prompt argument, inject the reflection_context as plain text:
 ```
-上轮经验：{key_learnings 的要点}。已排除的端点：{exhausted_endpoints}。高价值端点：{high_value_endpoints}。驳回模式：{rejection_patterns 的摘要}
+Last round's experience: {key points of key_learnings}. Excluded endpoints: {exhausted_endpoints}. High-value endpoints: {high_value_endpoints}. Rejection patterns: {summary of rejection_patterns}
 ```
 
-### v2.0 跨会话策略注入（evolution.enabled=true）
+### v2.0 cross-session strategy injection (evolution.enabled=true)
 
-### v2.1 威胁模型与认知盲点注入（intelligence.enabled=true 且 inject_to_attack_agents=true）
+### v2.1 threat model and cognitive blindspot injection (intelligence.enabled=true and inject_to_attack_agents=true)
 
-**使用程序化注入脚本**（详见 `commands/mine.md` Step 8a）：
+**Use the programmatic injection script** (see `commands/mine.md` Step 8a for details):
 
 ```bash
 THREAT_MODEL_ATTACK=$(python scripts/threat_model_injector.py {target} --mode attack --text-only)
 ```
 
-在每个 Attack Agent prompt 末尾追加 `${THREAT_MODEL_ATTACK}`。注入内容包含：
-- 攻击面优先级（top-5 endpoints + recommended_attack_order）
-- 开发者认知盲点（top-3 blindspots + attack_strategies）
-- 已知 by-design 行为（避免误报）
-- 全局策略权重（建议各策略分配比例）
-- 盲点 → Attack Agent 映射
+Append `${THREAT_MODEL_ATTACK}` to the end of every Attack Agent prompt. The injected content includes:
+- attack-surface priorities (top-5 endpoints + recommended_attack_order)
+- developer cognitive blindspots (top-3 blindspots + attack_strategies)
+- known by-design behaviors (avoids false positives)
+- global strategy weights (suggested per-strategy allocation)
+- blindspot → Attack Agent mapping
 
-**注入条件汇总**：
-- `reflection_context != null` → 注入本轮经验
-- `evolution.enabled=true` 且 `cross_session_strategies` 有实质内容 → 注入跨会话策略
-- `intelligence.enabled=true` 且 `inject_to_attack_agents=true` → 执行 `threat_model_injector.py --mode attack` 并注入结果
+**Injection-condition summary**:
+- `reflection_context != null` → inject this round's experience
+- `evolution.enabled=true` and `cross_session_strategies` has substantive content → inject cross-session strategies
+- `intelligence.enabled=true` and `inject_to_attack_agents=true` → run `threat_model_injector.py --mode attack` and inject the result
 
-### v2.1 威胁模型注入说明（ADR-0008：judge 增强注入已随 Judge Quartet 删除；attack 注入保留）
+### v2.1 threat-model injection notes (ADR-0008: the judge enhancement injection was removed along with the Judge Quartet; the attack injection remains)
 
-inject_to_judge_agents 配置废弃。threat_model_injector.py 仅 --mode attack 路径仍在用。
-### v2.0 跨会话策略注入（evolution.enabled=true）
+The inject_to_judge_agents configuration is deprecated. Only threat_model_injector.py's --mode attack path is still in use.
+### v2.0 cross-session strategy injection (evolution.enabled=true)
 
-策略由 `scripts/strategy_injector.py {target} --text-only` 生成，在 Attack Agent prompt 中注入。
+Strategies are generated by `scripts/strategy_injector.py {target} --text-only` and injected into the Attack Agent prompt.
 
-#### 8a.5 阶段评估（两阶段调度，ADR-0009 §2）
+#### 8a.5 Phase evaluation (two-phase scheduling, ADR-0009 §2)
 
-每轮 8b 派发前，用 Bash 机械判定当前阶段（确定性，替代 LLM 目测）：
+Before each round's 8b dispatch, mechanically determine the current phase with Bash (deterministic; replaces LLM eyeballing):
 
 ```bash
 python scripts/exploration_phase.py switch --round {R} --chunks {N} --no-defect {X} --cov-delta {D} --phase {phase}
-# N=len(chunks.json)；X=mine_state.consecutive_no_defect_rounds；D=本轮 coverage 增量
+# N=len(chunks.json); X=mine_state.consecutive_no_defect_rounds; D=this round's coverage delta
 ```
 
-- 输出 `switch=false` → 照旧走 8b（阶段一：契约分块枚举派发）。
-- 输出 `switch=true`（条件其一：契约块耗尽 R>N；平台期=连续≥2 轮无新缺陷且 Δcoverage≤0）
-  → `mine_state` 标记 `phase=exploration`，后续轮次全部走 **8b-expl 探索模式派发**；
-  **进入后不回退**（原"轮数>块数则循环重扫"废止——空转改为有意义探索）。
-- **探索僵局**：每探索轮结束评估 `python scripts/exploration_phase.py stalled --zero-rounds {Z}`
-  （Z=连续零信号命中轮数）；连续 K 轮（settings `mining.exploration.stall_rounds`，默认 3）
-  零命中 → 会话终止（探索不是永动机）。
+- Output `switch=false` → proceed with 8b as usual (phase one: contract-chunk enumeration dispatch).
+- Output `switch=true` (any of: contract chunks exhausted R>N; plateau = ≥2 consecutive rounds with no new defects and Δcoverage≤0)
+  → mark `phase=exploration` in `mine_state`; all subsequent rounds use **8b-expl exploration-mode dispatch**;
+  **no falling back once entered** (the old "when rounds > chunks, loop and rescan" is abolished — idle spinning becomes meaningful exploration).
+- **Exploration stalemate**: at each exploration round's end evaluate `python scripts/exploration_phase.py stalled --zero-rounds {Z}`
+  (Z = consecutive zero-signal-hit rounds); K consecutive rounds (settings `mining.exploration.stall_rounds`, default 3)
+  with zero hits → terminate the session (exploration is not a perpetual-motion machine).
 
-#### 8b-expl. 探索模式派发（阶段二，ADR-0009 §3-§4）
+#### 8b-expl. Exploration-mode dispatch (phase two, ADR-0009 §3-§4)
 
-**不分块**：目标面 = 全契约面 + OpenAPI 原始面；endpoint 优先级 = coverage.json
-覆盖缺口优先（不消费 bug-shape/intel——GT-free 纪律）。三 attack agent 轮转承接，
-reflection_context 继续注入（探索经验进经验环）。
+**Chunk-free dispatch**: the target surface = the full contract surface + the OpenAPI surface; endpoint priority = coverage.json's
+coverage gaps first (does not consume bug-shape/intel — the GT-free discipline). The three attack agents rotate to take on the work;
+reflection_context continues to be injected (exploration experience enters the experience loop).
 
-派发 prompt 按规范注入**四算子菜单**（R12：派发词内容即本节定义，不多给）：
+The dispatch prompt injects the **four-operator menu** per the spec (R12: the dispatch-prompt content is exactly this section's definition, nothing more):
 
-| 算子 | 行为 |
+| Operator | Behavior |
 |---|---|
-| ① 异常响应追踪 | 非 2xx / 超时 / 字段形态异常 → 触发深挖 |
-| ② 参数空间组合扰动 | 契约外参数、类型混淆、显式空值、边界交叉 |
-| ③ 状态序列扰动 | 并发/交错/删除后操作 |
-| ④ 行为一致性对照 | 同族参数异处置、同参数跨接口对照 |
+| ① Anomalous-response tracing | non-2xx / timeout / field-shape anomaly → triggers deep-dive |
+| ② Parameter-space combinatorial perturbation | out-of-contract parameters, type confusion, explicit nulls, boundary crossings |
+| ③ State-sequence perturbation | concurrent/interleaved/post-delete operations |
+| ④ Behavioral-consistency comparison | same-family parameters with different dispositions, same parameter compared across interfaces |
 
-**目标信号定义**（探针命中判据，executor 信号摘要按此标记）：
+**Target-signal definitions** (probe-hit criteria; the executor's signal summaries are marked per these):
 `non_2xx | timeout | field_anomaly | inconsistent_disposition | semantic_mismatch`
 
-**沙箱小循环（批量探针协议）**：attack agent 单次产出一批探针
-（≤ `mining.exploration.probe_batch_size`，默认 8，命名 `probe_{seq}_{operator}.py`，
-头部注释标 operator 与 target_endpoint）→ docker-executor 批量执行 → per-probe
-信号摘要回喂 → 命中则下一批聚焦该 endpoint 深挖（算子内变异邻域），未命中则
-算子/endpoint 轮转。每探索轮 M 批（默认 4）。**禁止 agent 自行执行脚本或 curl**
-（沙箱纪律，vein 自跑路径已废止）。
+**Sandbox small loop (batch probe protocol)**: an attack agent produces one batch of probes per pass
+(≤ `mining.exploration.probe_batch_size`, default 8, named `probe_{seq}_{operator}.py`,
+header comments marking operator and target_endpoint) → docker-executor executes the batch → per-probe
+signal summaries feed back → on a hit, the next batch focuses that endpoint and digs deeper (intra-operator mutation neighborhood); on a miss, rotate
+operator/endpoint. M batches per exploration round (default 4). **Agents executing scripts or curl themselves is forbidden**
+(sandbox discipline; the vein self-run path is abolished).
 
-**产出规范**：探针脚本与枚举产出同链——Stage 1 分类 + docker-executor 执行 +
-evidence-builder/chain-auditor 全链（无捷径）；候选必须写明缺陷主张（判定层
-exploratory 通道 has_claim 依赖，ADR-0009 §5）。
+**Output spec**: probe scripts go through the same chain as enumerated outputs — Stage 1 classification + docker-executor execution +
+the full evidence-builder/chain-auditor chain (no shortcuts); candidates must state a defect claim (the judgment layer's
+exploratory channel has_claim dependency, ADR-0009 §5).
 
-#### 8b. 并发出动 Attack Trio（boundary + state + semantic；attack-vein 已按 ADR-0009 移除，其纵深探索职能由两阶段调度的探索模式承接）
+#### 8b. Concurrently dispatch the Attack Trio (boundary + state + semantic; attack-vein was removed per ADR-0009, its depth-exploration duty carried by the two-phase scheduling's exploration mode)
 
-**契约分块派发（ADR-0008，每轮一块）**：派发前先确定性分块：
+**Contract-chunk dispatch (ADR-0008, one chunk per round)**: before dispatching, chunk deterministically:
 ```bash
 python scripts/chunk_contract.py ${SESSION_DIR}/../structured_contract.json --session-dir $SESSION_DIR
-# 产出 chunks.json（按 endpoint 分组，每块 ≤12 可攻单元）
+# produces chunks.json (grouped by endpoint, each chunk ≤12 attackable units)
 ```
-第 R 轮派发 `chunks[R-1]`（round 1 → chunk 1，round 2 → chunk 2，…，轮数 > 块数则循环）。派发 prompt 中指定 `本轮块={chunk_id}` + 块内 unit_ref 清单——attack agents 只攻该块内单元（策略覆盖目标驱动，见各 agent 规范的"强制输出要求"）。
+Round R dispatches `chunks[R-1]` (round 1 → chunk 1, round 2 → chunk 2, …; rounds > chunks loop around). The dispatch prompt specifies `this round's chunk={chunk_id}` + the chunk's unit_ref list — attack agents only attack units within that chunk (strategy-coverage-goal driven; see each agent spec's "mandatory output requirements").
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S1 --phase-data '{"ATTACK_GEN": {"scripts_generated": N, "agents_completed": [...], "chunk_id": "{chunk_id}"}}'`
+**Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEBATE_S1 --phase-data '{"ATTACK_GEN": {"scripts_generated": N, "agents_completed": [...], "chunk_id": "{chunk_id}"}}'`
 
-**并发（非顺序）** 派三个 Attack Agent（boundary + state + semantic），**必须使用 Agent 工具派生子 agent**，禁止自己直接执行攻击生成：
+**Concurrent (not sequential)** dispatch of the three Attack Agents (boundary + state + semantic), **must use the Agent tool to spawn sub-agents**; performing attack generation yourself is forbidden:
 
-> **派发者说明（v2.1.2）**：实际由**主进程**（`commands/mine.md`）直接派发这三个 attack agent，**orchestrator 不嵌套派孙 agent**（嵌套派发不可靠，见 `commands/mine.md:18` 与 memory `nested-agent-dispatch-limitation`）。本节描述的是派发的**内容契约**，不是 orchestrator 自行派发。⚠️ 派发依赖环境原生 Task 工具；若当前环境未暴露（非标准 provider），主进程须降级为单 agent 串行执行，或换到支持原生 Task 的环境——此为平台层限制，非代码 bug。
+> **Dispatcher note (v2.1.2)**: in practice the **main process** (`commands/mine.md`) dispatches these three attack agents directly; **the orchestrator does not nest-dispatch grandchild agents** (nested dispatch is unreliable; see `commands/mine.md:18` and memory `nested-agent-dispatch-limitation`). This section describes the dispatch **content contract**, not the orchestrator dispatching itself. ⚠️ Dispatching depends on the environment's native Task tool; if the current environment does not expose it (non-standard provider), the main process must degrade to single-agent serial execution, or switch to an environment with native Task support — this is a platform-level limitation, not a code bug.
 
-**⛔ 绝对禁止：** Orchestrator 自己生成攻击脚本、自己执行测试、自己审查结果。Orchestrator 只负责编排和协调，所有实质性工作必须通过 Agent 工具派发给对应的子 agent。如果你发现自己正在直接编写 Python 攻击脚本或直接执行 curl 测试，立即停止，改用 Agent 派发。
+**⛔ Absolutely forbidden:** the Orchestrator generating attack scripts itself, running tests itself, reviewing results itself. The Orchestrator only orchestrates and coordinates; all substantive work must be dispatched via the Agent tool to the corresponding sub-agents. If you find yourself directly writing Python attack scripts or directly running curl tests, stop immediately and switch to Agent dispatch.
 
 ```
-Agent(subagent_type="testvdb:attack-boundary", description="边界攻击 {target} v{version}", prompt="按照 agents/attack-boundary.md 规范，为 {target} v{version} 生成边界攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Agent(subagent_type="testvdb:attack-state", description="状态攻击 {target} v{version}", prompt="按照 agents/attack-state.md 规范，为 {target} v{version} 生成状态攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
-Agent(subagent_type="testvdb:attack-semantic", description="语义攻击 {target} v{version}", prompt="按照 agents/attack-semantic.md 规范，为 {target} v{version} 生成语义攻击脚本。contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:attack-boundary", description="Boundary attack {target} v{version}", prompt="Per the agents/attack-boundary.md spec, generate boundary attack scripts for {target} v{version}. contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}. Read results/{target}/{version}/{timestamp}/pipeline_state.json for current progress")
+Agent(subagent_type="testvdb:attack-state", description="State attack {target} v{version}", prompt="Per the agents/attack-state.md spec, generate state attack scripts for {target} v{version}. contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}. Read results/{target}/{version}/{timestamp}/pipeline_state.json for current progress")
+Agent(subagent_type="testvdb:attack-semantic", description="Semantic attack {target} v{version}", prompt="Per the agents/attack-semantic.md spec, generate semantic attack scripts for {target} v{version}. contract=results/{target}/{version}/structured_contract.json, session_id={session_id}, session_dir=results/{target}/{version}/{timestamp}, reflection_context={reflection_context}. Read results/{target}/{version}/{timestamp}/pipeline_state.json for current progress")
 ```
 
-**自动化输出验证**：每轮 Attack Trio 完成后，使用 Bash 工具执行以下命令验证子 agent 产出：
+**Automated output verification**: after each round's Attack Trio completes, use the Bash tool to verify the sub-agents' output:
 ```bash
 ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
 ```
-如果输出为 0（3 个 Agent 均未产出任何脚本文件），说明子 agent 未正常执行，必须终止并报错。如果 >0，继续下一步。
+If the output is 0 (none of the 3 agents produced any script file), the sub-agents did not execute properly; you must terminate and error out. If >0, continue to the next step.
 
-**注意**：不依赖 `subagent-tracking.json` 文件（Claude Code 的 Agent 工具不会自动生成此文件），而是通过检查实际产出文件来验证子 agent 执行结果。
+**Note**: do not rely on a `subagent-tracking.json` file (Claude Code's Agent tool does not automatically generate one); instead verify sub-agent execution by checking the actual output files.
 
-**Subagent 超时机制**：每个 Agent 调用后，如果 3 分钟内子 agent 未产出任何文件（检查目标目录是否有新文件写入），则：
-1. 在日志中记录超时
-2. 标记该子 agent 为 `timed_out`，跳过其产出
-3. 在 mine_state.json 的 error_log 中记录超时事件
-4. 如果 3 个 Attack Agent 全部超时，终止当前轮次并记录错误
+**Sub-agent timeout mechanism**: after each Agent call, if the sub-agent has produced no files within 3 minutes (check whether new files appeared in the target directory), then:
+1. Log the timeout
+2. Mark that sub-agent `timed_out` and skip its output
+3. Record the timeout event in mine_state.json's error_log
+4. If all 3 Attack Agents time out, terminate the current round and log the error
 
-#### 8c. 辩论 Stage 1（自动化审查 — ADR-0008：脚本去重已删）
+#### 8c. Debate Stage 1 (automated review — ADR-0008: script dedup removed)
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EXECUTION --phase-data '{"DEBATE_S1": {"approved_count": N, "rejected_count": M}}'`
+**Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EXECUTION --phase-data '{"DEBATE_S1": {"approved_count": N, "rejected_count": M}}'`
 
-收集三个 Agent（boundary + state + semantic）产出的测试脚本 → Orchestrator **自行执行自动化审查**（非 peer review，不派生子 agent）。这是编排协调工作，与 8b 的"禁止自己直接执行攻击生成"不矛盾——审查不是攻击脚本生成/执行这种实质性工作。
+Collect the test scripts produced by the three agents (boundary + state + semantic) → the Orchestrator **runs the automated review itself** (not a peer review; no sub-agents dispatched).
 
-**自动化审查步骤**：
+**Automated review steps**:
+1. **Collect scripts**: read all script files produced by the Attack Agents, marked by source boundary/state/semantic
+2. **(Removed by ADR-0008) script dedup is no longer performed** — deduplicating by endpoint+constraint+strategy would suppress legitimate multi-angle attacks on the same constraint; duplicate scripts are left to natural elimination by execution and the chain-auditor (same-root-cause candidates are merged at 8e.5's defect-level dedup)
+3. **Syntax validation**: run `python -m py_compile` on each script; syntax errors enter the retry sub-loop (4.6)
+4. **Constraint-existence validation**: check that each script's constraint_id exists in structured_contract.json; drop nonexistent ones directly
+4.5. **Added v2.2 — API call-format AST validation**: for scripts passing syntax validation, use Python's `ast` module to detect API call formats:
+   - Bare `.json()` chaining (`requests.post(...).json()["key"]` etc.) → **REJECT** (guaranteed SCRIPT_ERROR)
+   - `safe_request` defined but never called → **REJECT** (deceptive code)
+   - All calls use `safe_request()` or an equivalent safe wrapper → **PASS**
 
-1. **收集脚本**：读取 Attack Agents 产出的所有脚本文件，按来源标记为 boundary/state/semantic
-2. **（ADR-0008 删）脚本去重不再执行**——按 endpoint+constraint+strategy 去重会压制合法的多角度攻击同一约束；重复脚本交给执行与 chain-auditor 自然淘汰（同根因候选在 8e.5 缺陷级去重合并）
-3. **语法验证**：对每个脚本执行 `python -m py_compile` 验证语法，语法错误进 retry 子循环（4.6）
-4. **约束存在性验证**：检查脚本的 constraint_id 是否在 structured_contract.json 中存在，不存在的直接丢弃
-4.5. **v2.2 新增 — API 调用格式 AST 验证**：对通过语法验证的脚本，用 Python `ast` 模块检测 API 调用格式：
-   - 裸 `.json()` 链式调用（`requests.post(...).json()["key"]` 等）→ **REJECT**（必现 SCRIPT_ERROR）
-   - `safe_request` 定义但从未调用 → **REJECT**（欺骗性代码）
-   - 全部使用 `safe_request()` 或等效安全包装 → **PASS**
-   
-   具体执行脚本见 `commands/mine.md` Step 8c 第 6 步。
-4.6. **v2.5 新增 — 确定性错误分类 + retry 子循环（反"attack 脚本 ~25%+ SCRIPT_ERROR 直接废弃"）**
+   The concrete script is in `commands/mine.md` Step 8c step 6.
+4.6. **Added v2.5 — deterministic error classification + retry sub-loop (counters "~25%+ of attack scripts discarded directly as SCRIPT_ERROR")**
 
-   **memory 教训**（meilisearch 实测 57% / chroma 12.5% 静态错误率）：attack agent 跨 target 反复犯 5 类静态错误（`bare_json_chain` / `safe_request_unused` / `cleanup_unwrapped` / `verdict_missing` / `syntax_error`），Stage 1 当前直接丢弃 → 浪费 + 掩盖有效测试方向。本 Step 用确定性脚本分类 + 重派 attack agent 带 feedback 重生成（不是废弃）。借鉴 `pipeline_state._handle_defect_review` 的 retry 设计模式（counter + 超限降级）。
+   **Memory lesson** (measured meilisearch 57% / chroma 12.5% static error rates): attack agents repeatedly commit 5 classes of static errors across targets (`bare_json_chain` / `safe_request_unused` / `cleanup_unwrapped` / `verdict_missing` / `syntax_error`); Stage 1 currently discards them outright → waste + loss of valid test directions. This step uses a deterministic script to classify + redispatch the attack agent with feedback for regeneration (not discard). It borrows the retry design pattern of `pipeline_state._handle_defect_review` (counter + over-limit degradation).
 
-   **Step 4.6.1 — 确定性错误分类**：
+   **Step 4.6.1 — deterministic error classification**:
    ```bash
    python scripts/_classify_script_errors.py ${SESSION_DIR}
-   # 产出 ${SESSION_DIR}/script_errors.json（errors[]: script_id + error_classes + feedback_hints）
+   # produces ${SESSION_DIR}/script_errors.json (errors[]: script_id + error_classes + feedback_hints)
    ```
 
-   **Step 4.6.2 — apply retry（确定性脚本，反 LLM 维护 counter 不可靠）**：
+   **Step 4.6.2 — apply retry (deterministic script; counters maintained by an LLM are unreliable)**:
    ```bash
    python scripts/_apply_script_retry.py ${SESSION_DIR}
    # stdout JSON: {regen: [...], exhausted: [...], total_errors, max_retry}
-   # 副作用：更新 script_retry.json / 写 *.retry_feedback.json / 删超限脚本
+   # side effects: updates script_retry.json / writes *.retry_feedback.json / deletes over-limit scripts
    ```
-   - `regen` 列表 = 需重派 attack agent 的脚本（counter < `MAX_SCRIPT_RETRY`=2，已写对应 `retry_feedback.json`）
-   - `exhausted` 列表 = 已超限降级删掉的脚本（避免 SCRIPT_ERROR 流入 Stage 2 浪费 Executor）
+   - `regen` list = scripts needing attack-agent redispatch (counter < `MAX_SCRIPT_RETRY`=2; the corresponding `retry_feedback.json` already written)
+   - `exhausted` list = scripts already over-limit and deleted (keeps SCRIPT_ERROR out of Stage 2, sparing the executor)
 
-   **⛔ 红线**（呼应反"用答案反推考题"）：`feedback_hints` 由 `_classify_script_errors.py` 内嵌的通用规则提供（"wrap in try/except"），**不是 DB 特定答案**（"测 count API exact=false"）。Orchestrator 不得在 feedback 里写被测参数名/端点名/具体测试值。把 qdrant 换 weaviate/milvus 仍合理 = 通用 = 通过。
+   **⛔ Red line** (echoing anti "reverse-engineering the exam from the answers"): `feedback_hints` come from the general rules embedded in `_classify_script_errors.py` ("wrap in try/except"), **not DB-specific answers** ("test the count API with exact=false"). The orchestrator must not write tested parameter names/endpoint names/specific test values into the feedback. Swapping qdrant for weaviate/milvus and it still makes sense = general = pass.
 
-   **Step 4.6.3 — 重派 attack agent（带 feedback）**：如有"需重生成"项，按 source 分组派对应 attack agent（boundary/state/semantic）。agent 收到后**覆盖原文件**（script_id 不变），重跑 Step 4.6.1。直到无 error script 或全部超限降级。
+   **Step 4.6.3 — redispatch the attack agent (with feedback)**: for each "needs regeneration" item, dispatch the corresponding attack agent per source (boundary/state/semantic). On receipt the agent **overwrites the original file** (script_id unchanged); rerun Step 4.6.1. Until no error scripts remain or everything is over-limit degraded.
 
    ```
-   Agent(subagent_type="testvdb:attack-boundary", description="Retry: fix SCRIPT_ERROR 模式",
-     prompt="按 agents/attack-boundary.md § Retry Feedback Handling 规范。
-     ${SESSION_DIR}/boundary_scripts/ 下有 N 个脚本被 Stage 1 确定性分类标错，需读各
-     ${script_id}.retry_feedback.json 修正后**覆盖原文件**（script_id 不变）。
-     错误清单：[script_id → error_classes]。feedback_hints 是通用规则（不是答案），按 hint 修对应错误类，
-     保留原脚本没问题的部分，不要从头重写。target={target}, version={version}, SESSION_DIR=${SESSION_DIR}。")
+   Agent(subagent_type="testvdb:attack-boundary", description="Retry: fix SCRIPT_ERROR patterns",
+     prompt="Per agents/attack-boundary.md § Retry Feedback Handling.
+     N scripts under ${SESSION_DIR}/boundary_scripts/ were flagged by Stage 1's deterministic classification; read each
+     ${script_id}.retry_feedback.json and fix, then **overwrite the original file** (script_id unchanged).
+     Error list: [script_id → error_classes]. feedback_hints are general rules (not answers); fix the corresponding error classes per hint,
+     keep the parts of the original script that are fine, do not rewrite from scratch. target={target}, version={version}, SESSION_DIR=${SESSION_DIR}.")
    ```
-   （state/semantic 同理，subagent_type 换 `testvdb:attack-state` / `testvdb:attack-semantic`）
+   (same for state/semantic; swap subagent_type to `testvdb:attack-state` / `testvdb:attack-semantic`)
 
-   **Step 4.6.4**：retry 子循环结束后，剩下的脚本进 Step 5。
+   **Step 4.6.4**: after the retry sub-loop ends, the remaining scripts proceed to Step 5.
 
-5. **（ADR-0008 删）跨 Agent 交叉审查与 confidence 抽样不再执行**——confidence 字段已从契约与脚本链路删除
-7. **记录审查结果**：将审查结果写入 `debate_logs/stage1.json`
-8. **脚本路径标准化**：将通过审查的脚本按来源复制到对应的子目录（Executor 在此搜索）。使用 Bash 执行：
+5. **(Removed by ADR-0008) cross-agent cross-review and confidence sampling are no longer performed** — the confidence field has been removed from the contract and script chains
+7. **Record review results**: write the review results to `debate_logs/stage1.json`
+8. **Script path normalization**: copy approved scripts into the corresponding subdirectories by source (this is where the executor searches). Using Bash:
    ```bash
    SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}
    mkdir -p ${SESSION_DIR}/boundary_scripts ${SESSION_DIR}/state_scripts ${SESSION_DIR}/scripts
-   # 从攻击 Agent 输出目录收集脚本（非 debate_logs/——攻击 Agent 直接写入这些目录）
-   # 同时保留 script_{id}.py 在根目录做兜底
-   # v2.2: 脚本统一存放在按来源命名的子目录中，不再复制到根目录（避免 Executor 重复扫描）
+   # collect scripts from the attack agents' output directories (not debate_logs/ — attack agents write these directories directly)
+   # also keep script_{id}.py in the root as a fallback
+   # v2.2: scripts live uniformly in source-named subdirectories; no longer copied to the root (avoids the executor double-scanning)
    for dir in boundary_scripts state_scripts scripts; do
      [ ! -d "${SESSION_DIR}/${dir}" ] && continue
      for src in "${SESSION_DIR}/${dir}"/*.py; do
@@ -434,150 +433,150 @@ ls results/{target}/{version}/{timestamp}/debate_logs/*.py 2>/dev/null | wc -l
        esac
      done
    done
-   # Executor 只扫描子目录，不再扫描根目录的 script_*.py 兜底文件
+   # the executor only scans subdirectories; no longer scans the root's script_*.py fallback files
    touch ${SESSION_DIR}/debate_logs/stage1.json.done
    ```
 
-**审查判定规则**：
-- confidence ≥ 0.7 且无重复且语法正确且约束存在且 API 格式通过 → **直接通过**
-- confidence < 0.7 或有重复 → 详细审查后决定 approve / reject
-- 静态代码错误（语法 / 裸 `.json()` / safe_request 不调用 / cleanup 未包 try / 缺 VERDICT 行）→ **先经 Step 4.6 retry**，超 `MAX_SCRIPT_RETRY`=2 才丢弃（反"~25% 脚本直接废弃浪费"）
-- 约束不存在（constraint_id 不在 structured_contract.json）→ **直接丢弃**（attack agent 没读 contract，retry 也修不好）
+**Review adjudication rules**:
+- confidence ≥ 0.7 and no duplicates and syntax correct and constraint exists and API format passes → **approve directly**
+- confidence < 0.7 or duplicates → detailed review then decide approve / reject
+- Static code errors (syntax / bare `.json()` / safe_request never called / cleanup not wrapped in try / missing VERDICT line) → **first go through Step 4.6 retry**; only discarded after exceeding `MAX_SCRIPT_RETRY`=2 (against "~25% of scripts discarded outright as waste")
+- Constraint does not exist (constraint_id not in structured_contract.json) → **discard directly** (the attack agent did not read the contract; retry cannot fix that)
 
-辩论日志写入 `debate_logs/stage1.json`。**Orchestrator 使用 Write 工具写入此文件**，将审查结果序列化为 JSON 后写入 `results/{target}/{version}/{timestamp}/debate_logs/stage1.json`。
+The debate log is written to `debate_logs/stage1.json`. **The orchestrator writes this file with the Write tool**, serializing the review results into JSON before writing `results/{target}/{version}/{timestamp}/debate_logs/stage1.json`.
 
-#### 8d. 派 Executor 执行通过辩论的脚本
+#### 8d. Dispatch the Executor to run the debate-approved scripts
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EVIDENCE_BUILD --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
+**Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EVIDENCE_BUILD --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
 
-**必须使用 Agent 工具派生 docker-executor 子 agent**，禁止自己直接执行：
+**Must use the Agent tool to spawn the docker-executor sub-agent**; executing yourself is forbidden:
 
 ```
-Agent(subagent_type="testvdb:docker-executor", description="执行 {target} v{version} 攻击脚本", prompt="按照 agents/docker-executor.md 规范，在 Docker 沙箱中执行攻击脚本。target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, session_id={session_id}。四件套环境变量（X1 修正：R1 五轮穿透根因，必须在 Step 1 前设置）：export TESTVDB_SCRIPTS_DIR=<插件 cache scripts 绝对路径> TESTVDB_TARGET={target} TESTVDB_DB_URL={db_url} TESTVDB_SESSION_ID={session_id}。⛔ 立即执行 Step 1 命令，不要分析、不要检查、不要读取脚本内容。脚本位于 SESSION_DIR 下的 boundary_scripts/、state_scripts/、scripts/ 子目录和 script_*.py 文件中。所有脚本已通过语法验证，无需再检查。")
+Agent(subagent_type="testvdb:docker-executor", description="Execute {target} v{version} attack scripts", prompt="Per the agents/docker-executor.md spec, execute attack scripts in the Docker sandbox. target={target}, version={version}, SESSION_DIR=${PROJECT_ROOT}/results/{target}/{version}/{timestamp}, session_id={session_id}. The four-piece environment set (X1 fix: root cause of five rounds of R1 penetration; must be set before Step 1): export TESTVDB_SCRIPTS_DIR=<absolute path of the plugin cache scripts> TESTVDB_TARGET={target} TESTVDB_DB_URL={db_url} TESTVDB_SESSION_ID={session_id}. ⛔ Run the Step 1 command immediately; do not analyze, do not check, do not read script contents. Scripts are located in the boundary_scripts/, state_scripts/, scripts/ subdirectories under SESSION_DIR and in script_*.py files. All scripts have passed syntax validation; no further checking needed.")
 ```
 
-每个脚本一个独立沙箱执行，并发处理。
+Each script gets an independent sandbox execution, processed concurrently.
 
-**自动阻断**：Executor 完成后，使用 Bash 工具执行以下命令验证产出（使用 .done 标记确保文件写入完成）：
+**Auto-blocking**: after the executor completes, verify the output with the Bash tool (using .done markers to ensure files finished writing):
 ```bash
 ls results/{target}/{version}/{timestamp}/output_*.log.done 2>/dev/null | wc -l
 ```
-如果输出为 0，**禁止 Orchestrator 自己执行脚本**，必须在 error_log 中记录并终止当前轮次。**⛔ 绝对禁止 Orchestrator 自己运行 Python 脚本或 curl 命令来替代 Executor。如果 Executor 失败，当前轮次终止。**
+If the output is 0, **the orchestrator executing scripts itself is forbidden**; record in error_log and terminate the current round. **⛔ The orchestrator running Python scripts or curl commands itself in place of the executor is absolutely forbidden. If the executor fails, the current round terminates.**
 
-**容器生命周期管理**：Executor 在 Step 5 执行完脚本后，**不得清理容器**。容器必须保持运行直到 Reporter 完成 Pre-Submit Gate 复现验证（Step 8f）后，由 Orchestrator 在 Step 8j 统一清理。Executor 只负责启动和执行，不负责停止。轮次间如需重置 DB 状态，由 Orchestrator 在 Step 8j 执行 `docker restart`。
+**Container lifecycle management**: after the executor finishes running scripts in Step 5, **containers must not be cleaned up**. Containers must stay running until the reporter completes the Pre-Submit Gate reproduction verification (Step 8f), after which the orchestrator cleans up uniformly in Step 8j. The executor only starts and executes; it never stops. If DB state needs resetting between rounds, the orchestrator runs `docker restart` in Step 8j.
 
-#### 8e. 收集结果 → EVIDENCE_BUILD + CHAIN_AUDIT（ADR-0008 证据链双 Agent）
+#### 8e. Collect results → EVIDENCE_BUILD + CHAIN_AUDIT (ADR-0008 evidence-chain duo)
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EVIDENCE_BUILD --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
+**Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EVIDENCE_BUILD --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
 
-**Step 1 — 机械提取候选清单**（fan-out 派发清单，确定性 0 LLM）：
+**Step 1 — mechanical candidate extraction** (fan-out dispatch list; deterministic 0 LLM):
 ```bash
 python scripts/extract_candidates.py $SESSION_DIR
-# 产出 candidates.jsonl（VERDICT: DEFECT_FOUND 的 log → 候选；SCRIPT_ERROR 排除）
+# produces candidates.jsonl (logs with VERDICT: DEFECT_FOUND → candidates; SCRIPT_ERROR excluded)
 ```
 
-**Step 2 — L1 机械闸门前移**（0 token 杀 ~90% 历史 FP 模式）：
+**Step 2 — L1 mechanical gate moved forward** (kills ~90% of historical FP patterns at 0 tokens):
 ```bash
 python scripts/verify_live_l1.py $SESSION_DIR --target {target}
 ```
-REFUTED 候选从 candidates.jsonl 移除（记入 verify_live_l1.json）。verify-live-l2 已删（ADR-0008 B1：其主动 Docker 实测职能与 dev-reviewer 同物种，NEEDS_MORE_EVIDENCE 补证轮覆盖剩余语义情况）。
+REFUTED candidates are removed from candidates.jsonl (recorded in verify_live_l1.json). verify-live-l2 has been removed (ADR-0008 B1: its active Docker re-testing duty is the same species as the dev-reviewer; the NEEDS_MORE_EVIDENCE evidence-supplement round covers the remaining semantic cases).
 
-**Step 3 — evidence-builder 按候选并发派发**（1 builder/候选）：
+**Step 3 — dispatch evidence-builders concurrently per candidate** (1 builder/candidate):
 ```
-对 candidates.jsonl 每行并发派发（受派发槽位约束）：
-Agent(subagent_type="testvdb:evidence-builder", description="证据链构建 {defect_id}",
-  prompt="按照 agents/evidence-builder.md 规范，为候选 {defect_id} 构建证据链。target={target}, version={version}, SESSION_DIR=$SESSION_DIR。你的 defect_id={defect_id}。")
+Dispatch concurrently for each line of candidates.jsonl (subject to dispatch slots):
+Agent(subagent_type="testvdb:evidence-builder", description="Evidence-chain build {defect_id}",
+  prompt="Per the agents/evidence-builder.md spec, build the evidence chain for candidate {defect_id}. target={target}, version={version}, SESSION_DIR=$SESSION_DIR. Your defect_id={defect_id}.")
 ```
-- 产出 `evidence_chain/{defect_id}.json` + `.done`（按候选命名，并发无写冲突）
-- 超时/缺产出候选：不重试，留给 auditor 记 NEEDS_MORE_EVIDENCE
+- Produces `evidence_chain/{defect_id}.json` + `.done` (named per candidate; concurrent writes do not conflict)
+- Timed-out/no-output candidates: no retry; left for the auditor to record NEEDS_MORE_EVIDENCE
 
-**8e.5 缺陷去重（v2.2，ADR-0008 输入源更新）**
+**8e.5 Defect dedup (v2.2; ADR-0008 input-source update)**
 
-主进程在派发 auditor 前对 candidates 执行跨轮次去重（同 endpoint + 同 defect_type 合并；跨轮与 dedup_state.json 比较）。产出 `debate_logs/stage2_deduped.json`。
+Before dispatching the auditor, the main process deduplicates candidates across rounds (same endpoint + same defect_type merge; cross-round comparison against dedup_state.json). Produces `debate_logs/stage2_deduped.json`.
 
-**8e.7 CHAIN_AUDIT — chain-auditor 单实例收口**
+**8e.7 CHAIN_AUDIT — chain-auditor single-instance close-out**
 
-全部 builder `.done` 后派发（跨候选一致性检查需要完整链集合）：
+Dispatch after all builders' `.done` (cross-candidate consistency checks need the complete chain set):
 ```
-Agent(subagent_type="testvdb:chain-auditor", description="证据链审计 {target}",
-  prompt="按照 agents/chain-auditor.md 规范，审计 evidence_chain/ 下全部证据链并产出终判。target={target}, version={version}, SESSION_DIR=$SESSION_DIR。")
+Agent(subagent_type="testvdb:chain-auditor", description="Evidence-chain audit {target}",
+  prompt="Per the agents/chain-auditor.md spec, audit all evidence chains under evidence_chain/ and produce final verdicts. target={target}, version={version}, SESSION_DIR=$SESSION_DIR.")
 ```
-- 产出 `debate_logs/chain_verdicts.json`（DEFECT / NOT_DEFECT / NEEDS_MORE_EVIDENCE + fp_evidence_source + root_cause 分布）+ `.done`
-- 验证：`test -f "$SESSION_DIR/debate_logs/chain_verdicts.json.done" && echo READY || echo PENDING`
-- NEEDS_MORE_EVIDENCE > 0 → 仅对标记的 defect_id 重派 builder 补证一轮（最多 1 次），再重派 auditor 出最终 verdict；第二轮仍矛盾 → NOT_DEFECT（保守）
-- **⛔ 主进程绝不做判定。auditor 两轮均超时 → 全候选保守 NOT_DEFECT + error_log。**
+- Produces `debate_logs/chain_verdicts.json` (DEFECT / NOT_DEFECT / NEEDS_MORE_EVIDENCE + fp_evidence_source + root_cause distribution) + `.done`
+- Verification: `test -f "$SESSION_DIR/debate_logs/chain_verdicts.json.done" && echo READY || echo PENDING`
+- NEEDS_MORE_EVIDENCE > 0 → redispatch builders for exactly the marked defect_ids for one more evidence round (at most once), then redispatch the auditor for final verdicts; still contradictory in round 2 → NOT_DEFECT (conservative)
+- **⛔ The main process never adjudicates. If the auditor times out on both rounds → all candidates conservatively NOT_DEFECT + error_log.**
 
-**完成后更新 pipeline_state**: `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase REPORTING --phase-data '{"CHAIN_AUDIT": {"verdict_defect": N, "not_defect": M, "needs_more_evidence": K}}'`
+**Update pipeline_state when done**: `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase REPORTING --phase-data '{"CHAIN_AUDIT": {"verdict_defect": N, "not_defect": M, "needs_more_evidence": K}}'`
 
-**experience_handoff 采集**：auditor 的 `root_cause_distribution` 与 `fp_evidence_source_distribution` 采集进 experience_handoff.json 的 rejection_patterns（词表沿用原 dev-reviewer root_cause_if_fp）。
+**experience_handoff collection**: the auditor's `root_cause_distribution` and `fp_evidence_source_distribution` are collected into experience_handoff.json's rejection_patterns (vocabulary follows the original dev-reviewer root_cause_if_fp).
 
-#### 8f. 派 Reporter
+#### 8f. Dispatch the Reporter
 
-**confirm_per_round 开关（ADR-0009 §6）**：进入本步前先用 Bash 确定性读取开关：
+**confirm_per_round switch (ADR-0009 §6)**: before entering this step, read the switch deterministically with Bash:
 ```bash
 python scripts/get_setting.py mining.confirm_per_round
 ```
-- 输出 `true`（默认）→ 照常执行本步与 8f.5（产品行为：轮内 confirmation）。
-- 输出 `false`（实验特化）→ **跳过 8f 与 8f.5**：不派 Reporter，缺陷审查与 Pre-Submit Gate 延后；candidates.jsonl 继续累积（8e.5 跨轮去重照常执行），容器保持运行（生命周期管理规则不变，仍由 8j 统一处理）；`pipeline_state` 标记 `phase=MINING_DEFER_CONFIRM`。会话终止（时间到/轮数到/僵局终止）后，对累积的全部候选执行**统一判定**：evidence-builder + chain-auditor 批量（机械预跑 + SOP 聚合，与轮内路径同一规范，ADR-0008）→ novelty 终判 → Reporter + Pre-Submit Gate 一次性收口。
+- Output `true` (default) → execute this step and 8f.5 as usual (product behavior: intra-round confirmation).
+- Output `false` (experiment specialization) → **skip 8f and 8f.5**: do not dispatch the reporter; defect review and the Pre-Submit Gate are deferred; candidates.jsonl keeps accumulating (8e.5's cross-round dedup proceeds as usual); containers stay running (lifecycle rules unchanged, still handled uniformly at 8j); `pipeline_state` marks `phase=MINING_DEFER_CONFIRM`. After session termination (time up / rounds up / stalemate termination), run **unified adjudication** over all accumulated candidates: evidence-builder + chain-auditor in batch (mechanical pre-run + SOP aggregation, same spec as the intra-round path, ADR-0008) → novelty final ruling → reporter + Pre-Submit Gate, closed out in one pass.
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEFECT_REVIEW`
+**Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase DEFECT_REVIEW`
 
-**必须使用 Agent 工具派生 reporter 子 agent**：
+**Must use the Agent tool to spawn the reporter sub-agent**:
 
 ```
-Agent(subagent_type="testvdb:reporter", description="生成缺陷报告 {target}", prompt="按照 agents/reporter.md 规范，为以下 Debate-Confirmed 缺陷生成报告：{debate_confirmed}。session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}。读取 results/{target}/{version}/{timestamp}/pipeline_state.json 了解当前进度")
+Agent(subagent_type="testvdb:reporter", description="Generate defect reports {target}", prompt="Per the agents/reporter.md spec, generate reports for the following Debate-Confirmed defects: {debate_confirmed}. session_id={session_id}, target={target}, version={version}, session_dir=results/{target}/{version}/{timestamp}. Read results/{target}/{version}/{timestamp}/pipeline_state.json for current progress")
 ```
 
-**自动化输出验证**：Reporter 完成后，使用 Bash 工具执行以下命令验证产出：
+**Automated output verification**: after the reporter completes, verify the output with the Bash tool:
 ```bash
 ls results/{target}/{version}/{timestamp}/defects/defect-*.md 2>/dev/null | wc -l
 ```
-如果输出为 0，说明 Reporter 未正常执行，必须在 error_log 中记录。
+If the output is 0, the reporter did not execute properly; record in error_log.
 
-**证据链验证要求**：Reporter 生成的每个 defect-N.md 必须包含完整的证据链：
-- **Ring 2（文档引用）**：source_url 必须可达，doc_version 必须与目标 major.minor 匹配
-- **Ring 4（源代码引用）**：如果缺陷涉及特定代码路径，必须包含 github_url
+**Evidence-chain verification requirements**: every defect-N.md the reporter generates must contain a complete evidence chain:
+- **Ring 2 (document reference)**: source_url must be reachable; doc_version must match the target major.minor
+- **Ring 4 (source reference)**: if the defect involves a specific code path, a github_url must be included
 
-**Pre-Submit Gate 复现验证**：Reporter 必须对每个确认的缺陷执行复现验证（详见 agents/reporter.md 的 Pre-Submit Gate 章节），只有 100% 复现的缺陷才产出最终报告。
+**Pre-Submit Gate reproduction verification**: the reporter must run reproduction verification for every confirmed defect (see agents/reporter.md's Pre-Submit Gate section); only 100%-reproduced defects produce final reports.
 
-#### 8f.5 逐缺陷全面审查（v2.2 新增 — 每轮末尾逐条审核 Reporter 产出）
+#### 8f.5 Per-defect full review (added v2.2 — end-of-round item-by-item audit of reporter output)
 
-**⛔ 铁律：主进程只做编排。** 主进程执行 `python scripts/verify_defects.py` 对每个 defect-N.md 审查：
-1. 证据链完整性（Ring 1/2/3 是否齐全）
-2. 严重性校准（基于执行日志重新确认）
-3. 脚本错误排除（检查 SCRIPT_ERROR 标记）
-4. 假阳性识别（VERDICT 行 vs 报告声称）
+**⛔ Iron law: the main process only orchestrates.** The main process runs `python scripts/verify_defects.py` auditing every defect-N.md:
+1. Evidence-chain completeness (are Rings 1/2/3 all present)
+2. Severity calibration (re-confirmed from the execution logs)
+3. Script-error exclusion (check SCRIPT_ERROR markers)
+4. False-positive identification (VERDICT line vs report claims)
 
-产出 `defect-review.md`，标记每个缺陷 CONFIRMED / FALSE_POSITIVE / NEEDS_IMPROVEMENT。
-FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Reporter 重写（最多 1 次）。
+Produces `defect-review.md`, marking each defect CONFIRMED / FALSE_POSITIVE / NEEDS_IMPROVEMENT.
+FALSE_POSITIVE → delete the corresponding defect-N.md. NEEDS_IMPROVEMENT → send back to the reporter for rewrite (at most once).
 
-#### 8g. 保存状态
+#### 8g. Save state
 
-**完成后更新 pipeline_state** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase STATE_SAVE`
-每轮结束保存 mine_state.json + coverage.json + experience_handoff.json + pipeline_state.json。
+**Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase STATE_SAVE`
+At each round's end save mine_state.json + coverage.json + experience_handoff.json + pipeline_state.json.
 
-**pipeline_state.json（v3 跨 Turn 状态机，ADR-0004）：**
+**pipeline_state.json (v3 cross-turn state machine, ADR-0004):**
 
-由 `scripts/pipeline_state.py` CLI 管理，禁止手动构造 JSON。Schema 参考 [pipeline_state.py](scripts/pipeline_state.py) 的 `PipelineState.create()`。
+Managed by the `scripts/pipeline_state.py` CLI; hand-constructing the JSON is forbidden. Schema reference: [pipeline_state.py](scripts/pipeline_state.py)'s `PipelineState.create()`.
 
-每个子步骤完成后，调用 `pipeline_state.py advance --phase <NEXT> [--phase-data '...']`。phase 转换受硬编码 transition map 校验（无效跳转 → InvalidTransition 报错）。全局状态计数器通过 `pipeline_state.py mutate --total-defects N --coverage P...` 更新。跨 Turn 恢复时，`reconstruct_context.py` 读取此文件确定断点。
+After each sub-step completes, call `pipeline_state.py advance --phase <NEXT> [--phase-data '...']`. Phase transitions are validated against a hardcoded transition map (invalid jumps → InvalidTransition error). Global state counters update via `pipeline_state.py mutate --total-defects N --coverage P...`. On cross-turn recovery, `reconstruct_context.py` reads this file to determine the breakpoint.
 
-### Agent 间通信可靠性机制（.done 标记文件）
+### Inter-agent communication reliability (.done marker files)
 
-由于子 Agent 通过 Agent 工具异步派发，所有 Agent 间通信通过文件系统。为确保文件写入的原子性和可见性：
+Since sub-agents are dispatched asynchronously via the Agent tool, all inter-agent communication goes through the filesystem. To ensure atomicity and visibility of file writes:
 
-1. **子 Agent 输出规范**：先写入输出文件，完成后创建同名 `.done` 标记文件
-2. **Orchestrator 检查规范**：**必须**检查 `.done` 标记文件存在性（而非仅检查输出文件——文件可能正在写入）
-3. **检查命令**：`test -f "{file}.done" && echo "READY" || echo "PENDING"`
-4. **超时处理**：输出文件存在但 `.done` 不存在超过 60 秒 → 子 Agent 卡住，触发超时
-5. **Orchestrator 写入规范**：先写 `.tmp` 临时文件，完成后 rename + touch `.done`
+1. **Sub-agent output spec**: write the output file first; when complete, create the same-named `.done` marker file
+2. **Orchestrator check spec**: **must** check for the `.done` marker file's existence (not merely the output file — the file may be mid-write)
+3. **Check command**: `test -f "{file}.done" && echo "READY" || echo "PENDING"`
+4. **Timeout handling**: output file exists but `.done` missing for over 60 seconds → the sub-agent is stuck; trigger the timeout
+5. **Orchestrator write spec**: write a `.tmp` temp file first; rename + touch `.done` on completion
 
-**experience_handoff.json 写入逻辑：**
-- 记录本轮关键发现：debate_confirmed 的 endpoint 分布、驳回原因分类、新发现的高价值攻击策略
-- 记录当前判定链状态：L1 refuted / verdict_defect / not_defect / needs_more_evidence 计数（ADR-0008）
-- 供下次 session 或上下文压缩恢复时快速理解当前进度
+**experience_handoff.json write logic:**
+- Record this round's key findings: debate_confirmed's endpoint distribution, rejection-reason classification, newly discovered high-value attack strategies
+- Record the current adjudication-chain state: L1 refuted / verdict_defect / not_defect / needs_more_evidence counts (ADR-0008)
+- Enables quickly understanding current progress at the next session or after context-compaction recovery
 
-**experience_handoff.json 模板**（Orchestrator 使用 Write 工具写入）：
+**experience_handoff.json template** (the orchestrator writes with the Write tool):
 ```json
 {
   "session_id": "{session_id}",
@@ -604,7 +603,7 @@ FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Repor
 }
 ```
 
-**coverage.json 模板**（Orchestrator 使用 Write 工具写入）：
+**coverage.json template** (the orchestrator writes with the Write tool):
 ```json
 {
   "session_id": "{session_id}",
@@ -625,77 +624,76 @@ FALSE_POSITIVE → 删除对应 defect-N.md。NEEDS_IMPROVEMENT → 打回 Repor
 }
 ```
 
-#### 8h. 分析本轮产出
-- 投票分歧模式分析
-- 驳回原因分类（by-design / 假阳性 / 不可复现 / 证据不足）
-- endpoint 覆盖率更新
-- 生成 reflection_context 供下轮使用
+#### 8h. Analyze this round's output
+- Vote-divergence pattern analysis
+- Rejection-reason classification (by-design / false positive / irreproducible / insufficient evidence)
+- Endpoint coverage update
+- Generate reflection_context for the next round
 
-### v2.0 策略提取（evolution.enabled=true）
+### v2.0 strategy extraction (evolution.enabled=true)
 
-每轮结束后（或在 Step 9 统一执行），运行：
+After each round ends (or executed collectively at Step 9), run:
 ```bash
 python scripts/strategy_extractor.py "results/{target}/{version}/{timestamp}" {target}
 ```
+Strategy extraction logic:
+1. Read this round's experience_handoff.json
+2. Extract strategy patterns of confirmed_defects → generalize → merge
+3. New strategies → write to strategy_registry (global + per-DB)
+4. Existing strategies → update performance counts + adjust confidence
+5. Append to evolution_log.jsonl for auditing
 
-策略提取逻辑：
-1. 读取本轮 experience_handoff.json
-2. 提取 confirmed_defects 的策略模式 → 泛化 → 合并
-3. 新策略 → 写入 strategy_registry（global + per-DB）
-4. 已有策略 → 更新 performance 计数 + 调整 confidence
-5. 追加 evolution_log.jsonl 审计条目
+#### 8i. Check termination conditions
+Terminate the loop when any of the following holds:
+1. 5 consecutive rounds with no new defects
+2. Contract coverage ≥ 95%
+3. max_rounds reached (and > 0)
+4. min_defects reached
 
-#### 8i. 检查终止条件
-以下任一满足即终止循环：
-1. 连续 5 轮无新缺陷
-2. 合同覆盖率 ≥ 95%
-3. max_rounds 达到（且 > 0）
-4. min_defects 达到
+#### 8j. Inter-round container management
+- **Continue to the next round**: restart the DB container to reset state (`docker restart testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}`), keeping data volumes
+- **Terminate the loop**: run full cleanup (`docker compose -f docker/{target}.yml down -v`), releasing all resources
 
-#### 8j. 轮次间容器管理
-- **继续下一轮**：重启 DB 容器以重置状态（`docker restart testvdb-{target}-${TESTVDB_SESSION_ID:-standalone}`），保留数据卷
-- **终止循环**：执行完整清理（`docker compose -f docker/{target}.yml down -v`），释放所有资源
+### Step 9: Issue drafts + summary report + mandatory container cleanup
 
-### Step 9: Issue 草稿 + 汇总报告 + 强制容器清理
+**⛔ Absolutely forbidden: the main process or any agent directly submitting Issues to GitHub repositories. All output stays on the local filesystem.**
 
-**⛔ 绝对禁止：主进程或任何 Agent 直接提交 Issue 到 GitHub 仓库。所有产出仅限本地文件系统。**
-
-1. **生成 Issue 格式草稿**（v2.2 新增）：
+1. **Generate issue-format drafts** (added v2.2):
    ```bash
    mkdir -p results/{target}/{version}/{timestamp}/issues
    ```
-   对每个通过 8f.5 审查的 CONFIRMED 缺陷，生成 `issues/issue-{N}-{slug}.md`，包含完整的 Bug Report 格式（Title, Description, Version, Steps to Reproduce, Expected/Actual Behavior, Impact, Environment, MRE path）。底部标注"本地草稿，需人工审核后手动提交"。
+   For every CONFIRMED defect passing 8f.5 review, generate `issues/issue-{N}-{slug}.md`, containing the full Bug Report format (Title, Description, Version, Steps to Reproduce, Expected/Actual Behavior, Impact, Environment, MRE path). Annotate at the bottom: "local draft; requires manual review before manual submission".
 
-2. 生成 `summary.md` + `defect-review.md` 汇总报告
-3. **强制容器清理**：执行以下命令清理所有本次会话创建的 Docker 容器和网络：
+2. Generate the `summary.md` + `defect-review.md` summary reports
+3. **Mandatory container cleanup**: run the following to clean up all Docker containers and networks created this session:
    ```bash
    docker compose -f docker/{target}.yml down -v --remove-orphans
    docker network rm testvdb-net-${TESTVDB_SESSION_ID:-standalone} 2>/dev/null || true
    ```
-4. 验证清理完成：`docker ps --filter "name=testvdb-{target}" --format "{{.Names}}"` 应无输出
-5. 更新 `.session.lock` 的 status 为 `completed`
+4. Verify cleanup completed: `docker ps --filter "name=testvdb-{target}" --format "{{.Names}}"` should output nothing
+5. Update `.session.lock`'s status to `completed`
 
-### 僵局处理（连续5轮无新缺陷时触发）
-1. 派生 Knowledge Extractor 重新搜索文档变更 + 新 issue + 社区讨论
-2. 将所有搜索结果投放给 Judge Agents 重新审视上一轮候选缺陷
-3. 对低覆盖率端点调整 Attack Agents 攻击策略
-4. 如仍无发现 → 终止
+### Stalemate handling (triggered after 5 consecutive rounds with no new defects)
+1. Dispatch the Knowledge Extractor to re-search for documentation changes + new issues + community discussion
+2. Feed all search results to the Judge Agents to re-examine last round's candidate defects
+3. Adjust the attack strategies of the attack agents for low-coverage endpoints
+4. If still nothing found → terminate
 
-### Zero 缺陷判定
-跑完全部轮次零产出 → 在 session_metadata.json 标注 `ZERO_DEFECT`，生成诊断报告：
-- 哪些端点被测试、哪些约束被遗漏
-- 覆盖率分析
-- 建议改进方向
-
----
-
-## 生命周期管理
-
-> 错误处理、上下文压缩保护、进度可见性、多 DB 并行 — 详见 `agents/orchestrator-lifecycle.md`。
+### Zero-defect ruling
+After running all rounds with zero output → annotate `ZERO_DEFECT` in session_metadata.json and generate a diagnostic report:
+- which endpoints were tested, which constraints were missed
+- coverage analysis
+- suggested improvement directions
 
 ---
 
-## 数据流规范
+## Lifecycle management
+
+> Error handling, context-compaction protection, progress visibility, multi-DB parallelism — see `agents/orchestrator-lifecycle.md`.
+
+---
+
+## Data-flow specification
 
 ```
 Orchestrator
@@ -721,61 +719,61 @@ Orchestrator
   │           ▼
   │     structured_contract.json + sdk.version + available_tags
   │           │
-  ├──▶ Attack Trio (并发) ◀── contract + reflection_context + threat_model + cognitive_blindspots
+  ├──▶ Attack Trio (concurrent) ◀── contract + reflection_context + threat_model + cognitive_blindspots
   │     boundary │ state │ semantic
   │           ▼
   │     test_scripts[]
   │           │
-  ├──▶ 辩论 Stage 1 (Orchestrator 自行执行自动化审查：去重+语法验证+约束验证)
+  ├──▶ Debate Stage 1 (the orchestrator runs the automated review itself: dedup + syntax validation + constraint validation)
   │           │
   │           ▼
   │     approved_scripts[]
   │           │
-  ├──▶ Executor (并发) ◀── approved_scripts[]  [容器保持运行]
+  ├──▶ Executor (concurrent) ◀── approved_scripts[]  [containers stay running]
   │           │
   │           ▼
   │     execution_results[]
   │           │
-  ├──▶ extract_candidates (机械提取) ──▶ verify_live_l1 (L1 机械闸门, 0 token)
+  ├──▶ extract_candidates (mechanical extraction) ──▶ verify_live_l1 (L1 mechanical gate, 0 tokens)
   │           │
   │           ▼
-  ├──▶ evidence-builder × N (按候选并发, ADR-0008) ◀── candidates.jsonl + contract + src clone
-  │     step1: 文档验证+执行证据审查+证据链追溯
-  │     step2: 源码搜证
+  ├──▶ evidence-builder × N (concurrent per candidate, ADR-0008) ◀── candidates.jsonl + contract + src clone
+  │     step1: doc verification + execution-evidence review + chain tracing
+  │     step2: source forensics
   │           │
   │           ▼
-  ├──▶ chain-auditor (单实例收口) ──▶ chain_verdicts.json
+  ├──▶ chain-auditor (single-instance close-out) ──▶ chain_verdicts.json
   │     (DEFECT/NOT_DEFECT/NEEDS_MORE_EVIDENCE + fp_evidence_source + root_cause)
   │           │
-  ├──▶ Reporter ◀── confirmed_defects[]  [复用运行中容器做 Pre-Submit Gate]
+  ├──▶ Reporter ◀── confirmed_defects[]  [reuses running containers for the Pre-Submit Gate]
   │           │
   │           ▼
   │     defect-N.md + MRE + summary.md
   │           │
-  └──▶ 容器清理 (docker compose down -v)
+  └──▶ Container cleanup (docker compose down -v)
 ```
 
 ---
 
-## 输出产物
+## Output artifacts
 
 ```
 results/{target}/{version}/{timestamp}/
-├── defects/           # 缺陷报告 (defect-1.md, defect-N.md)
-├── summary.md          # 本轮汇总
-├── debate_logs/        # 辩论日志 (stage1.json, stage2.json)
-├── structured_contract.json  # 契约
-├── raw_knowledge.json    # 原始知识
-├── mine_state.json     # 状态快照
-├── coverage.json       # 覆盖率跟踪
-├── session_metadata.json     # 会话元数据
-└── experience_handoff.json   # 经验交接
+├── defects/           # defect reports (defect-1.md, defect-N.md)
+├── summary.md          # this round's summary
+├── debate_logs/        # debate logs (stage1.json, stage2.json)
+├── structured_contract.json  # contract
+├── raw_knowledge.json    # raw knowledge
+├── mine_state.json     # state snapshot
+├── coverage.json       # coverage tracking
+├── session_metadata.json     # session metadata
+└── experience_handoff.json   # experience handoff
 
-intelligence/{target}/                # v2.1 战略情报层
-├── issue_corpus.json                 # 原始 Issue 语料
-├── commit_corpus.json                # 原始 Commit/PR 语料
-├── classified_issues.json            # 三分类结果 (positive/negative/invalid)
-├── bug_shapes.json                   # 根因模式 (root cause patterns)
-├── developer_cognition.json          # 开发者认知边界分析
-└── threat_model.json                 # 威胁模型 + 认知盲点 + 攻击优先级
+intelligence/{target}/                # v2.1 strategic intelligence layer
+├── issue_corpus.json                 # raw issue corpus
+├── commit_corpus.json                # raw commit/PR corpus
+├── classified_issues.json            # three-way classification (positive/negative/invalid)
+├── bug_shapes.json                   # root-cause patterns
+├── developer_cognition.json          # developer cognition boundary analysis
+└── threat_model.json                 # threat model + cognitive blindspots + attack priorities
 ```
