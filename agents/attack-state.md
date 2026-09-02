@@ -124,7 +124,7 @@ assertion and `no_fit_reason`) — an empty binding for a new class is an explic
 
 **Construction (how to build)**
 - **G4 Positive-negative pairing**: positive = exercising the promise (including boundary closure: min/max themselves must be accepted); negative = challenging the promise (constructed per the class criteria); both sides share the setup and neither is dispensable — with only a negative and no positive, the constraint itself may be false and the attack is groundless. [Source: D2 section + attack-boundary strategy 1 boundary matrix]
-- **G5 Graceful-degradation typing**: negative oracles are typed by violation form, not a blanket "should be rejected" — refusing when it should refuse = Type1_IllegalSuccess; crash/hang/5xx = Type3_RuntimeFailure; state that fails to reconcile = Type4_StateLogicViolation; "rejects with clear diagnostics" = not a defect. [Source: attack-boundary strategies 1/6/7 assertion logic]
+- **G5 Graceful-degradation typing**: negative oracles are typed by violation form, not a blanket "should be rejected" — not refusing when it should refuse = Type1_IllegalSuccess; crash/hang/5xx = Type3_RuntimeFailure; state that fails to reconcile = Type4_StateLogicViolation; "rejects with clear diagnostics" = not a defect. [Source: attack-boundary strategies 1/6/7 assertion logic]
 - **G6 Mutation justified**: a sequence-negative's mutation point must be argued for its destructive power in the script Rationale (why this mutation most easily breaks the invariant: timing/boundary/duplication/recovery). [Source: R22 state_scroll_01 instance convention, promoted to explicit text 2026-08-30]
 
 **Adjudication (how to judge)**
