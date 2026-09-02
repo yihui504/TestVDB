@@ -1,32 +1,32 @@
-# 目标 API 参考（契约驱动 — 通用原则）
+# Target API reference (contract-driven — shared principles)
 
-> 共享参考。攻击 Agent 必须**契约驱动**，禁止硬编码任何 DB 的端口/路径/语法/数据字段。
-> ⛔ 不要写 per-DB 的 if/else 分支或写死表——那会把"硬编码 qdrant"换成"硬编码 4 个 DB"，版本变化时会过时并误导，且新增 DB 时会崩溃。
+> Shared reference. Attack agents must be **contract-driven**; hardcoding any DB's ports/paths/syntax/data fields is forbidden.
+> ⛔ Do not write per-DB if/else branches or hardcoded tables — that replaces "hardcoded qdrant" with "hardcoded 4 DBs", goes stale and misleads across version changes, and crashes when a new DB is added.
 
-## 核心原则
+## Core principles
 
-1. **唯一真理源 = `structured_contract.json`**。从契约读取一切 DB 特定信息：
-   - `target` 字段 → 当前 DB（weaviate / qdrant / milvus / pgvector / meilisearch / chroma）
-   - `api_endpoints` → 端点路径（method + path + category + parameters + source_url）
-   - `data_types` → 数据结构（字段命名、向量格式，如 weaviate 的 `properties`/`Class`/`vector`）
-   - `constraints` / `assertions` → 待测约束与预期行为
-2. **禁止硬编码 DB 特定值**：不写死端口（6333/8080）、不写死路径（`/collections/x/points`）、不写死数据字段（`payload`）、不写死过滤语法（`must`/`match`）、不写死响应键（`result`）。这些一律从契约推导或用占位符。
-3. **示例代码用占位符**：路径写成 `<path from contract for X>`，并注释"从 `contract.api_endpoints` 读取；请求体/响应解析依据 `contract.target` 与 `contract.data_types` 推导"。
-4. **BASE_URL 从环境变量**：`TESTVDB_DB_URL`（由 docker-executor 设置正确端口），未设置则 `VERDICT: SCRIPT_ERROR` 退出。**禁止任何默认端口**。
-5. **响应解析通用化**：先 `print(raw_text)`，以 HTTP `status_code` 判定缺陷为主；响应体解析作为辅助，按 `contract.target` 动态选择键名，不要假设固定结构。
-6. **target 来源 = 契约**：若脚本需要 target 变量，从 `structured_contract.json` 的 `target` 字段读取（**不要**用 `os.environ.get("TESTVDB_TARGET", ...)` 带默认值——默认值会假设错误 DB）。
+1. **The single source of truth = `structured_contract.json`**. Read every DB-specific piece of information from the contract:
+   - the `target` field → current DB (weaviate / qdrant / milvus / pgvector / meilisearch / chroma)
+   - `api_endpoints` → endpoint paths (method + path + category + parameters + source_url)
+   - `data_types` → data structures (field naming, vector formats, e.g. weaviate's `properties`/`Class`/`vector`)
+   - `constraints` / `assertions` → constraints under test and expected behavior
+2. **Hardcoding DB-specific values is forbidden**: no hardcoded ports (6333/8080), paths (`/collections/x/points`), data fields (`payload`), filter syntax (`must`/`match`), or response keys (`result`). Derive all of these from the contract or use placeholders.
+3. **Example code uses placeholders**: write paths as `<path from contract for X>`, commented "read from `contract.api_endpoints`; request-body/response parsing derived from `contract.target` and `contract.data_types`".
+4. **BASE_URL from environment**: `TESTVDB_DB_URL` (docker-executor sets the correct port); if unset, exit with `VERDICT: SCRIPT_ERROR`. **Any default port is forbidden**.
+5. **Generalized response parsing**: `print(raw_text)` first; defect adjudication keys primarily on the HTTP `status_code`; body parsing is auxiliary — select key names dynamically per `contract.target`, never assume a fixed structure.
+6. **target comes from the contract**: if a script needs the target variable, read it from `structured_contract.json`'s `target` field (**do not** use `os.environ.get("TESTVDB_TARGET", ...)` with a default — a default assumes the wrong DB).
 
-## 为何不写 per-DB 语法表
-不同 DB 版本的端点路径/请求体语法会变化；写死表会过时、会误导、新增 DB 时 `else: raise` 会让脚本崩溃。契约已包含 `target` + `api_endpoints` + `data_types`，足够 LLM 据此推导出当前 target 的正确语法。
+## Why no per-DB syntax tables
+Endpoint paths / request-body syntax change across DB versions; hardcoded tables go stale, mislead, and `else: raise` crashes scripts when a new DB appears. The contract already carries `target` + `api_endpoints` + `data_types`, which is enough for the LLM to derive the correct syntax for the current target.
 
-## safe_request 权威定义（三 attack agent 共用）
+## Authoritative safe_request definition (shared by the three attack agents)
 
-所有攻击脚本的 HTTP 调用**必须**用此包装器。返回三元组 `(status_code, body_or_None, raw_text)`。
-三个 attack agent 的「输出格式」section 引用本定义，不再各自重写。
+All HTTP calls in attack scripts **must** use this wrapper. It returns the triple `(status_code, body_or_None, raw_text)`.
+The three attack agents' "output format" sections reference this definition instead of rewriting it.
 
-模块级变量来源：
-- `BASE_URL = os.environ.get("TESTVDB_DB_URL")` —— 由 docker-executor 设置正确端口；**无默认端口**，缺失则打印 `VERDICT: SCRIPT_ERROR` 退出。
-- `AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")` —— 可选鉴权头。
+Module-level variable sources:
+- `BASE_URL = os.environ.get("TESTVDB_DB_URL")` — docker-executor sets the correct port; **no default port**; if missing, print `VERDICT: SCRIPT_ERROR` and exit.
+- `AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")` — optional auth header.
 
 ```python
 import requests, json, sys, os
@@ -39,8 +39,8 @@ AUTH_HEADER = os.environ.get("TESTVDB_AUTH_HEADER", "")
 
 def safe_request(method, path, **kwargs):
     """Resilient HTTP wrapper. Returns (status_code, body_or_None, raw_text).
-    连接失败: 打印 REQUEST_ERROR, 返回 (0, None, "")。
-    JSON 解析失败: 打印 JSON_DECODE_ERROR, 返回 (status, None, text)。"""
+    Connection failure: prints REQUEST_ERROR, returns (0, None, "").
+    JSON parse failure: prints JSON_DECODE_ERROR, returns (status, None, text)."""
     url = f"{BASE_URL}{path}"
     headers = kwargs.pop("headers", {"Content-Type": "application/json"})
     if AUTH_HEADER:
@@ -60,51 +60,51 @@ def safe_request(method, path, **kwargs):
         return 0, None, ""
 ```
 
-判定以 HTTP `status` 为主 + `print(raw)`；响应体解析按 `contract.target` 动态选键，不假设固定结构。
+Adjudication keys primarily on the HTTP `status` + `print(raw)`; response-body parsing selects keys dynamically per `contract.target`, never assuming a fixed structure.
 
-## 强制 runtime 协议（Milvus target — v2.2 新增，违反 = pipeline REJECT）
+## Mandatory runtime protocol (Milvus target — added v2.2; violation = pipeline REJECT)
 
-> 仅 `contract.target == "milvus"` 时强制；其它 target 暂用上文 `safe_request`，等 runtime 扩展。
-> **milvus v2.6.19 实测根因**：26 脚本 0 confirmed。10/10 boundary 用 `/entities/create` 建集合（应 `/collections/create`）→ 全 404；多个脚本 `if status not in (400,422)` 把 setup 失败的 404 误判为 contract 违规。本协议把路径翻译 + verdict 逻辑从 agent 自由度里拿走。
+> Mandatory only when `contract.target == "milvus"`; other targets keep using `safe_request` above until the runtime extends.
+> **milvus v2.6.19 measured root cause**: 26 scripts, 0 confirmed. 10/10 boundary scripts created collections at `/entities/create` (should be `/collections/create`) → all 404; several scripts used `if status not in (400,422)`, misjudging the setup-failure 404 as a contract violation. This protocol removes path translation + verdict logic from agent discretion.
 
-### 核心 4 条（违反任意 = pipeline REJECT）
+### The 4 core rules (violating any = pipeline REJECT)
 
-1. **必须**通过 runtime 拿请求函数，禁止自写 `safe_request`、禁止字面量路径：
+1. You **must** obtain the request function from the runtime; writing your own `safe_request` and literal paths are forbidden:
    ```python
    import os, sys
    _sd = os.environ.get("TESTVDB_SCRIPTS_DIR") or os.path.join(
        os.path.dirname(os.path.abspath(__file__)), "..", "scripts")
    sys.path.insert(0, _sd)
    from runtime import get_runtime
-   rt = get_runtime()  # 按 TESTVDB_TARGET 分发；milvus → runtime.milvus
+   rt = get_runtime()  # dispatches on TESTVDB_TARGET; milvus → runtime.milvus
    ```
-2. **所有 HTTP 调用走 `rt.request(method, path_key, body)`**——`path_key` 必须是 `rt.PATHS` 的 key（全量见下文"PATHS 全量"）。**字面量路径**如 `/entities/create` 出现在源码 = REJECT。
-3. **禁止任何 status-based if 判定**——`if status not in (400, 422)`、`if status != 404`、`if status == 200`、`if len(data) == 0` 全部禁止。**round 1 实战教训**：milvus REST v2 用 HTTP 200 + body `code` 表达错误（drop 后 describe 返回 `code:100` 而非 HTTP 404），所有 status 比较都会误判；空 `data:[]` 不一定是缺陷。必须按场景选 helper：
-   - 应被拒绝（非法参数 / delete 后再访问 / 资源不存在场景）：`v = rt.expect_rejected(status, raw, setup_ok=ok)`
-   - 应被接受（合法输入）：`v = rt.judge_200(status, raw, setup_ok=ok)`
-   - 应返回 ≥ N 条记录（search / query）：`v = rt.expect_records(status, raw, expected_min=N, setup_ok=ok)`
-   - 旧 alias `rt.judge_4xx` 仍可用（= expect_rejected），新脚本推荐 expect_rejected 命名清晰
+2. **All HTTP calls go through `rt.request(method, path_key, body)`** — `path_key` must be a key of `rt.PATHS` (full list in "PATHS" below). **Literal paths** such as `/entities/create` appearing in source = REJECT.
+3. **Any status-based if is forbidden** — `if status not in (400, 422)`, `if status != 404`, `if status == 200`, `if len(data) == 0` are all forbidden. **Round 1 field lesson**: milvus REST v2 expresses errors as HTTP 200 + body `code` (describe after drop returns `code:100`, not HTTP 404), so every status comparison misjudges; empty `data:[]` is not necessarily a defect. Choose the helper by scenario:
+   - Should be rejected (illegal param / access after delete / nonexistent resource): `v = rt.expect_rejected(status, raw, setup_ok=ok)`
+   - Should be accepted (legal input): `v = rt.judge_200(status, raw, setup_ok=ok)`
+   - Should return ≥ N records (search / query): `v = rt.expect_records(status, raw, expected_min=N, setup_ok=ok)`
+   - The legacy alias `rt.judge_4xx` still works (= expect_rejected); new scripts prefer expect_rejected for clarity
 
-   **helper 选择决策树（round 2 实战教训 — 必读）**：
+   **Helper decision tree (round 2 field lesson — must read)**:
 
-   | 测试的输入是合法还是非法？ | 期望 milvus 行为 | 用哪个 helper |
+   | Is the tested input legal or illegal? | Expected milvus behavior | Helper |
    |---|---|---|
-   | **非法输入**（超上限 / 低于下限 / 类型错 / 不存在资源） | 应被**拒绝** | `expect_rejected` |
-   | **合法输入**且关心是否接受 | 应被**接受** | `judge_200` |
-   | **合法输入**且关心返回多少条 | 应返回 ≥ N 条 | `expect_records` |
+   | **Illegal** (above max / below min / wrong type / nonexistent resource) | Should be **rejected** | `expect_rejected` |
+   | **Legal**, and you care whether it is accepted | Should be **accepted** | `judge_200` |
+   | **Legal**, and you care how many records return | Should return ≥ N | `expect_records` |
 
-   关键区分：测 `limit/offset` 边界时——
-   - `limit=0` / `offset+limit > 16384`（**非法**）→ `expect_rejected`（milvus 应拒绝）
-   - `limit=16384`（**合法上限**）→ `judge_200` 或 `expect_records`（应被接受/返回记录）
-   - **不要**对非法查询用 `expect_records`（milvus 拒绝非法查询是 NO_DEFECT，但 expect_records 会判 SCRIPT_ERROR）
-4. 脚本末尾必须 `print(f"VERDICT: {v}")`，v ∈ {DEFECT_FOUND, NO_DEFECT, SCRIPT_ERROR}，并 `sys.exit(0 if v=="NO_DEFECT" else 1 if v=="DEFECT_FOUND" else 2)`。
+   Key distinction when testing `limit/offset` boundaries —
+   - `limit=0` / `offset+limit > 16384` (**illegal**) → `expect_rejected` (milvus should reject)
+   - `limit=16384` (**legal upper bound**) → `judge_200` or `expect_records` (should be accepted / return records)
+   - **Do not** use `expect_records` for illegal queries (milvus rejecting an illegal query is NO_DEFECT, but expect_records would judge SCRIPT_ERROR)
+4. Scripts must end with `print(f"VERDICT: {v}")`, v ∈ {DEFECT_FOUND, NO_DEFECT, SCRIPT_ERROR}, and `sys.exit(0 if v=="NO_DEFECT" else 1 if v=="DEFECT_FOUND" else 2)`.
 
-### 三种用法模式
+### Three usage patterns
 
-**模式 A — 默认 setup 便捷组合（boundary / semantic 绝大多数脚本）**：
+**Pattern A — default setup convenience combo (the vast majority of boundary / semantic scripts)**:
 ```python
 COLL = "boundary_test_001"
-ok, err = rt.setup_default(COLL, 128)  # create + index + load 一体
+ok, err = rt.setup_default(COLL, 128)  # create + index + load in one step
 if not ok:
     print(f"VERDICT: SCRIPT_ERROR — setup: {err}"); sys.exit(2)
 try:
@@ -116,194 +116,194 @@ finally:
     rt.drop_collection(COLL)
 ```
 
-**模式 B — 测 setup 本身边界（boundary 专属：dimension=0 / metricType=非法 等应被 `create_collection` 拒绝）**：
+**Pattern B — testing the setup itself at its boundary (boundary-only: dimension=0 / metricType=illegal etc. should be rejected by `create_collection`)**:
 ```python
-# setup_default 会因 setup 失败 SCRIPT_ERROR 退出，故直接原子 request
+# setup_default would exit SCRIPT_ERROR on setup failure, so issue the atomic request directly
 status, raw = rt.request("POST", "create_collection", {
     "collectionName": "t", "dimension": 0, "metricType": "L2",
     "idType": "Int64", "autoID": True, "vectorFieldType": "FloatVector"})
 print("VERDICT:", rt.judge_4xx(status, raw, setup_ok=True))
 ```
 
-**模式 C — attack-state 自由组合（索引/load 期间并发等时序场景）**：
+**Pattern C — attack-state free combination (timing scenarios such as concurrency during index/load)**:
 ```python
 COLL = "state_test_001"
-rt.request("POST", "create_collection", {<同 setup_default 的 create_collection payload>})  # 不走 setup_default
+rt.request("POST", "create_collection", {<same create_collection payload as setup_default>})  # bypasses setup_default
 async_idx = threading.Thread(target=lambda: rt.request("POST", "create_index", {...}))
 async_idx.start()
-# ← index 进行中触发 search/insert/delete
+# ← fire search/insert/delete while the index build is in progress
 async_idx.join()
 rt.drop_collection(COLL)
 ```
 
-### PATHS 全量（milvus）
+### PATHS (milvus)
 
 `create_collection` / `describe_collection` / `drop_collection` / `load_collection` / `release_collection` / `create_index` / `insert_points` / `upsert_points` / `search` / `query` / `delete`
 
-### 与既有 safe_request 的关系
+### Relationship to the legacy safe_request
 
-- milvus target：**禁止**再用 `safe_request`，全部走 `rt.request`。`rt.request` 内部调用同一 HTTP 包装（三元组返回）。
-- 其它 target：继续用 `safe_request`，runtime 扩展后切换。
-- `BASE_URL` / `AUTH_HEADER` 仍从同名 env var 取（runtime 内部已读，agent 不再自取）。
+- milvus target: `safe_request` is **forbidden**; everything goes through `rt.request`. Internally `rt.request` uses the same HTTP wrapper (triple return).
+- Other targets: keep using `safe_request`; switch when the runtime extends.
+- `BASE_URL` / `AUTH_HEADER` still come from the same env var names (the runtime reads them internally; agents no longer fetch them).
 
 ---
 
-## 强制 runtime 协议（Qdrant target — v2.3 新增）
+## Mandatory runtime protocol (Qdrant target — added v2.3)
 
-> 仅 `contract.target == "qdrant"` 时强制。**与 milvus 的关键差异**：qdrant 用标准 HTTP 4xx 表达错误（不像 milvus 的 HTTP 200+body code），所以 judge 走 `_common` generic 版（按 HTTP status 判），不解析 body code。
+> Mandatory only when `contract.target == "qdrant"`. **Key difference vs milvus**: qdrant expresses errors with standard HTTP 4xx (unlike milvus's HTTP 200 + body code), so judging uses the `_common` generic version (HTTP-status based) without parsing body codes.
 
-### 核心 4 条（同 milvus）
+### The 4 core rules (same as milvus)
 
-1. `from runtime import get_runtime; rt = get_runtime()`（`TESTVDB_TARGET=qdrant`）
-2. `rt.request(method, path_key, body, path_params=...)`，**禁止字面量路径**。返回值是**二元组** `(status, raw_text)`——`status, raw = rt.request(...)`（fullrun#4 实测教训：三元组解包 `s, body, raw = rt.request(...)` 会 ValueError；要解析 body 自己 `json.loads(raw)`）
-3. **禁止任何 status-based if**——按场景选 helper（同 milvus 决策树）：
-   - 应被拒绝：`rt.expect_rejected(status, raw, setup_ok=ok)`
-   - 应被接受：`rt.judge_200(status, raw, setup_ok=ok)`
-   - 应返回 ≥ N 条：`rt.expect_records(status, raw, expected_min=N, setup_ok=ok)`
-4. 末尾 `print(f"VERDICT: {v}")` + 按 v 退出
+1. `from runtime import get_runtime; rt = get_runtime()` (`TESTVDB_TARGET=qdrant`)
+2. `rt.request(method, path_key, body, path_params=...)`, **literal paths forbidden**. The return value is a **2-tuple** `(status, raw_text)` — `status, raw = rt.request(...)` (fullrun#4 measured lesson: triple unpacking `s, body, raw = rt.request(...)` raises ValueError; to parse the body, `json.loads(raw)` yourself)
+3. **Any status-based if is forbidden** — choose the helper by scenario (same decision tree as milvus):
+   - Should be rejected: `rt.expect_rejected(status, raw, setup_ok=ok)`
+   - Should be accepted: `rt.judge_200(status, raw, setup_ok=ok)`
+   - Should return ≥ N records: `rt.expect_records(status, raw, expected_min=N, setup_ok=ok)`
+4. End with `print(f"VERDICT: {v}")` + exit by v
 
-### Qdrant 特定差异（vs milvus）
+### Qdrant-specific differences (vs milvus)
 
-**PATHS 是模板含 `{name}`**——qdrant RESTful 风格，collection name 在 URL path 里：
+**PATHS are templates containing `{name}`** — qdrant is RESTful-style; the collection name lives in the URL path:
 ```python
-# ❌ 错（字面量路径）
+# ❌ wrong (literal path)
 safe_request("PUT", f"/collections/{COLL}/points", ...)
-# ✅ 对（path_key + path_params）
+# ✅ right (path_key + path_params)
 rt.request("PUT", "upsert_points", {"points": [...]}, path_params={"name": COLL})
 ```
 
-**setup_default 单步**（无 index/load 阶段，比 milvus 简单）：
+**setup_default is a single step** (no index/load phases; simpler than milvus):
 ```python
-ok, err = rt.setup_default(COLL, dim=128, metric="Cosine")  # PUT /collections/{name} 含 vectors config
+ok, err = rt.setup_default(COLL, dim=128, metric="Cosine")  # PUT /collections/{name} including vectors config
 ```
 
-**距离 metric 命名**：qdrant 用 `Cosine` / `Euclidean` / `Dot`（不是 milvus 的 `L2`）。
+**Distance metric naming**: qdrant uses `Cosine` / `Euclidean` / `Dot` (not milvus's `L2`).
 
-### PATHS 全量（qdrant）
+### PATHS (qdrant)
 
 `create_collection` / `describe_collection` / `drop_collection` / `list_collections` / `create_index` / `upsert_points` / `delete_points` / `search` / `query` / `count`
 
-除 `list_collections` 外都是 `/collections/{name}/...` 模板，必须传 `path_params={"name": COLL}`。
+Except `list_collections`, all are `/collections/{name}/...` templates and must pass `path_params={"name": COLL}`.
 
 ---
 
-## 强制 runtime 协议（Weaviate target — v2.4 新增）
+## Mandatory runtime protocol (Weaviate target — added v2.4)
 
-> 仅 `contract.target == "weaviate"` 时强制。同 qdrant：标准 HTTP 4xx，generic judge 不解析 body code。差异：path 用 `/v1/...` 前缀 + class name 大写 + GraphQL search 风格。
+> Mandatory only when `contract.target == "weaviate"`. Same as qdrant: standard HTTP 4xx, generic judge does not parse body codes. Differences: `/v1/...` path prefix + capitalized class names + GraphQL search style.
 
-### 核心 5 条（4 条同 milvus/qdrant + 第 5 条 weaviate 专属）
+### The 5 core rules (4 same as milvus/qdrant + the 5th weaviate-specific)
 
-1. `from runtime import get_runtime; rt = get_runtime()`（`TESTVDB_TARGET=weaviate`）
-2. `rt.request(method, path_key, body, path_params=...)`，**禁止字面量路径**。返回值是**二元组** `(status, raw_text)`——`status, raw = rt.request(...)`（fullrun#4 实测教训：三元组解包 `s, body, raw = rt.request(...)` 会 ValueError；要解析 body 自己 `json.loads(raw)`）
-3. **禁止任何 status-based if**（verdict 判定场景）
-4. 末尾 `print(f"VERDICT: {v}")` + 按 v 退出
-5. **schema 类边界攻击（vectorIndexConfig / invertedIndexConfig / replicationConfig 字段非法值）必须用 `rt.judge_schema_attack(...)`，禁止用 `expect_rejected`**（详见下方"Weaviate 特定差异 · schema 类边界判定"）
+1. `from runtime import get_runtime; rt = get_runtime()` (`TESTVDB_TARGET=weaviate`)
+2. `rt.request(method, path_key, body, path_params=...)`, **literal paths forbidden**. The return value is a **2-tuple** `(status, raw_text)` — `status, raw = rt.request(...)` (fullrun#4 measured lesson: triple unpacking `s, body, raw = rt.request(...)` raises ValueError; to parse the body, `json.loads(raw)` yourself)
+3. **Any status-based if is forbidden** (in verdict adjudication scenarios)
+4. End with `print(f"VERDICT: {v}")` + exit by v
+5. **Schema-class boundary attacks (illegal values of vectorIndexConfig / invertedIndexConfig / replicationConfig fields) must use `rt.judge_schema_attack(...)`; `expect_rejected` is forbidden** (see "Weaviate-specific differences · schema-class boundary adjudication" below)
 
-### Weaviate 特定差异
+### Weaviate-specific differences
 
-**PATHS 含两类 path_params**：`{name}`（class name，schema 路径）+ `{id}`（object uuid）
+**PATHS carry two kinds of path_params**: `{name}` (class name, schema paths) + `{id}` (object uuid)
 ```python
-# schema 类
+# schema class
 rt.request("DELETE", "drop_schema", path_params={"name": "Article"})
-# object 类
+# object class
 rt.request("GET", "get_object", path_params={"id": "abc-123"})
-# 无 param 类（list_schema / graphql / create_object / batch_objects）
+# no-param class (list_schema / graphql / create_object / batch_objects)
 rt.request("POST", "graphql", {"query": "{ Get { Article { ... } } }"})
 ```
 
-**setup_default 单步**（POST /v1/schema body 含 class + vectorIndexConfig）：
+**setup_default is a single step** (POST /v1/schema with a body containing class + vectorIndexConfig):
 ```python
-ok, err = rt.setup_default("Article", dim=128, metric="cosine")  # class name 大写开头
+ok, err = rt.setup_default("Article", dim=128, metric="cosine")  # class name starts capitalized
 ```
 
-**距离 metric 命名**：weaviate 用 lowercase `cosine` / `l2-squared` / `dot` / `manhattan`（不是 qdrant 的 `Cosine` 也不是 milvus 的 `L2`）。
+**Distance metric naming**: weaviate uses lowercase `cosine` / `l2-squared` / `dot` / `manhattan` (not qdrant's `Cosine`, not milvus's `L2`).
 
-**search 走 GraphQL**：weaviate 主搜索接口是 `/v1/graphql`（POST body 含 GraphQL query 字符串），不是 REST path。`expect_records` 已支持 GraphQL 响应嵌套 `{"data":{"Get":{"<Class>":[...]}}}`。
+**Search goes through GraphQL**: weaviate's primary search interface is `/v1/graphql` (POST body contains the GraphQL query string), not a REST path. `expect_records` already supports the GraphQL response nesting `{"data":{"Get":{"<Class>":[...]}}}`.
 
-**已存在响应 422**（不是 409）：weaviate 创建重复 class 返回 422，setup_default 已兼容。
+**Already-exists returns 422** (not 409): creating a duplicate weaviate class returns 422; setup_default already handles it.
 
-**schema 类边界判定（核心第 5 条 — round 3 实战教训）**：weaviate 对 schema 非法字段有三态行为，**禁止用 `expect_rejected` 只看 status=200 判 Type1**：
-- 持久化原值（如 `vectorCacheMaxObjects=-1`）→ 真 Type1_IllegalSuccess（bug）
-- silent-drop 字段（agent 字段放错位置也算，如 `cleanupIntervalSeconds` 放在 `vectorIndexConfig` 下）→ weaviate 设计行为，**非 bug**
-- silent normalize（如 `replicationConfig.factor=0`→`1`）→ Type2 bug 信号
+**Schema-class boundary adjudication (core rule 5 — round 3 field lesson)**: weaviate has three-state behavior for illegal schema fields; **using `expect_rejected` and judging Type1 from status=200 alone is forbidden**:
+- Value persisted as-is (e.g. `vectorCacheMaxObjects=-1`) → genuine Type1_IllegalSuccess (bug)
+- Field silently dropped (agent misplacing a field also counts, e.g. `cleanupIntervalSeconds` under `vectorIndexConfig`) → weaviate designed behavior, **not a bug**
+- Silently normalized (e.g. `replicationConfig.factor=0`→`1`) → Type2 bug signal
 
-用 `rt.judge_schema_attack(status, raw, class_name, attack_path, attack_value, setup_ok=ok)`：
-- 内部 `describe_schema` 回读 + 字段路径比对，自动区分三态
-- `attack_path` = 字段路径 list（如 `["vectorIndexConfig", "vectorCacheMaxObjects"]`）
-- `attack_value` = 攻击 payload 里的非法值（用于回读比对）
-- silent-drop → `NO_DEFECT`（避免 false positive）；persist → `DEFECT_FOUND`
+Use `rt.judge_schema_attack(status, raw, class_name, attack_path, attack_value, setup_ok=ok)`:
+- internally re-reads via `describe_schema` + compares the field path, automatically distinguishing the three states
+- `attack_path` = field-path list (e.g. `["vectorIndexConfig", "vectorCacheMaxObjects"]`)
+- `attack_value` = the illegal value in the attack payload (used for read-back comparison)
+- silent-drop → `NO_DEFECT` (avoids false positives); persisted → `DEFECT_FOUND`
 
 ```python
-# ✅ 正确：schema 类边界用 judge_schema_attack
+# ✅ right: schema-class boundaries use judge_schema_attack
 status, raw = rt.request("POST", "create_schema", {
     "class": CLS, "vectorIndexType": "hnsw",
     "vectorIndexConfig": {"distance": "cosine", "vectorCacheMaxObjects": -1}})
 v = rt.judge_schema_attack(status, raw, CLS,
     ["vectorIndexConfig", "vectorCacheMaxObjects"], -1, setup_ok=True)
 
-# ❌ 错误：只看 status=200 就判 DEFECT_FOUND（silent-drop 会误判 Type1，25% false positive）
+# ❌ wrong: judging DEFECT_FOUND from status=200 alone (silent-drop misjudges Type1; 25% false positive)
 # v = rt.expect_rejected(status, raw, setup_ok=True)
 ```
 
-非 schema 类边界（object / batch_objects / graphql）仍用通用 helper（`expect_rejected` / `judge_200` / `expect_records`）。
+Non-schema boundaries (object / batch_objects / graphql) still use the general helpers (`expect_rejected` / `judge_200` / `expect_records`).
 
-### PATHS 全量（weaviate）
+### PATHS (weaviate)
 
-`create_schema` / `list_schema` / `describe_schema`（`{name}`）/ `drop_schema`（`{name}`）/ `add_property`（`{name}`）/ `create_object` / `batch_objects` / `get_object`（`{id}`）/ `delete_object`（`{id}`）/ `graphql`
+`create_schema` / `list_schema` / `describe_schema` (`{name}`) / `drop_schema` (`{name}`) / `add_property` (`{name}`) / `create_object` / `batch_objects` / `get_object` (`{id}`) / `delete_object` (`{id}`) / `graphql`
 
 ---
 
-## DB 特定 API 选择指南（v2.2 新增 — Chroma SDK 教训）
+## DB-specific API selection guide (added v2.2 — the Chroma SDK lesson)
 
-**核心规则：根据 `contract.target` 选择正确的 API 接入方式，不可一律用 REST。**
+**Core rule: choose the correct API access method per `contract.target`; never default to REST for everything.**
 
-| target | API 方式 | 原因 |
+| target | API method | Reason |
 |--------|---------|------|
-| **chroma** | **chromadb SDK (`chromadb.HttpClient`)** | Chroma 是 SDK-first；v1 REST API 已废弃（返回 405）；`raw_knowledge.json` 明确记载 "Chroma is primarily a Python SDK-based vector database"。连接代码: `client = chromadb.HttpClient(host='localhost', port=8000)` |
-| **milvus** | REST API v2 (`/v2/vectordb/`) | Milvus 同时支持 REST v2 + gRPC；REST v2 更稳定。仅在动态 schema 操作时用 pymilvus SDK |
-| **qdrant** | REST API (`requests`) | 标准 REST API，端点路径从 contract 取 |
-| **weaviate** | REST API (`requests`) | 标准 REST API，搜索用 GraphQL |
-| **pgvector** | psycopg2 SQL | PostgreSQL 扩展，SQL 访问 |
-| **meilisearch** | REST API (`requests`) | 标准 REST API |
+| **chroma** | **chromadb SDK (`chromadb.HttpClient`)** | Chroma is SDK-first; the v1 REST API is deprecated (returns 405); `raw_knowledge.json` explicitly records "Chroma is primarily a Python SDK-based vector database". Connection code: `client = chromadb.HttpClient(host='localhost', port=8000)` |
+| **milvus** | REST API v2 (`/v2/vectordb/`) | Milvus supports both REST v2 + gRPC; REST v2 is more stable. Use the pymilvus SDK only for dynamic-schema operations |
+| **qdrant** | REST API (`requests`) | Standard REST API; endpoint paths come from the contract |
+| **weaviate** | REST API (`requests`) | Standard REST API; search uses GraphQL |
+| **pgvector** | psycopg2 SQL | PostgreSQL extension; SQL access |
+| **meilisearch** | REST API (`requests`) | Standard REST API |
 
-### Milvus REST v2 path 翻译规则（v2.2.2 — 2026-07-04 milvus mine 教训）
+### Milvus REST v2 path translation rules (v2.2.2 — 2026-07-04 milvus mine lesson)
 
-**契约 `api_endpoints[].path` 用 `+` 分隔逻辑资源与动作**，REST URL 用 `/`。safe_request 调用前必须翻译：
+**Contract `api_endpoints[].path` joins logical resource and action with `+`**; the REST URL uses `/`. Translate before calling safe_request:
 
-| contract path | REST URL（safe_request 第二参数） | 用途 |
+| contract path | REST URL (safe_request 2nd argument) | Purpose |
 |---------------|--------------------------------|------|
-| `collections+create` | `/collections/create` | **建集合**（唯一正确路径） |
-| `collections+describe` | `/collections/describe` | 查集合 schema |
-| `collections+load` | `/collections/load` | 加载到内存 |
-| `collections+release` | `/collections/release` | 释放 |
-| `collections+drop` | `/collections/drop` | 删除 |
-| `collections+get_stats` | `/collections/get_stats` | 行数统计 |
-| `entities+insert` | `/entities/insert` | **插数据** |
-| `entities+upsert` | `/entities/upsert` | upsert 数据 |
-| `entities+search` | `/entities/search` | 向量搜索 |
-| `entities+query` | `/entities/query` | 标量过滤查询 |
-| `entities+delete` | `/entities/delete` | 删除数据 |
-| `indexes+create` | `/indexes/create` | 建索引 |
+| `collections+create` | `/collections/create` | **Create collection** (the only correct path) |
+| `collections+describe` | `/collections/describe` | Read collection schema |
+| `collections+load` | `/collections/load` | Load into memory |
+| `collections+release` | `/collections/release` | Release |
+| `collections+drop` | `/collections/drop` | Delete |
+| `collections+get_stats` | `/collections/get_stats` | Row count stats |
+| `entities+insert` | `/entities/insert` | **Insert data** |
+| `entities+upsert` | `/entities/upsert` | Upsert data |
+| `entities+search` | `/entities/search` | Vector search |
+| `entities+query` | `/entities/query` | Scalar-filtered query |
+| `entities+delete` | `/entities/delete` | Delete data |
+| `indexes+create` | `/indexes/create` | Create index |
 
-safe_request 内部已 `url = f"{BASE_URL}/v2/vectordb{path}"`，所以传 `/collections/create` 即可（不要再拼 `/v2/vectordb`）。
+safe_request internally already does `url = f"{BASE_URL}/v2/vectordb{path}"`, so pass `/collections/create` (do not concatenate `/v2/vectordb` again).
 
-⛔ **Anti-pattern（2026-07-04 milvus v2.6.19 实测 bug，致 100% boundary 脚本 404）**：
-- ❌ `safe_request("POST", "/entities/create", payload)` —— **发明路径**。`entities` 是数据操作（insert/search/query/delete），**不是集合创建**。Milvus REST v2 无此端点 → 404 page not found。
-- ❌ 凭记忆/类比写路径（看到 `entities+insert` 就猜 `entities+create`）—— contract 无此 path 即不存在。
-- ✅ `safe_request("POST", "/collections/create", payload)` —— 建集合唯一正确路径。
-- ✅ 不确定时：`py -c "import json; c=json.load(open('structured_contract.json')); [print(ep['path']) for ep in c['api_endpoints']]"` 列全契约路径，从中提取并按 `+ → /` 翻译。
+⛔ **Anti-patterns (measured 2026-07-04 on milvus v2.6.19; caused 100% of boundary scripts to 404)**:
+- ❌ `safe_request("POST", "/entities/create", payload)` — **an invented path**. `entities` is data manipulation (insert/search/query/delete), **not collection creation**. Milvus REST v2 has no such endpoint → 404 page not found.
+- ❌ Writing paths from memory/analogy (seeing `entities+insert` and guessing `entities+create`) — if the contract has no such path, it does not exist.
+- ✅ `safe_request("POST", "/collections/create", payload)` — the only correct create-collection path.
+- ✅ When unsure: `py -c "import json; c=json.load(open('structured_contract.json')); [print(ep['path']) for ep in c['api_endpoints']]"` lists all contract paths; extract from there and translate `+ → /`.
 
-**setup collection create payload 必填字段**（缺则 `code:1100 dimension is not defined`，级联致后续全 `collection not found`）：
-`collectionName` / `dimension`（向量维度，Int）/ `metricType`（L2/IP/COSINE）/ `idType`（Int64/Varchar）/ `autoID`（bool）/ `vectorFieldType`（FloatVector/BinaryVector/SparseFloatVector）。
+**Required fields of the setup collection-create payload** (missing → `code:1100 dimension is not defined`, cascading into all-subsequent `collection not found`):
+`collectionName` / `dimension` (vector dimension, Int) / `metricType` (L2/IP/COSINE) / `idType` (Int64/Varchar) / `autoID` (bool) / `vectorFieldType` (FloatVector/BinaryVector/SparseFloatVector).
 
-**Chroma 专用代码模板**（覆盖 `safe_request`——Chroma 不使用原始 HTTP）：
+**Chroma-specific code template** (replaces `safe_request` — Chroma does not use raw HTTP):
 ```python
 import os, sys, json
 import chromadb
 from chromadb.config import Settings
 
 BASE_URL = os.environ.get("TESTVDB_DB_URL", "http://localhost:8000")
-# 从 BASE_URL 解析 host/port
+# parse host/port from BASE_URL
 # chromadb.HttpClient(host='localhost', port=8000, settings=Settings(anonymized_telemetry=False))
 
 client = chromadb.HttpClient(
@@ -313,41 +313,41 @@ client = chromadb.HttpClient(
 )
 ```
 
-**Chromadb SDK 常用 API 映射**（替代 REST safe_request）：
+**Common chromadb SDK API mapping** (replaces REST safe_request):
 - `GET /collections` → `client.list_collections()`
-- `POST /collections` → `client.create_collection(name=..., metadata=...)` 或 `client.get_or_create_collection(name=...)`
+- `POST /collections` → `client.create_collection(name=..., metadata=...)` or `client.get_or_create_collection(name=...)`
 - `DELETE /collections/{name}` → `client.delete_collection(name)`
 - `POST /collections/{name}/add` → `collection.add(ids=..., embeddings=..., documents=..., metadatas=...)`
 - `POST /collections/{name}/query` → `collection.query(query_embeddings=..., n_results=...)`
 
-## 脚本 Cleanup 强制规范（v2.2 新增 — delete_collection NotFoundError 教训）
+## Mandatory script-cleanup spec (added v2.2 — the delete_collection NotFoundError lesson)
 
-**⛔ 所有脚本的 teardown/cleanup 阶段必须遵循此规范。违反 = SCRIPT_ERROR。**
+**⛔ Every script's teardown/cleanup phase must follow this spec. Violation = SCRIPT_ERROR.**
 
-### 规则
+### Rules
 
-1. **每个 `delete_collection` / `delete` / `drop` 操作必须包裹在 `try/except` 中**，捕获对应的 NotFound 异常
-2. **Cleanup 失败不得导致脚本退出码非零**——主逻辑已执行完毕，cleanup 是 best-effort
-3. **先检查资源是否存在再删除**——避免无意义的异常
+1. **Every `delete_collection` / `delete` / `drop` operation must be wrapped in `try/except`**, catching the corresponding NotFound exception
+2. **Cleanup failure must not make the script exit nonzero** — the main logic has already completed; cleanup is best-effort
+3. **Check existence before deleting** — avoids pointless exceptions
 
-### Chroma 示例
+### Chroma example
 
 ```python
-# ✅ 正确的 cleanup 模式
+# ✅ correct cleanup pattern
 def cleanup():
     try:
         client.delete_collection(COLLECTION_NAME)
     except chromadb.errors.NotFoundError:
-        pass  # 集合不存在或已被删除，cleanup 目标已达成
+        pass  # collection doesn't exist or was already deleted; the cleanup goal is met
     except Exception as e:
-        print(f"Cleanup warning: {e}")  # 记录但不崩溃
+        print(f"Cleanup warning: {e}")  # log but don't crash
 
-# 主逻辑完成后调用
+# call after the main logic completes
 # ... test logic ...
-cleanup()  # 在脚本末尾，best-effort
+cleanup()  # at the end of the script, best-effort
 ```
 
-### REST DB 示例（Qdrant/Weaviate/Milvus）
+### REST DB example (Qdrant/Weaviate/Milvus)
 
 ```python
 def cleanup():
@@ -358,15 +358,15 @@ def cleanup():
 cleanup()
 ```
 
-### 禁止的 Cleanup 反模式
+### Forbidden cleanup anti-patterns
 
 ```python
-# ❌ 直接调用 delete_collection 无异常处理
-client.delete_collection(name)  # NotFoundError → 脚本崩溃
+# ❌ calling delete_collection directly with no exception handling
+client.delete_collection(name)  # NotFoundError → script crashes
 
-# ❌ 在脚本开头（setup 前）调用 cleanup，但资源尚未创建
-client.delete_collection(COLLECTION_NAME)  # 尚未 create → NotFoundError → 崩溃
+# ❌ calling cleanup at the start of the script (before setup), when the resource doesn't exist yet
+client.delete_collection(COLLECTION_NAME)  # not yet created → NotFoundError → crash
 ```
 
-## 参考样板
-`agents/attack-boundary.md` 已采用此契约驱动模式（占位符 + 从契约读取，0 个 if/else TARGET 分支）。`attack-state.md` 与 `attack-semantic.md` 应遵循同一模式。
+## Reference exemplar
+`agents/attack-boundary.md` already follows this contract-driven pattern (placeholders + reading from the contract, 0 if/else TARGET branches). `attack-state.md` and `attack-semantic.md` should follow the same pattern.
