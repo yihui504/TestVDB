@@ -468,7 +468,7 @@ Write to `intelligence/{target}/threat_model.json`:
   },
   "attack_priority_map": { "..." : "..." },
   "judge_enhancements": { "..." : "..." },
-  "generalization_shapes": [ "..." ]
+  "generalization_shapes": [ "..." ]  // added v2.3 — the data source of attack generalization (Step 4b)
 }
 ```
 
