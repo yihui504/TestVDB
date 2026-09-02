@@ -611,6 +611,11 @@ The main process runs the automated review itself (orchestration/coordination wo
    ```
 10. Write review results to `debate_logs/stage1.json`
 11. Script path normalization
+12. **Shape-exploration gate (conditional — only when this round's attack dispatch carried a "Shape generalization exploration directive" via threat_model_injector)**: if the shape_exploration_{shape_id}.md list was not produced, or novel_candidate-marked script count < 3 (default; the attack specs' §5 Gate) → DEBATE_S1 rejection of the whole batch back to the Attack Agent for rerun:
+    ```bash
+    python scripts/validate_shape_exploration.py "results/{target}/{version}/{timestamp}"
+    ```
+    (Mechanically wired 2026-09-02 — claim audit found the gate was referenced by the three attack specs but never called from the main flow.)
 
 **Update pipeline_state**: `phase` = `"EXECUTION"`, append `"DEBATE_S1"` to `phases_completed`, `phase_data.DEBATE_S1` = `{approved_count: N, rejected_count: M}`
 

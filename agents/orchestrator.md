@@ -412,6 +412,12 @@ Collect the test scripts produced by the three agents (boundary + state + semant
 
    **Step 4.6.4**: after the retry sub-loop ends, the remaining scripts proceed to Step 5.
 
+4.7. **Shape-exploration gate (conditional — only when this round's attack dispatch carried a "Shape generalization exploration directive" via threat_model_injector, i.e. the injected text contains `generalization_shapes`)**: run the gate over the session; FAIL (shape_exploration_{shape_id}.md list not produced, or novel_candidate-marked scripts < 3) → DEBATE_S1 rejection of the batch back to the Attack Agents for rerun per the attack specs' §5 Gate:
+   ```bash
+   python scripts/validate_shape_exploration.py ${SESSION_DIR}
+   ```
+   (Mechanically wired 2026-09-02 — claim audit found the three attack specs referenced this gate but the main flow never called it.)
+
 5. **(Removed by ADR-0008) cross-agent cross-review and confidence sampling are no longer performed** — the confidence field has been removed from the contract and script chains
 7. **Record review results**: write the review results to `debate_logs/stage1.json`
 8. **Script path normalization**: copy approved scripts into the corresponding subdirectories by source (this is where the executor searches). Using Bash:
@@ -543,9 +549,10 @@ If the output is 0, the reporter did not execute properly; record in error_log.
 
 **⛔ Iron law: the main process only orchestrates.** The main process runs `python scripts/verify_defects.py` auditing every defect-N.md:
 1. Evidence-chain completeness (are Rings 1/2/3 all present)
-2. Severity calibration (re-confirmed from the execution logs)
-3. Script-error exclusion (check SCRIPT_ERROR markers)
-4. False-positive identification (VERDICT line vs report claims)
+2. Script-error exclusion (check SCRIPT_ERROR markers)
+3. False-positive identification (VERDICT line vs report claims)
+
+(Severity calibration was removed 2026-09-02 — claim audit found it listed in the spec and the script's docstring but never implemented, with no failure precedent motivating its mechanization. Severity grading is the reporter's job at report time, per agents/reporter.md, against the execution logs it quotes; R14.2: no guidance/mechanism without a reproducible failure.)
 
 Produces `defect-review.md`, marking each defect CONFIRMED / FALSE_POSITIVE / NEEDS_IMPROVEMENT.
 FALSE_POSITIVE → delete the corresponding defect-N.md. NEEDS_IMPROVEMENT → send back to the reporter for rewrite (at most once).
