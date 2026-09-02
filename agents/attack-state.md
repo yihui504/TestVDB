@@ -445,7 +445,7 @@ When you receive retry feedback (the Orchestrator's dispatch prompt will point t
    | `syntax_error` | py_compile failed | look at the SyntaxError's line/offset; fix only that line |
    | `bare_json_chain` | bare `requests.X(...).json()["k"]` chaining | change to `status, body, raw = safe_request(...)` triple |
    | `safe_request_unused` | defined but never called | route all HTTP calls through safe_request, or delete the dead definition |
-   | `cleanup_unwrapped` | delete/drop/clear calls not inside try/except | wrap `try: ... except Exception: pass` (already mandated in state agent §2-4) |
+   | `cleanup_unwrapped` | delete/drop/clear calls not inside try/except | wrap `try: ... except Exception: pass` (already mandated in state agent §3-4) |
    | `verdict_missing` | no `VERDICT: <X>` line | add a strict `print("VERDICT: DEFECT_FOUND/NO_DEFECT/SCRIPT_ERROR")` at the end (strict format already required in state agent §3) |
    | oracle_missing | REJECT | add the `Oracle:` line to the docstring (expected-behavior statement: status code/response shape/timing); do not change the test target itself |
    | oracle_degenerate | WARN | the Oracle line is too minimal to be falsifiable — state the specific expected observable (status code/shape/count/timing) |
