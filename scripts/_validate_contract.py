@@ -7,8 +7,10 @@ contract-formalizer 可能系统性幻觉 source_verified（chroma 3 轮全 0%�
 
 Checks:
 1. schema 合法性（_passport hash + api_endpoints 字段完整性）
+1b. evidence_tier 一致性（枚举 {explicit, inferred} + inferred: 前缀 + explicit 反向漂移，R16 补洞 2026-09-02）
 2. CRUD 端点覆盖率 ≥ 90%
-3. 每条 constraint source_url 真包含 assertion 关键短语（支持 github + 文档站 + 本地 doc_bundle）
+3. 每条 constraint source_url 真包含 assertion 关键短语（支持 github + 文档站 + 本地 doc_bundle；
+   v3.4 组覆盖 resource_bound/other；doc_consistency 双源语义除外，留白）
 4. 编造下限检测（regex `param >= 1` 但 source 只有 default 无 min）
 5. DROP 比例 > 20% → 整 contract 不合格
 
@@ -140,6 +142,52 @@ def check_schema(contract: dict) -> list[dict]:
     return failures
 
 
+VALID_TIERS = {"explicit", "inferred"}
+# v3.4 Rule 3 形式检查（2026-09-02 R16 机制补洞）：
+# 此前 "inferred: 前缀交机械 gate" 是空头承诺 — 全仓无脚本检查前缀/枚举，
+# 残余滑档（批 1 REFACTOR 后实测 1/3 形式滑档）实际无门拦截。
+TIER_GROUP_NAMES = (
+    "type_constraints", "range_constraints", "state_constraints",
+    "resource_bound_constraints", "doc_consistency_constraints", "other_constraints",
+)
+
+
+def check_tier_consistency(contract: dict) -> list[dict]:
+    """evidence_tier 一致性（纯 schema 层，无网络）。
+
+    规则（formalizer Rule 3 / output verification #5）：
+    - tier 必填且 ∈ {explicit, inferred}（旧值如 inferred_from_behavior 一律打回）
+    - tier=inferred → description 必须以 "inferred:" 开头且带实际内容
+    - tier=explicit → description 不得以 "inferred:" 开头（降级后忘改 tier 的反向漂移）
+    """
+    failures: list[dict] = []
+    constraints = contract.get("constraints", {}) or {}
+    items: list[tuple[str, str, dict]] = []
+    for gname in TIER_GROUP_NAMES:
+        for c in constraints.get(gname, []) or []:
+            items.append((c.get("constraint_id", ""), gname, c))
+    for a in contract.get("assertions", []) or []:
+        items.append((a.get("assertion_id", ""), "assertions", a))
+    for cid, where, item in items:
+        desc = (item.get("description") or "").strip()
+        tier = item.get("evidence_tier")
+        if tier is None:
+            failures.append({"check": "tier_missing", "constraint_id": cid,
+                             "detail": f"{where}/{cid}: missing evidence_tier (required by schema)"})
+            continue
+        if tier not in VALID_TIERS:
+            failures.append({"check": "tier_value_invalid", "constraint_id": cid,
+                             "detail": f"{where}/{cid}: evidence_tier={tier!r} not in {{explicit, inferred}}"})
+            continue
+        if tier == "inferred" and not (desc.startswith("inferred:") and len(desc) > len("inferred:")):
+            failures.append({"check": "missing_inferred_prefix", "constraint_id": cid,
+                             "detail": f"{where}/{cid}: tier=inferred but description must start with 'inferred:' + content (Rule 3 form)"})
+        if tier == "explicit" and desc.startswith("inferred:"):
+            failures.append({"check": "stray_inferred_prefix", "constraint_id": cid,
+                             "detail": f"{where}/{cid}: tier=explicit but description starts with 'inferred:' — a downgrade left the tier unchanged"})
+    return failures
+
+
 def check_crud_coverage(contract: dict) -> dict:
     eps = contract.get("api_endpoints", []) or []
     found = set()
@@ -205,6 +253,10 @@ def main() -> int:
     schema_failures = check_schema(contract)
     failures.extend(schema_failures)
 
+    # Check 1b: evidence_tier 一致性（R16 机制补洞 2026-09-02 — 前缀滑档交机械 gate 的承诺兑现）
+    tier_failures = check_tier_consistency(contract)
+    failures.extend(tier_failures)
+
     # Check 2: CRUD coverage
     crud = check_crud_coverage(contract)
     if not crud["pass"]:
@@ -217,7 +269,11 @@ def main() -> int:
     constraints_root = contract.get("constraints", {}) or {}
     drop_count = 0
     total = 0
-    for gname in ["type_constraints", "range_constraints", "state_constraints"]:
+    # v3.4 组覆盖（2026-09-02 补洞）：resource_bound/other 纳入 source 核验。
+    # doc_consistency 除外：其断言是 "spec says X / prose says Y" 双源冲突，数值分属两个 source，
+    # 单源数值关键词模型会误伤合法约束 — 需独立设计，故留白不纳入。
+    for gname in ["type_constraints", "range_constraints", "state_constraints",
+                  "resource_bound_constraints", "other_constraints"]:
         for c in constraints_root.get(gname, []) or []:
             total += 1
             src_url = c.get("source_url", "") or ""
@@ -269,6 +325,7 @@ def main() -> int:
         "target": contract.get("target", ""),
         "version": contract.get("version", ""),
         "schema_check": {"failures": schema_failures},
+        "tier_check": {"failures": tier_failures},
         "crud_coverage": crud,
         "count_check": count_check,
         "constraint_classifications": classifications,

@@ -541,6 +541,7 @@ After generating structured_contract.json, self-check:
 3. Constraint IDs unique (no duplicates)
 4. Assertions reference valid endpoint paths
 5. All evidence_tier ∈ {explicit, inferred}; inferred entries' descriptions start with "inferred:"
+   - **Mechanically enforced by the factory gate** (`scripts/_validate_contract.py`, added 2026-09-02): a tier=inferred entry whose description lacks the "inferred:" prefix, or a tier=explicit entry that carries it (a downgrade left the tier unchanged), fails the gate — this form is the gate's job, not self-check's.
 6. sdk and docker info extracted from raw_knowledge.json
 7. **Every api_endpoint has source_url and doc_version fields**
 8. **Every constraint has a source_url field**
