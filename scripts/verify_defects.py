@@ -4,9 +4,12 @@ TestVDB Defect Verification Script — Post-Reporter Quality Gate
 
 Reads defect-N.md files from a session directory and verifies:
 1. Evidence chain completeness (Ring 1/2/3)
-2. Severity calibration against execution logs
-3. Script error false-positive detection
-4. VERDICT consistency (log verdict vs report claim)
+2. Script error false-positive detection
+3. VERDICT consistency (log verdict vs report claim)
+
+(Severity calibration removed 2026-09-02: claimed in orchestrator.md 8f.5 and
+this docstring but never implemented — see orchestrator.md's note; severity
+grading is the reporter's job at report time.)
 
 Outputs defect-review.md with CONFIRMED / FALSE_POSITIVE / NEEDS_IMPROVEMENT.
 
