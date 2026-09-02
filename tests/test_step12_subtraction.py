@@ -139,7 +139,7 @@ class TestAttackAgentSpecs:
     def test_no_minimum_script_count(self, agent):
         s = (AGENTS_DIR / f"{agent}.md").read_text(encoding="utf-8", errors="replace")
         assert "≥ 5 个" not in s and "≥ 3 个" not in s, f"{agent}: 数量下限残留"
-        assert "策略覆盖目标" in s, f"{agent}: 缺策略覆盖目标提法"
+        assert "strategy-coverage-goal" in s, f"{agent}: 缺策略覆盖目标提法"
 
     @pytest.mark.parametrize("agent", ["attack-boundary", "attack-state", "attack-semantic"])
     def test_no_confidence_in_spec(self, agent):
@@ -169,7 +169,7 @@ class TestContractFormalizerSpec:
     def test_no_standardization_wording(self):
         s = (AGENTS_DIR / "contract-formalizer.md").read_text(encoding="utf-8", errors="replace")
         assert "端点分类标准化" not in s, "'标准化'提法残留"
-        assert "端点分类（强制）" in s
+        assert "Endpoint classification (mandatory)" in s
 
     def test_orchestrator_dedup_removed(self):
         s = (AGENTS_DIR / "orchestrator.md").read_text(encoding="utf-8", errors="replace")

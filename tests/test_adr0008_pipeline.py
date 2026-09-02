@@ -381,13 +381,13 @@ class TestPerspectiveD:
         sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
         s = sop.read_text(encoding="utf-8")
         assert "developer_cognition.json" in s, "dataAccess 缺认知材料"
-        assert "不跨 vendor 引用" in s or "不跨 vendor" in s, "缺跨 vendor 禁令"
+        assert "no cross-vendor citation" in s or "cross-vendor" in s, "缺跨 vendor 禁令"
 
     def test_perspective_d_section_exists(self):
         from pathlib import Path
         sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
         s = sop.read_text(encoding="utf-8")
-        assert "视角 D" in s, "缺视角 D 段"
+        assert "Perspective D" in s, "missing perspective D section"
         for kw in ("blindspot_indicators", "by_design_patterns", "SUPPORTS_DEFECT", "NO_SIGNAL"):
             assert kw in s, f"视角 D 段缺 {kw}"
 
@@ -397,7 +397,7 @@ class TestPerspectiveD:
         s = sop.read_text(encoding="utf-8")
         # 灰区分支：D 只在 A/B 未定案时生效
         assert "D==SUPPORTS_DEFECT" in s and "D==SUPPORTS_NOT_DEFECT" in s, "缺 D 灰区分支"
-        assert "维护者认知同样不能" in s, "缺认知不翻 A/B 案原则"
+        assert "maintainer cognition equally cannot" in s, "缺认知不翻 A/B 案原则"
 
     def test_verdict_schema_cognition_field(self):
         from pathlib import Path
@@ -423,34 +423,34 @@ class TestReworkMechanism:
         from pathlib import Path
         sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
         s = sop.read_text(encoding="utf-8")
-        assert "对应性核查" in s, "缺第 4 查（现象对应性核查）"
+        assert "Correspondence check" in s, "缺第 4 查（现象对应性核查）"
         assert "PHENOMENON_MISMATCH" in s and "EVIDENCE_GAP" in s and "SUSPECTED_HALLUCINATION" in s, "缺工单三 type"
         assert "rework_order" in s, "schema 缺 rework_order 字段"
-        assert "最多 3 次" in s or "3 轮" in s, "缺 3 轮上限条款"
+        assert "3-round cap" in s, "missing 3-round cap clause"
 
     def test_auditor_http_semantics_fifth_class(self):
         from pathlib import Path
         sop = Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md"
         s = sop.read_text(encoding="utf-8")
-        assert "HTTP 语义恒真" in s, "视角 B 缺第五类"
-        assert "两条件同时满足" in s, "缺强限定双条件"
+        assert "HTTP-semantics tautology" in s, "视角 B 缺第五类"
+        assert "only when both conditions hold" in s, "缺强限定双条件"
 
     def test_builder_full_evidence_clauses(self):
         from pathlib import Path
         sop = Path(__file__).resolve().parent.parent / "agents" / "evidence-builder.md"
         s = sop.read_text(encoding="utf-8")
-        assert "全量取证硬约束" in s, "缺全量取证条款"
+        assert "Full-forensics hard constraint" in s, "缺全量取证条款"
         assert "claim_alignment" in s, "schema 缺 claim_alignment"
         assert "secondary_observations" in s, "schema 缺 secondary_observations"
         assert "http_semantics" in s, "schema 缺 http_semantics"
-        assert "log 全文" in s, "缺读全文要求"
+        assert "the whole log" in s, "缺读全文要求"
 
     def test_mine_rework_order_wiring(self):
         from pathlib import Path
         mine = Path(__file__).resolve().parent.parent / "commands" / "mine.md"
         s = mine.read_text(encoding="utf-8")
         assert "rework_order" in s and "rework_state" in s, "8e 缺打回工单消费说明/计数文件"
-        assert "最多 3 轮" in s or "3 轮" in s, "缺 3 轮上限"
+        assert "3 rounds" in s, "missing 3-round cap"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -487,13 +487,13 @@ class TestStabilization:
     def test_auditor_sop_mechanical_A(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
         assert "check_chain_grounding.py" in sop, "缺机械 A 脚本引用"
-        assert "不得改判" in sop or "不得自行改判" in sop, "缺采信约束"
-        assert "agent_suspects_contract_wrong: true" not in sop.split("例外条款已删除")[1][:500], "例外条款残留"
+        assert "may not be re-judged" in sop or "no authority to rewrite" in sop, "缺采信约束"
+        assert "agent_suspects_contract_wrong: true" not in sop.split("The exception clause has been deleted")[1][:500], "例外条款残留"
 
     def test_auditor_sop_batch_limit_and_prior(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
-        assert "≤12 条链" in sop or "≤12" in sop, "缺分批硬上限"
-        assert "必读先验" in sop, "缺认知必读先验"
+        assert "≤12 chains" in sop or "≤12" in sop, "缺分批硬上限"
+        assert "mandatory prior" in sop, "缺认知必读先验"
 
 
 
@@ -569,12 +569,12 @@ class TestStabilization:
     def test_auditor_sop_aggregation_mechanized(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "chain-auditor.md").read_text(encoding="utf-8")
         assert "implied_verdict" in sop, "缺聚合机械化字段"
-        assert "LLM 无权改写" in sop, "缺聚合改写禁令"
+        assert "no authority to rewrite" in sop, "缺聚合改写禁令"
         assert "GREY_ZONE" in sop, "缺灰区三态"
 
     def test_builder_sop_sufficiency_check(self):
         sop = (Path(__file__).resolve().parent.parent / "agents" / "evidence-builder.md").read_text(encoding="utf-8")
-        assert "搜证充分性自检" in sop, "缺充分性自检条款"
+        assert "Forensic-sufficiency self-check" in sop, "缺充分性自检条款"
         assert "sufficiency_check" in sop, "缺自检留痕字段"
 
 

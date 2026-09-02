@@ -107,16 +107,16 @@ class TestSpecContract:
     def test_orchestrator_has_exploration_phase_section(self):
         with open(ORCH, encoding="utf-8") as f:
             spec = f.read()
-        for kw in ("探索模式", "异常响应追踪", "参数空间组合扰动",
-                   "状态序列扰动", "行为一致性对照", "批量探针"):
+        for kw in ("Exploration-mode dispatch", "Anomalous-response tracing", "Parameter-space combinatorial perturbation",
+                   "State-sequence perturbation", "Behavioral-consistency comparison", "batch probe protocol"):
             assert kw in spec, f"orchestrator.md 缺探索调度关键字 {kw}"
 
     def test_mine_cmd_mentions_exploration(self):
         with open(MINE, encoding="utf-8") as f:
-            assert "探索" in f.read()
+            assert "exploration" in f.read()
 
     def test_attack_agents_have_exploration_mode(self):
         for path in ATTACK_SPECS:
             with open(path, encoding="utf-8") as f:
                 spec = f.read()
-            assert "探索模式" in spec, f"{os.path.basename(path)} 缺探索模式段"
+            assert "Exploration mode" in spec, f"{os.path.basename(path)} 缺探索模式段"
