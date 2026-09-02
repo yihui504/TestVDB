@@ -467,8 +467,6 @@ If the output is 0, **the orchestrator executing scripts itself is forbidden**; 
 
 #### 8e. Collect results → EVIDENCE_BUILD + CHAIN_AUDIT (ADR-0008 evidence-chain duo)
 
-**Update pipeline_state when done** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase EVIDENCE_BUILD --phase-data '{"EXECUTION": {"scripts_executed": N, "scripts_passed": M, "scripts_error": K}}'`
-
 **Step 1 — mechanical candidate extraction** (fan-out dispatch list; deterministic 0 LLM):
 ```bash
 python scripts/extract_candidates.py $SESSION_DIR
@@ -493,6 +491,8 @@ Agent(subagent_type="testvdb:evidence-builder", description="Evidence-chain buil
 **8e.5 Defect dedup (v2.2; ADR-0008 input-source update)**
 
 Before dispatching the auditor, the main process deduplicates candidates across rounds (same endpoint + same defect_type merge; cross-round comparison against dedup_state.json). Produces `debate_logs/stage2_deduped.json`.
+
+**Update pipeline_state when 8e completes (evidence build done, entering the audit)** (CLI, ADR-0004): `python scripts/pipeline_state.py advance --session-dir $SESSION_DIR --phase CHAIN_AUDIT --phase-data '{"EVIDENCE_BUILD": {"candidates": N, "l1_refuted": M, "builders_done": K}}'`
 
 **8e.7 CHAIN_AUDIT — chain-auditor single-instance close-out**
 
