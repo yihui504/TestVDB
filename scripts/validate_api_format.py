@@ -4,12 +4,16 @@
 Detects:
   - ANY bare .json() method call (variable.json(), library.func().json(), etc.) → REJECT
   - .json() calls inside safe_request() function bodies are excluded (safe harbor)
-  - safe_request() defined but never called → WARN
-  - All calls use safe_request() → PASS
+  - safe_request() defined but never called → REJECT (deceptive code — a wrapper
+    defined and bypassed means the agent knew the raw path would break; orchestrator.md 8c 4.5)
   - chroma 脚本使用 raw /api/v1 REST 路径 → REJECT（冒烟实证 2026-08-17：
     chroma REST v1 已废弃返回 405，chroma 必须 SDK-first——见
     agents/_target_api_reference.md § "DB 特定 API 选择指南"。agent 规范有提示
     但 semantic agent 仍违规，此为机械防线）
+  - All calls use safe_request() → PASS
+  （2026-09-02 声称审计：三类 issue 统一 REJECT/exit 1——原先 safe_request
+  未调用与 chroma raw REST 落 WARN/exit 0，与 orchestrator.md 8c 4.5 声称的
+  REJECT 不符；三类都是静态可判定的必炸/无效模式，WARN 放行只会浪费执行轮。）
 
 Usage:
   python scripts/validate_api_format.py <session_dir>
@@ -92,7 +96,8 @@ def _self_check():
 
     覆盖 5 case：(a) safe_request 体外 bare .json() 被检测；(b) 体内 .json() 排除；
     (c) json.dumps/loads 不被误判（attr=dumps/loads ≠ json）；(d) safe_request
-    定义但未调用 → WARN；(e) 全 safe_request 调用 → clean（无 issue）。
+    定义但未调用 → issue（2026-09-02 起与 bare .json 同为 REJECT）；(e) 全
+    safe_request 调用 → clean（无 issue）。
     合成 .py fixture，不依赖真实 session。
     """
     import tempfile, shutil
@@ -199,15 +204,10 @@ def main():
     if findings:
         print(json.dumps({"api_format_violations": findings}, indent=2))
         for f in findings:
-            has_bare = any("bare .json()" in i for i in f["issues"])
-            print(f'  {"REJECT" if has_bare else "WARN"}: {f["file"]}')
-        rejects = [f for f in findings if any("bare .json()" in i for i in f["issues"])]
-        if rejects:
-            print(f"[Stage 1] API Format Check: {len(rejects)} scripts REJECTED (bare .json() chain)")
-            sys.exit(1)  # Non-zero exit signals REJECT to caller (mine.md Step 8c)
-        # Warn-only findings (safe_request defined but never called) — exit 0
-        print("[Stage 1] API Format Check: warnings only, no bare .json() chains rejected")
-        sys.exit(0)
+            print(f'  REJECT: {f["file"]} — {"; ".join(f["issues"])}')
+        print(f"[Stage 1] API Format Check: {len(findings)} scripts REJECTED "
+              f"(bare .json() / safe_request unused / chroma raw REST)")
+        sys.exit(1)  # Non-zero exit signals REJECT to caller (mine.md Step 8c / orchestrator.md 8c 4.5)
     else:
         print("[Stage 1] API Format Check: all scripts pass")
         sys.exit(0)
