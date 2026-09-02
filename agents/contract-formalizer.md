@@ -657,6 +657,26 @@ After generating structured_contract.json, self-check:
 
 ### Prohibited
 - ❌ Tagging evidence_tier="explicit" merely because source_url is reachable (source_status="reachable") (reachable ≠ content matches)
+
+### Rationalization Table (field-observed excuses — each one has shipped a fabricated contract)
+
+| Excuse | Reality |
+|--------|---------|
+| "The source is reachable, so the content must match" | Reachable ≠ content matches. `source_verified=true` means the key text of THIS assertion was actually found in the fetched source in this session. |
+| "I corrected the claim to what the doc supports, so I can mark it verified" | That silently replaces the candidate's claim with a different one and hides the extraction failure. Exactly three outcomes exist for every candidate: **certify** the original claim (key text found: `evidence_tier=explicit`, `source_verified=true`); **downgrade** it — keep the claim text verbatim as the description, prefixed `inferred:`, with `evidence_tier=inferred` + `source_verified=false` (doc implies but does not state it); or **remove** the entry entirely (no source support). Mutating the claim and certifying the mutation is none of them. |
+| "It is semantically the same as the doc" | Paraphrase is not the key text. If the doc's wording differs in what is claimed — units, bounds, syntax, status codes — the original claim is not supported. Downgrade. |
+| "Fetching failed, but I know this is documented" | Training knowledge is not documentation. Verification failed → `source_verified` stays `false` (`source_status: unreachable`), tier stays `inferred` at most. |
+| "I will mark it verified now and re-check later" | There is no later. A false `true` is the exact failure that shipped fabricated contracts (milvus v2.6.19 R1; chroma r3 self-reported 100% with 0% actual). |
+| "Marking them all verified saves a retry loop" | A false `true` poisons every downstream stage and the deterministic gate treats a detected lie as hallucination. An honest `false` costs one retry. |
+
+**Root principle: violating the letter of the verification protocol is violating the spirit of the contract.**
+
+**Red Flags — STOP, you are about to fabricate:**
+- You are about to set `source_verified=true` without having the source text open in this session
+- You are rewording the candidate's assertion before deciding its tier
+- You feel the urge to "fix" the claim instead of grading it
+- Your verification of N sources took zero tool calls
+
 - ❌ Skipping the get_file_contents / WebFetch verification step
 - ❌ evidence_tier="explicit" together with source_verified=false (verify first, then tag explicit)
 
