@@ -115,12 +115,9 @@ python scripts/passport_verify.py <path/to/structured_contract.json>
 | evidence_tier | string | Yes | `explicit` / `inferred` (ADR-0008's two grades) |
 | defect_type_if_violated | string | No | Type1-4 classification |
 
-## Confidence guide
+## Evidence grading (replaces the retired confidence self-rating — ADR-0008)
 
-| Score | Meaning |
-|-------|---------|
-| 1.0 | Explicitly stated in documentation |
-| 0.8-0.9 | Strongly implied by examples |
-| 0.6-0.7 | Inferred from related constraints |
-| 0.4-0.5 | Industry convention |
-| <0.4 | Do NOT include (too uncertain) |
+`evidence_tier` is the only grading field: `explicit` (documentation states it verbatim)
+or `inferred` (description prefixed `inferred:`). LLM confidence scores are not used
+anywhere in the contract — a claim with no documentation basis is not accepted at all
+(formalizer Rule 3).
