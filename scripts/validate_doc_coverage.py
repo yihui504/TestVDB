@@ -136,7 +136,13 @@ def main():
         print("usage: validate_doc_coverage.py {target} {version}", file=sys.stderr)
         sys.exit(2)
     target, version = sys.argv[1], sys.argv[2]
+    # settings.json 可配置排除前缀（knowledge-extractor.md:383 声称；2026-09-02 实现）
     exclude = DEFAULT_EXCLUDE_PREFIXES
+    try:
+        s = json.loads(Path("settings.json").read_text(encoding="utf-8"))
+        exclude = s.get("knowledge", {}).get("doc_coverage_exclude_paths") or DEFAULT_EXCLUDE_PREFIXES
+    except (OSError, json.JSONDecodeError):
+        pass
 
     openapi = load_openapi(target, version)
     if not openapi:

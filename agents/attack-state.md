@@ -434,7 +434,7 @@ Pre-verification (8c gate v4) mechanically checks your scripts; the following di
 
 ## Retry Feedback Handling (added v2.5 — Stage 1 error-classification feedback loop)
 
-The Stage 1 deterministic classifier (`scripts/_classify_script_errors.py`) may produce `${script_id}.retry_feedback.json` marking your script as having static errors needing regeneration. **Memory lesson**: attack scripts had ~25%+ static error rates (meilisearch 57% / chroma 12.5%); Stage 1 no longer discards outright — it gives you one correction chance (max 2 retries per script).
+The Stage 1 deterministic classifier (`scripts/_classify_script_errors.py`) classifies the errors and `scripts/_apply_script_retry.py` (its paired retry applier) writes `${script_id}.retry_feedback.json` marking your script as having static errors needing regeneration. **Memory lesson**: attack scripts had ~25%+ static error rates (meilisearch 57% / chroma 12.5%); Stage 1 no longer discards outright — it gives you one correction chance (max 2 retries per script).
 
 When you receive retry feedback (the Orchestrator's dispatch prompt will point to `${SESSION_DIR}/state_scripts/${script_id}.retry_feedback.json`):
 
@@ -495,7 +495,7 @@ The authoritative `safe_request()` definition (triple `(status, body, raw_text)`
 
 ## Metadata output contract (P3-18b)
 
-Every candidate script **must additionally** produce `debate_logs/{script_id}.meta.json` (same directory as the `.py`), for extract_candidates/novelty_gate to consume param/endpoint → grade_candidate uses param_name for real GitHub/corpus searches (producing NOVEL/KNOWN verdicts instead of all-UNVERIFIED; ADR-0008: aggregate_votes has been removed).
+Every candidate script **must additionally** produce `debate_logs/{script_id}.meta.json` (same directory as the `.py`), for novelty_gate to consume param/endpoint → grade_candidate uses param_name for real GitHub/corpus searches (producing NOVEL/KNOWN verdicts instead of all-UNVERIFIED; ADR-0008: aggregate_votes has been removed).
 
 ```json
 {
@@ -507,7 +507,7 @@ Every candidate script **must additionally** produce `debate_logs/{script_id}.me
 }
 ```
 
-⛔ **Mandatory step**: after Writing `{script_id}.py`, immediately Write the corresponding `{script_id}.meta.json` (scripts missing meta.json have missing param; novelty degrades to UNVERIFIED; ADR-0008: consumed by extract_candidates/novelty_gate).
+⛔ **Mandatory step**: after Writing `{script_id}.py`, immediately Write the corresponding `{script_id}.meta.json` (scripts missing meta.json have missing param; novelty degrades to UNVERIFIED; ADR-0008: consumed by novelty_gate (extract_candidates does not read meta.json)).
 
 ---
 
